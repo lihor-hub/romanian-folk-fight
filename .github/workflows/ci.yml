@@ -28,17 +28,33 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=lld
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
 
     steps:
     - uses: actions/checkout@v4
 
+    - name: Cache apt packages
+      uses: actions/cache@v4
+      with:
+        path: /var/cache/apt/archives
+        key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/ci.yml') }}
+        restore-keys: |
+          ${{ runner.os }}-apt-
+
     - name: Install system dependencies for Bevy and LLD
       run: |
+        sudo rm -f /etc/apt/apt.conf.d/docker-clean
         sudo apt-get update
         sudo apt-get install -y pkg-config libx11-dev libasound2-dev libudev-dev libxcursor-dev libxinerama-dev libxi-dev libxrandr-dev libwayland-dev libxkbcommon-dev lld clang
 
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.8
+
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "sccache"
 
     - name: Run cargo clippy
       run: cargo clippy --all-targets -- -D warnings
