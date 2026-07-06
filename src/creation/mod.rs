@@ -307,6 +307,9 @@ fn handle_creation_actions(
                         name: draft.name().to_string(),
                         attributes: draft.attributes(),
                     });
+                    // The build now lives in `PlayerCharacter`; reset so any
+                    // later visit to the screen starts from a fresh draft.
+                    draft.reset();
                     next_state.set(GameState::Fight);
                 }
             }
@@ -575,6 +578,11 @@ mod tests {
         assert_eq!(
             *app.world().resource::<State<GameState>>().get(),
             GameState::Fight
+        );
+        assert_eq!(
+            *draft(&app),
+            CharacterDraft::default(),
+            "draft resets after confirm so a later visit starts fresh"
         );
         let leftovers = app
             .world_mut()
