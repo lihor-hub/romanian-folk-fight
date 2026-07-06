@@ -6,16 +6,17 @@ use bevy::prelude::*;
 use crate::core::{GameState, despawn_screen};
 
 // Placeholder folk palette (deep red / cream / black); real art comes in
-// Phase 4.
-const DEEP_RED: Color = Color::srgb(0.55, 0.10, 0.10);
-const CREAM: Color = Color::srgb(0.96, 0.93, 0.84);
-const NIGHT_BLACK: Color = Color::srgb(0.07, 0.06, 0.06);
+// Phase 4. Public so later screens (e.g. character creation) share the exact
+// same styling until a dedicated ui module exists.
+pub const DEEP_RED: Color = Color::srgb(0.55, 0.10, 0.10);
+pub const CREAM: Color = Color::srgb(0.96, 0.93, 0.84);
+pub const NIGHT_BLACK: Color = Color::srgb(0.07, 0.06, 0.06);
 
-const BUTTON_NORMAL: Color = DEEP_RED;
-const BUTTON_HOVERED: Color = Color::srgb(0.68, 0.16, 0.14);
-const BUTTON_PRESSED: Color = Color::srgb(0.42, 0.06, 0.06);
-const BUTTON_DISABLED: Color = Color::srgb(0.35, 0.33, 0.31);
-const TEXT_DISABLED: Color = Color::srgb(0.60, 0.58, 0.55);
+pub const BUTTON_NORMAL: Color = DEEP_RED;
+pub const BUTTON_HOVERED: Color = Color::srgb(0.68, 0.16, 0.14);
+pub const BUTTON_PRESSED: Color = Color::srgb(0.42, 0.06, 0.06);
+pub const BUTTON_DISABLED: Color = Color::srgb(0.35, 0.33, 0.31);
+pub const TEXT_DISABLED: Color = Color::srgb(0.60, 0.58, 0.55);
 
 /// Marker for the main-menu screen root; everything under it is despawned by
 /// [`despawn_screen`] on `OnExit(GameState::MainMenu)`.
