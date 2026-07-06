@@ -36,6 +36,31 @@ jobs:
     - name: Run cargo test
       run: cargo test
 
+  wasm_build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Add wasm target
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Set up Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: wasm
+
+    - name: Run cargo clippy (wasm32)
+      run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
+
+    - name: Install Trunk
+      uses: taiki-e/install-action@v2
+      with:
+        tool: trunk
+
+    - name: Build web bundle
+      run: trunk build --release
+
   publish:
     name: Build & push image
     needs: [build_and_test]
