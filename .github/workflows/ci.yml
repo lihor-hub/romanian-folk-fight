@@ -134,5 +134,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run Deploy Script
+        env:
+          # GHCR_PULL_TOKEN must be a PAT with read:packages; GITHUB_TOKEN
+          # expires with the job, but pods re-pull whenever they reschedule.
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
         run: |
           ./scripts/deploy-local-k8s.sh "${{ github.sha }}"
