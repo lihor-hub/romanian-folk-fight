@@ -10,7 +10,9 @@ use rand::{Rng, RngExt as _};
 
 use crate::character::stats;
 
-use super::engine::{CombatAction, FighterState, HEAVY_STRIKE_COST, QUICK_STRIKE_COST};
+use super::engine::{
+    CombatAction, FighterState, HEAVY_DAMAGE_MULTIPLIER, HEAVY_STRIKE_COST, QUICK_STRIKE_COST, roll,
+};
 
 /// Per-archetype tuning knob for the enemy decision policy, attached as a
 /// component to enemy fighters. The folklore roster issue tunes it per
@@ -43,8 +45,8 @@ const BLOCK_WEIGHT_SCALE: f32 = 0.6;
 /// 1. Cannot afford any strike (stamina < quick cost): Rest.
 /// 2. Low stamina (< heavy cost) and hurt (hp < 30% of max): 70% Rest,
 ///    30% Block.
-/// 3. Foe in kill range (hp ≤ 2 × own base damage): the strongest
-///    affordable strike.
+/// 3. Foe in kill range (hp within one heavy strike's damage): the
+///    strongest affordable strike.
 /// 4. Weighted pick — HeavyStrike weight `aggression` (0 if unaffordable),
 ///    QuickStrike weight 1.0, Block weight `0.6 * (1.0 - aggression)`, Rest
 ///    weight the missing-stamina fraction (0 at full stamina, so a rested
@@ -61,14 +63,14 @@ pub fn choose_action(
     }
     // 2. Running dry while badly hurt: mostly recover, sometimes turtle.
     if me.stamina < HEAVY_STRIKE_COST && 10 * me.hp < 3 * stats::max_hp(&me.attributes) {
-        return if rng.random_range(0..100) < EXHAUSTED_REST_PERCENT {
+        return if roll(rng, EXHAUSTED_REST_PERCENT) {
             CombatAction::Rest
         } else {
             CombatAction::Block
         };
     }
     // 3. Foe in kill range: go for the strongest strike we can pay for.
-    if foe.hp <= 2 * stats::base_damage(&me.attributes) {
+    if foe.hp <= HEAVY_DAMAGE_MULTIPLIER * stats::base_damage(&me.attributes) {
         return if me.stamina >= HEAVY_STRIKE_COST {
             CombatAction::HeavyStrike
         } else {
@@ -90,14 +92,14 @@ pub fn choose_action(
         (CombatAction::Rest, missing_stamina_fraction),
     ];
     let total: f32 = weighted.iter().map(|(_, weight)| weight).sum();
-    let mut roll = rng.random_range(0.0..total);
+    let mut remaining = rng.random_range(0.0..total);
     for (action, weight) in weighted {
-        // A zero-weight action can never match: `roll` stays >= 0 past every
-        // failed comparison, so `roll < 0.0` is unreachable here.
-        if roll < weight {
+        // A zero-weight action can never match: `remaining` stays >= 0 past
+        // every failed comparison, so `remaining < 0.0` is unreachable here.
+        if remaining < weight {
             return action;
         }
-        roll -= weight;
+        remaining -= weight;
     }
     // Float-rounding fallback; the quick strike is always affordable here.
     CombatAction::QuickStrike
@@ -183,7 +185,7 @@ mod tests {
     fn kill_range_prefers_the_strongest_affordable_strike() {
         // base_damage(putere 4) = 6, so a foe at 12 hp is in kill range.
         let mut foe = fighter();
-        foe.hp = 2 * stats::base_damage(&fighter().attributes);
+        foe.hp = HEAVY_DAMAGE_MULTIPLIER * stats::base_damage(&fighter().attributes);
         for seed in 0..20 {
             let action = choose_action(&fighter(), &foe, &profile(0.0), &mut rng(seed));
             assert_eq!(

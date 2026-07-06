@@ -227,7 +227,10 @@ fn enemy_turn(
     };
     let me = snapshot(&enemy, turn.enemy_blocking);
     let foe = snapshot(&player, turn.player_blocking);
-    let profile = profile.single().copied().unwrap_or_default();
+    let profile = profile.single().copied().unwrap_or_else(|error| {
+        warn!("no unique enemy AiProfile ({error}); using the default");
+        AiProfile::default()
+    });
     let action = ai::choose_action(&me, &foe, &profile, &mut rng.0);
     apply_action(
         action,
@@ -405,6 +408,13 @@ mod tests {
             .current = 0;
     }
 
+    /// Presses `key` against an inert enemy: the drain must be re-applied
+    /// before every press because the forced Rest refills 20 stamina.
+    fn press_vs_resting_enemy(app: &mut App, key: KeyCode) {
+        drain_enemy_stamina(app);
+        press(app, key);
+    }
+
     #[test]
     fn the_turn_opens_with_the_player_on_an_agility_tie() {
         let mut app = test_app(); // player agilitate 2 vs Strigoi 2
@@ -439,8 +449,7 @@ mod tests {
     #[test]
     fn key_one_quick_strikes_and_the_drained_enemy_rests() {
         let mut app = test_app();
-        drain_enemy_stamina(&mut app);
-        press(&mut app, KeyCode::Digit1);
+        press_vs_resting_enemy(&mut app, KeyCode::Digit1);
         // Player: hit for base damage 6, -5 stamina. Enemy reply: forced
         // Rest, +20 stamina. Turn is back with the player.
         assert_eq!(enemy_pools(&mut app), (64, 20));
@@ -451,8 +460,7 @@ mod tests {
     #[test]
     fn key_two_heavy_strikes_for_double_damage() {
         let mut app = test_app();
-        drain_enemy_stamina(&mut app);
-        press(&mut app, KeyCode::Digit2);
+        press_vs_resting_enemy(&mut app, KeyCode::Digit2);
         assert_eq!(enemy_pools(&mut app), (58, 20), "70 hp - 2 * 6 damage");
         assert_eq!(player_pools(&mut app), (90, 35), "heavy strike costs 15");
     }
@@ -460,12 +468,10 @@ mod tests {
     #[test]
     fn key_three_blocks_and_the_guard_holds_until_the_next_turn() {
         let mut app = test_app();
-        drain_enemy_stamina(&mut app);
-        press(&mut app, KeyCode::Digit3);
+        press_vs_resting_enemy(&mut app, KeyCode::Digit3);
         assert_eq!(player_pools(&mut app), (90, 47), "block costs 3");
         assert!(turn(&app).player_blocking);
-        drain_enemy_stamina(&mut app);
-        press(&mut app, KeyCode::Digit4);
+        press_vs_resting_enemy(&mut app, KeyCode::Digit4);
         assert!(!turn(&app).player_blocking, "guard lapses on the next turn");
     }
 
@@ -473,17 +479,13 @@ mod tests {
     fn key_four_rests_stamina_back_up_to_the_cap() {
         let mut app = test_app();
         for _ in 0..3 {
-            drain_enemy_stamina(&mut app);
-            press(&mut app, KeyCode::Digit2); // 3 heavy strikes: 50 -> 5
+            press_vs_resting_enemy(&mut app, KeyCode::Digit2); // 3 heavy strikes: 50 -> 5
         }
         assert_eq!(player_pools(&mut app).1, 5);
-        drain_enemy_stamina(&mut app);
-        press(&mut app, KeyCode::Digit4);
+        press_vs_resting_enemy(&mut app, KeyCode::Digit4);
         assert_eq!(player_pools(&mut app).1, 25, "rest restores 20");
-        drain_enemy_stamina(&mut app);
-        press(&mut app, KeyCode::Digit4);
-        drain_enemy_stamina(&mut app);
-        press(&mut app, KeyCode::Digit4);
+        press_vs_resting_enemy(&mut app, KeyCode::Digit4);
+        press_vs_resting_enemy(&mut app, KeyCode::Digit4);
         assert_eq!(player_pools(&mut app).1, 50, "capped at max stamina");
     }
 
@@ -491,13 +493,11 @@ mod tests {
     fn a_strike_without_stamina_is_a_no_op_but_passes_the_turn() {
         let mut app = test_app();
         for _ in 0..3 {
-            drain_enemy_stamina(&mut app);
-            press(&mut app, KeyCode::Digit2); // 50 -> 5 stamina
+            press_vs_resting_enemy(&mut app, KeyCode::Digit2); // 50 -> 5 stamina
         }
         assert_eq!(player_pools(&mut app).1, 5);
         let enemy_hp = enemy_pools(&mut app).0;
-        drain_enemy_stamina(&mut app);
-        press(&mut app, KeyCode::Digit2); // needs 15, has 5
+        press_vs_resting_enemy(&mut app, KeyCode::Digit2); // needs 15, has 5
         assert_eq!(enemy_pools(&mut app).0, enemy_hp, "no damage dealt");
         assert_eq!(player_pools(&mut app).1, 5, "no stamina spent");
         assert_eq!(
