@@ -5,6 +5,7 @@
 
 pub mod arena;
 pub mod character;
+pub mod combat;
 pub mod core;
 pub mod creation;
 pub mod menu;
@@ -21,5 +22,6 @@ impl Plugin for GamePlugin {
         app.add_plugins(menu::MenuPlugin);
         app.add_plugins(creation::CreationPlugin);
         app.add_plugins(arena::ArenaPlugin);
+        app.add_plugins(combat::CombatPlugin);
     }
 }
