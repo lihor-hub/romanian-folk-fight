@@ -5,6 +5,10 @@ edition = "2024"
 
 [dependencies]
 bevy = { version = "0.19.0" }
+# default-features off: the engine only needs the `Rng`/`SeedableRng` traits,
+# and the default `os_rng` backend does not build on wasm32-unknown-unknown.
+rand = { version = "0.10", default-features = false }
+rand_chacha = { version = "0.10", default-features = false }
 
 [features]
 # Fast incremental native builds; never enable for release or wasm builds.
