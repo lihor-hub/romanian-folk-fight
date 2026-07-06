@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = { version = "0.19.0", features = ["dynamic_linking"] }
+bevy = { version = "0.19.0" }
+
+[features]
+# Fast incremental native builds; never enable for release or wasm builds.
+dev = ["bevy/dynamic_linking"]
 
 # Enable high optimizations for dependencies (including Bevy), but keep our code fast to build.
 [profile.dev]

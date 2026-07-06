@@ -7,6 +7,7 @@
 - Organize game logic into modular Bevy plugins.
 - Use explicit dependencies and features in `Cargo.toml`.
 - For development builds, ensure we enable fast compilation optimizations.
+- Use `cargo run --features dev` for fast native iteration (Bevy dynamic linking); plain `cargo build`/`--release` and wasm builds must stay free of the `dev` feature.
 
 ## Git Workflow
 
