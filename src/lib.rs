@@ -3,6 +3,7 @@
 //! Game logic lives in this library so it is unit-testable; the binary in
 //! `main.rs` only configures the window and adds [`GamePlugin`].
 
+pub mod character;
 pub mod core;
 
 use bevy::prelude::*;
@@ -13,5 +14,6 @@ pub struct GamePlugin;
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(core::CorePlugin);
+        app.add_plugins(character::CharacterPlugin);
     }
 }
