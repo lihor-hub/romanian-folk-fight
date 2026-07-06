@@ -63,7 +63,11 @@ jobs:
       run: cargo test
 
   wasm_build:
+    name: Build WASM
     runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
 
     steps:
     - uses: actions/checkout@v4
@@ -71,10 +75,13 @@ jobs:
     - name: Add wasm target
       run: rustup target add wasm32-unknown-unknown
 
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.8
+
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
       with:
-        key: wasm
+        shared-key: "sccache"
 
     - name: Run cargo clippy (wasm32)
       run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
@@ -89,7 +96,7 @@ jobs:
 
   publish:
     name: Build & push image
-    needs: [build_and_test, fmt]
+    needs: [build_and_test, fmt, wasm_build]
     runs-on: [self-hosted]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
