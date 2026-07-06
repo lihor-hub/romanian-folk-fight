@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: romanian-folk-fight
+  namespace: romanian-folk-fight
+  labels:
+    app: romanian-folk-fight
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: romanian-folk-fight
+  template:
+    metadata:
+      labels:
+        app: romanian-folk-fight
+    spec:
+      containers:
+      - name: romanian-folk-fight
+        image: ghcr.io/lihor-hub/romanian-folk-fight:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
+          name: http
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
