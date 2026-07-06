@@ -1,0 +1,14 @@
+folk.lihor.ro {
+	# Proxy to the Kubernetes NodePort instead of a mutable ClusterIP.
+	# The NodePort (30089) is stable across pod restarts and upgrades.
+	reverse_proxy 127.0.0.1:30089
+
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+	}
+}
