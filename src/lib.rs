@@ -5,6 +5,7 @@
 
 pub mod character;
 pub mod core;
+pub mod menu;
 
 use bevy::prelude::*;
 
@@ -15,5 +16,6 @@ impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(core::CorePlugin);
         app.add_plugins(character::CharacterPlugin);
+        app.add_plugins(menu::MenuPlugin);
     }
 }

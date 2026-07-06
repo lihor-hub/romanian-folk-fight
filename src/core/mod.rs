@@ -20,12 +20,7 @@ pub struct CorePlugin;
 impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<GameState>()
-            .add_systems(Startup, spawn_camera)
-            .add_systems(OnEnter(GameState::MainMenu), spawn_main_menu_placeholder)
-            .add_systems(
-                OnExit(GameState::MainMenu),
-                despawn_screen::<MainMenuScreen>,
-            );
+            .add_systems(Startup, spawn_camera);
     }
 }
 
@@ -39,29 +34,6 @@ pub fn despawn_screen<T: Component>(mut commands: Commands, entities: Query<Enti
 
 fn spawn_camera(mut commands: Commands) {
     commands.spawn(Camera2d);
-}
-
-/// Marker for the placeholder main-menu screen; replaced by the real menu in
-/// the main-menu feature issue.
-#[derive(Component)]
-struct MainMenuScreen;
-
-fn spawn_main_menu_placeholder(mut commands: Commands) {
-    commands.spawn((
-        MainMenuScreen,
-        Text::new("Romanian Folk Fight - Swords and Sandals"),
-        TextFont {
-            font_size: FontSize::Px(40.0),
-            ..default()
-        },
-        TextColor(Color::WHITE),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(20.0),
-            left: Val::Px(20.0),
-            ..default()
-        },
-    ));
 }
 
 #[cfg(test)]
@@ -107,23 +79,5 @@ mod tests {
         app.update();
         assert!(app.world().get_entity(tagged).is_err());
         assert!(app.world().get_entity(untagged).is_ok());
-    }
-
-    #[test]
-    fn main_menu_placeholder_spawns_and_despawns_with_state() {
-        let mut app = test_app();
-        app.update();
-        let count = |app: &mut App| {
-            app.world_mut()
-                .query_filtered::<(), With<MainMenuScreen>>()
-                .iter(app.world())
-                .count()
-        };
-        assert_eq!(count(&mut app), 1, "placeholder spawned on enter");
-        app.world_mut()
-            .resource_mut::<NextState<GameState>>()
-            .set(GameState::Fight);
-        app.update();
-        assert_eq!(count(&mut app), 0, "placeholder despawned on exit");
     }
 }
