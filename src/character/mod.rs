@@ -66,13 +66,13 @@ pub struct EnemyFighter;
 pub struct FighterName(pub String);
 
 /// Spawns a fighter entity with the given name, attributes, and side marker
-/// (e.g. [`PlayerFighter`] or [`EnemyFighter`]), at full health and stamina
-/// derived from the attributes.
+/// bundle (e.g. [`PlayerFighter`], or [`EnemyFighter`] plus its AI profile),
+/// at full health and stamina derived from the attributes.
 pub fn spawn_fighter(
     commands: &mut Commands,
     name: impl Into<String>,
     attrs: Attributes,
-    marker: impl Component,
+    marker: impl Bundle,
 ) -> Entity {
     let max_hp = stats::max_hp(&attrs);
     let max_stamina = stats::max_stamina(&attrs);
