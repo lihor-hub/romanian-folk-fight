@@ -7,6 +7,9 @@ fn main() {
             primary_window: Some(Window {
                 title: "Romanian Folk Fight".into(),
                 resolution: (800, 600).into(),
+                canvas: Some("#game-canvas".into()),
+                fit_canvas_to_parent: true,
+                prevent_default_event_handling: false,
                 ..default()
             }),
             ..default()
