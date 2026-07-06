@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use romanian_folk_fight::GamePlugin;
 
 fn main() {
     App::new()
@@ -10,27 +11,6 @@ fn main() {
             }),
             ..default()
         }))
-        .add_systems(Startup, setup)
+        .add_plugins(GamePlugin)
         .run();
-}
-
-fn setup(mut commands: Commands) {
-    // Spawn 2D Camera
-    commands.spawn(Camera2d);
-
-    // Spawn Title Text
-    commands.spawn((
-        Text::new("Romanian Folk Fight - Swords and Sandals"),
-        TextFont {
-            font_size: FontSize::Px(40.0),
-            ..default()
-        },
-        TextColor(Color::WHITE),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(20.0),
-            left: Val::Px(20.0),
-            ..default()
-        },
-    ));
 }
