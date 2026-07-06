@@ -13,22 +13,32 @@ env:
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
-  build_and_test:
+  fmt:
+    name: Run cargo fmt
     runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Rust cache
+      uses: Swatinem/rust-cache@v2
+    - name: Run cargo fmt
+      run: cargo fmt --all -- --check
+
+  build_and_test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=lld
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install system dependencies for Bevy
+    - name: Install system dependencies for Bevy and LLD
       run: |
         sudo apt-get update
-        sudo apt-get install -y pkg-config libx11-dev libasound2-dev libudev-dev libxcursor-dev libxinerama-dev libxi-dev libxrandr-dev libwayland-dev libxkbcommon-dev
+        sudo apt-get install -y pkg-config libx11-dev libasound2-dev libudev-dev libxcursor-dev libxinerama-dev libxi-dev libxrandr-dev libwayland-dev libxkbcommon-dev lld clang
 
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
-
-    - name: Run cargo fmt
-      run: cargo fmt --all -- --check
 
     - name: Run cargo clippy
       run: cargo clippy --all-targets -- -D warnings
@@ -63,7 +73,7 @@ jobs:
 
   publish:
     name: Build & push image
-    needs: [build_and_test]
+    needs: [build_and_test, fmt]
     runs-on: [self-hosted]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
