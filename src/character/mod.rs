@@ -35,6 +35,58 @@ impl Default for Attributes {
     }
 }
 
+impl Attributes {
+    /// Current value of one attribute, addressed by [`AttributeKind`].
+    pub fn get(&self, kind: AttributeKind) -> u32 {
+        match kind {
+            AttributeKind::Putere => self.putere,
+            AttributeKind::Agilitate => self.agilitate,
+            AttributeKind::Vitalitate => self.vitalitate,
+            AttributeKind::Noroc => self.noroc,
+        }
+    }
+
+    /// Mutable access to one attribute, addressed by [`AttributeKind`].
+    pub fn get_mut(&mut self, kind: AttributeKind) -> &mut u32 {
+        match kind {
+            AttributeKind::Putere => &mut self.putere,
+            AttributeKind::Agilitate => &mut self.agilitate,
+            AttributeKind::Vitalitate => &mut self.vitalitate,
+            AttributeKind::Noroc => &mut self.noroc,
+        }
+    }
+}
+
+/// One of the four allocatable attributes; lets UI screens address rows and
+/// buttons generically instead of per-attribute systems.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttributeKind {
+    Putere,
+    Agilitate,
+    Vitalitate,
+    Noroc,
+}
+
+impl AttributeKind {
+    /// All four kinds, in display order.
+    pub const ALL: [AttributeKind; 4] = [
+        AttributeKind::Putere,
+        AttributeKind::Agilitate,
+        AttributeKind::Vitalitate,
+        AttributeKind::Noroc,
+    ];
+
+    /// Romanian display label for the attribute row.
+    pub fn label(self) -> &'static str {
+        match self {
+            AttributeKind::Putere => "Putere",
+            AttributeKind::Agilitate => "Agilitate",
+            AttributeKind::Vitalitate => "Vitalitate",
+            AttributeKind::Noroc => "Noroc",
+        }
+    }
+}
+
 /// Hit points of a fighter.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Health {

@@ -1,13 +1,27 @@
-//! The two end-of-fight screens: the victory result screen (payout breakdown
-//! plus the shop / next-fight choice) and the game-over screen (run reset back
-//! to the main menu). Both follow the button pattern from the main menu.
+//! The two end-of-fight screens: the victory result screen (payout breakdown,
+//! XP progress, the level-up point allocation, and the shop / next-fight
+//! choice) and the game-over screen (run reset back to the main menu). Both
+//! follow the button pattern from the main menu.
 
 use bevy::prelude::*;
 
+use crate::character::{AttributeKind, Health, PlayerFighter, Stamina, stats};
+use crate::combat::hud::bar_percent;
 use crate::core::GameState;
+use crate::creation::PlayerCharacter;
 use crate::menu::{BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK};
+use crate::ui_widgets::{attribute_row::spawn_attribute_row, wide_button};
 
-use super::{FightOutcome, Wallet, reset_run};
+use super::{FightOutcome, Level, LevelUpDraft, Wallet, reset_run, top_up_pool, xp_to_next};
+
+/// Width of the XP progress bar.
+const XP_BAR_WIDTH: f32 = 300.0;
+/// Height of the XP progress bar.
+const XP_BAR_HEIGHT: f32 = 12.0;
+/// Track color of the XP bar (same tone as the HUD pool bars).
+const XP_BAR_TRACK: Color = Color::srgb(0.16, 0.14, 0.13);
+/// Fill color of the XP bar (same tone as the HUD stamina bar).
+const XP_BAR_FILL: Color = Color::srgb(0.88, 0.74, 0.22);
 
 /// Marker for the victory-result screen root; despawned by
 /// [`crate::core::despawn_screen`] on `OnExit(GameState::FightResult)`.
@@ -37,13 +51,43 @@ pub enum GameOverAction {
     BackToMenu,
 }
 
-/// Spawns the victory screen: title, payout breakdown, wallet total, and the
-/// shop / next-fight buttons. Runs after the wallet was credited, so the
-/// shown total already includes the reward.
+/// Marker for the level-up point-allocation panel on the result screen;
+/// despawned when the allocation is confirmed (or with the whole screen).
+#[derive(Component)]
+pub struct AllocationPanel;
+
+/// What a level-up allocation button does when pressed.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AllocateAction {
+    /// Spend one unspent point on the attribute.
+    Increase(AttributeKind),
+    /// Refund one point allocated in this session.
+    Decrease(AttributeKind),
+    /// Apply the allocation to [`PlayerCharacter`] (**Confirmă**); leftover
+    /// points stay on [`Level`] for later.
+    Confirm,
+}
+
+/// Which piece of the allocation draft a text label displays.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AllocationLabel {
+    /// The "points remaining" line.
+    Points,
+    /// One attribute's current value.
+    Value(AttributeKind),
+}
+
+/// Spawns the victory screen: title, payout breakdown, wallet total, XP
+/// progress towards the next level, the point-allocation panel when there
+/// are unspent points, and the shop / next-fight buttons. Runs after the
+/// wallet and XP were credited, so the shown totals already include the
+/// award.
 pub(super) fn spawn_result_screen(
     mut commands: Commands,
     outcome: Option<Res<FightOutcome>>,
     wallet: Res<Wallet>,
+    level: Res<Level>,
+    player: Option<Res<PlayerCharacter>>,
 ) {
     let (reward, xp) = match outcome {
         Some(outcome) => (outcome.reward, outcome.xp),
@@ -52,6 +96,11 @@ pub(super) fn spawn_result_screen(
             (0, 0)
         }
     };
+    // A fresh allocation draft over the confirmed build; unspent points from
+    // earlier fights are offered again until they are finally spent.
+    let draft = player
+        .filter(|_| level.unspent_points > 0)
+        .map(|player| LevelUpDraft::new(player.attributes, level.unspent_points));
     commands
         .spawn((screen_root(), ResultScreen))
         .with_children(|parent| {
@@ -59,8 +108,87 @@ pub(super) fn spawn_result_screen(
             parent.spawn(screen_line(format!("Recompensă: {reward} galbeni")));
             parent.spawn(screen_line(format!("Experiență: {xp} XP")));
             parent.spawn(screen_line(format!("Pungă: {} galbeni", wallet.0)));
-            parent.spawn((screen_button("La prăvălie"), ResultAction::GoToShop));
-            parent.spawn((screen_button("Lupta următoare"), ResultAction::NextFight));
+            parent.spawn(screen_line(format!(
+                "Nivel {} — XP: {}/{}",
+                level.level,
+                level.xp,
+                xp_to_next(level.level)
+            )));
+            parent.spawn(xp_bar(&level));
+            if let Some(draft) = &draft {
+                spawn_allocation_panel(parent, draft);
+            }
+            parent.spawn((wide_button("La prăvălie"), ResultAction::GoToShop));
+            parent.spawn((wide_button("Lupta următoare"), ResultAction::NextFight));
+        });
+    if let Some(draft) = draft {
+        commands.insert_resource(draft);
+    }
+}
+
+/// The XP progress bar: a dark track with a fill sized to the progress
+/// towards the next level (same visual language as the HUD pool bars).
+fn xp_bar(level: &Level) -> impl Bundle {
+    let percent = bar_percent(level.xp as i32, xp_to_next(level.level) as i32);
+    (
+        Node {
+            width: Val::Px(XP_BAR_WIDTH),
+            height: Val::Px(XP_BAR_HEIGHT),
+            ..default()
+        },
+        BackgroundColor(XP_BAR_TRACK),
+        children![(
+            Node {
+                width: Val::Percent(percent),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            BackgroundColor(XP_BAR_FILL),
+        )],
+    )
+}
+
+/// The "points remaining" label text of the allocation panel.
+fn points_text(draft: &LevelUpDraft) -> String {
+    format!("Puncte de atribut: {}", draft.points_remaining())
+}
+
+/// Spawns the level-up allocation panel: the points-remaining line, one
+/// shared attribute row per attribute (the same widget as the creation
+/// screen), and the confirm button.
+fn spawn_allocation_panel(parent: &mut ChildSpawnerCommands, draft: &LevelUpDraft) {
+    parent
+        .spawn((
+            AllocationPanel,
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(8.0),
+                margin: UiRect::vertical(Val::Px(8.0)),
+                ..default()
+            },
+        ))
+        .with_children(|panel| {
+            panel.spawn((
+                Text::new(points_text(draft)),
+                TextFont {
+                    font_size: FontSize::Px(24.0),
+                    ..default()
+                },
+                TextColor(CREAM),
+                AllocationLabel::Points,
+            ));
+            for kind in AttributeKind::ALL {
+                spawn_attribute_row(
+                    panel,
+                    kind,
+                    draft.get(kind),
+                    AllocateAction::Decrease(kind),
+                    AllocateAction::Increase(kind),
+                    AllocationLabel::Value(kind),
+                );
+            }
+            panel.spawn((wide_button("Confirmă"), AllocateAction::Confirm));
         });
 }
 
@@ -72,7 +200,7 @@ pub(super) fn spawn_game_over_screen(mut commands: Commands, wallet: Res<Wallet>
         .with_children(|parent| {
             parent.spawn(screen_title("Ai fost răpus…"));
             parent.spawn(screen_line(format!("Galbeni strânși: {}", wallet.0)));
-            parent.spawn((screen_button("Înapoi la menu"), GameOverAction::BackToMenu));
+            parent.spawn((wide_button("Înapoi la menu"), GameOverAction::BackToMenu));
         });
 }
 
@@ -120,29 +248,6 @@ fn screen_line(label: String) -> impl Bundle {
     )
 }
 
-/// A button with a centered text label, mirroring the main-menu buttons.
-fn screen_button(label: &str) -> impl Bundle {
-    (
-        Button,
-        Node {
-            width: Val::Px(260.0),
-            height: Val::Px(56.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        },
-        BackgroundColor(BUTTON_NORMAL),
-        children![(
-            Text::new(label),
-            TextFont {
-                font_size: FontSize::Px(24.0),
-                ..default()
-            },
-            TextColor(CREAM),
-        )],
-    )
-}
-
 /// Query filter: buttons whose interaction changed this frame.
 type ChangedButton = (Changed<Interaction>, With<Button>);
 
@@ -159,6 +264,72 @@ pub(super) fn handle_result_actions(
             ResultAction::GoToShop => GameState::Shop,
             ResultAction::NextFight => GameState::Fight,
         });
+    }
+}
+
+/// Runs the [`AllocateAction`] of whichever allocation button was pressed.
+/// The draft methods enforce the invariants (no overspend, never below the
+/// confirmed build), so a press that would break them is a no-op. Confirm
+/// applies the draft: [`PlayerCharacter`] takes the new attributes, a live
+/// player fighter's pools top up by exactly the vitalitate max-delta,
+/// leftover points persist on [`Level`], and the panel closes.
+pub(super) fn handle_allocation_actions(
+    mut commands: Commands,
+    interactions: Query<(&Interaction, &AllocateAction), ChangedButton>,
+    draft: Option<ResMut<LevelUpDraft>>,
+    level: Option<ResMut<Level>>,
+    player: Option<ResMut<PlayerCharacter>>,
+    mut fighters: Query<(&mut Health, &mut Stamina), With<PlayerFighter>>,
+    panels: Query<Entity, With<AllocationPanel>>,
+) {
+    let (Some(mut draft), Some(mut level), Some(mut player)) = (draft, level, player) else {
+        return;
+    };
+    for (interaction, action) in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        match *action {
+            AllocateAction::Increase(kind) => {
+                draft.increase(kind);
+            }
+            AllocateAction::Decrease(kind) => {
+                draft.decrease(kind);
+            }
+            AllocateAction::Confirm => {
+                let attributes = draft.attributes();
+                for (mut health, mut stamina) in &mut fighters {
+                    (health.current, health.max) =
+                        top_up_pool(health.current, health.max, stats::max_hp(&attributes));
+                    (stamina.current, stamina.max) = top_up_pool(
+                        stamina.current,
+                        stamina.max,
+                        stats::max_stamina(&attributes),
+                    );
+                }
+                player.attributes = attributes;
+                level.unspent_points = draft.points_remaining();
+                commands.remove_resource::<LevelUpDraft>();
+                for panel in &panels {
+                    commands.entity(panel).despawn();
+                }
+            }
+        }
+    }
+}
+
+/// Refreshes every [`AllocationLabel`] text from the draft. Scheduled after
+/// the action handler and gated on `resource_exists_and_changed`, so labels
+/// react on the same frame as the click.
+pub(super) fn update_allocation_labels(
+    draft: Res<LevelUpDraft>,
+    mut labels: Query<(&mut Text, &AllocationLabel)>,
+) {
+    for (mut text, label) in &mut labels {
+        text.0 = match label {
+            AllocationLabel::Points => points_text(&draft),
+            AllocationLabel::Value(kind) => draft.get(*kind).to_string(),
+        };
     }
 }
 
@@ -297,6 +468,26 @@ mod tests {
         press(app, button);
     }
 
+    /// Presses the allocation-panel button carrying `action`.
+    fn press_allocate_button(app: &mut App, action: AllocateAction) {
+        let button = app
+            .world_mut()
+            .query_filtered::<(Entity, &AllocateAction), With<Button>>()
+            .iter(app.world())
+            .find(|&(_, &a)| a == action)
+            .map(|(entity, _)| entity)
+            .expect("allocation button exists");
+        press(app, button);
+    }
+
+    /// A confirmed default-build character for allocation tests.
+    fn default_character() -> PlayerCharacter {
+        PlayerCharacter {
+            name: "Făt-Frumos".to_string(),
+            attributes: Attributes::default(),
+        }
+    }
+
     #[test]
     fn the_victory_screen_shows_the_payout_and_the_credited_wallet() {
         let mut app = test_app();
@@ -318,6 +509,220 @@ mod tests {
                 && texts.contains(&"Lupta următoare".to_string()),
             "{texts:?}"
         );
+    }
+
+    #[test]
+    fn the_victory_screen_shows_the_xp_progress_after_the_award() {
+        let mut app = test_app();
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        set_state(&mut app, GameState::FightResult);
+
+        let texts = texts(&mut app);
+        assert!(
+            texts.contains(&"Nivel 1 — XP: 20/100".to_string()),
+            "the shown progress already includes the award: {texts:?}"
+        );
+        assert_eq!(
+            count::<AllocationPanel>(&mut app),
+            0,
+            "no unspent points, no allocation panel"
+        );
+        assert!(
+            app.world().get_resource::<LevelUpDraft>().is_none(),
+            "no draft without points to spend"
+        );
+    }
+
+    #[test]
+    fn unspent_points_open_the_allocation_panel() {
+        let mut app = test_app();
+        app.insert_resource(default_character());
+        app.insert_resource(Level {
+            level: 2,
+            xp: 0,
+            unspent_points: 2,
+        });
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        set_state(&mut app, GameState::FightResult);
+
+        assert_eq!(count::<AllocationPanel>(&mut app), 1, "panel spawned");
+        let texts = texts(&mut app);
+        assert!(
+            texts.contains(&"Puncte de atribut: 2".to_string()),
+            "{texts:?}"
+        );
+        for kind in AttributeKind::ALL {
+            assert!(texts.contains(&kind.label().to_string()), "{texts:?}");
+        }
+        assert!(texts.contains(&"Confirmă".to_string()), "{texts:?}");
+        let draft = app
+            .world()
+            .get_resource::<LevelUpDraft>()
+            .expect("a fresh draft over the confirmed build");
+        assert_eq!(draft.attributes(), Attributes::default());
+        assert_eq!(draft.points_remaining(), 2);
+    }
+
+    #[test]
+    fn allocation_clicks_drive_the_draft_and_its_labels() {
+        let mut app = test_app();
+        app.insert_resource(default_character());
+        app.insert_resource(Level {
+            level: 2,
+            xp: 0,
+            unspent_points: 2,
+        });
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        set_state(&mut app, GameState::FightResult);
+
+        press_allocate_button(
+            &mut app,
+            AllocateAction::Increase(AttributeKind::Vitalitate),
+        );
+        let draft = app.world().resource::<LevelUpDraft>();
+        assert_eq!(draft.get(AttributeKind::Vitalitate), 2);
+        assert_eq!(draft.points_remaining(), 1);
+        let texts = texts(&mut app);
+        assert!(
+            texts.contains(&"Puncte de atribut: 1".to_string()),
+            "{texts:?}"
+        );
+
+        press_allocate_button(
+            &mut app,
+            AllocateAction::Decrease(AttributeKind::Vitalitate),
+        );
+        let draft = app.world().resource::<LevelUpDraft>();
+        assert_eq!(draft.get(AttributeKind::Vitalitate), 1, "refunded");
+        assert_eq!(draft.points_remaining(), 2);
+
+        press_allocate_button(
+            &mut app,
+            AllocateAction::Decrease(AttributeKind::Vitalitate),
+        );
+        assert_eq!(
+            app.world().resource::<LevelUpDraft>().attributes(),
+            Attributes::default(),
+            "the confirmed build is the floor"
+        );
+    }
+
+    #[test]
+    fn confirm_applies_the_allocation_and_keeps_leftover_points() {
+        let mut app = test_app();
+        app.insert_resource(default_character());
+        app.insert_resource(Level {
+            level: 2,
+            xp: 10,
+            unspent_points: 3,
+        });
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        set_state(&mut app, GameState::FightResult);
+        // A wounded player fighter left over from the fight: 41/60 HP,
+        // 10/35 stamina (the default build's pools).
+        app.world_mut().spawn((
+            PlayerFighter,
+            Health {
+                current: 41,
+                max: 60,
+            },
+            Stamina {
+                current: 10,
+                max: 35,
+            },
+        ));
+
+        press_allocate_button(
+            &mut app,
+            AllocateAction::Increase(AttributeKind::Vitalitate),
+        );
+        press_allocate_button(
+            &mut app,
+            AllocateAction::Increase(AttributeKind::Vitalitate),
+        );
+        press_allocate_button(&mut app, AllocateAction::Confirm);
+
+        let player = app.world().resource::<PlayerCharacter>();
+        assert_eq!(
+            player.attributes,
+            Attributes {
+                vitalitate: 3,
+                ..Attributes::default()
+            },
+            "the confirmed build gains the allocation"
+        );
+        assert_eq!(
+            app.world().resource::<Level>().unspent_points,
+            1,
+            "the unspent point persists"
+        );
+        assert!(
+            app.world().get_resource::<LevelUpDraft>().is_none(),
+            "the draft is consumed"
+        );
+        assert_eq!(count::<AllocationPanel>(&mut app), 0, "panel closed");
+
+        let (health, stamina) = app
+            .world_mut()
+            .query_filtered::<(&Health, &Stamina), With<PlayerFighter>>()
+            .single(app.world())
+            .expect("the fighter survives the confirm");
+        assert_eq!(
+            *health,
+            Health {
+                current: 61,
+                max: 80,
+            },
+            "current HP tops up by exactly the max-delta (60 → 80)"
+        );
+        assert_eq!(
+            *stamina,
+            Stamina {
+                current: 20,
+                max: 45,
+            },
+            "current stamina tops up by exactly the max-delta (35 → 45)"
+        );
+    }
+
+    #[test]
+    fn leaving_without_confirm_keeps_the_points_for_the_next_visit() {
+        let mut app = test_app();
+        app.insert_resource(default_character());
+        app.insert_resource(Level {
+            level: 2,
+            xp: 0,
+            unspent_points: 2,
+        });
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        set_state(&mut app, GameState::FightResult);
+
+        press_allocate_button(&mut app, AllocateAction::Increase(AttributeKind::Putere));
+        press_result_button(&mut app, ResultAction::GoToShop);
+
+        assert_eq!(state(&app), GameState::Shop);
+        assert!(
+            app.world().get_resource::<LevelUpDraft>().is_none(),
+            "the abandoned draft is dropped"
+        );
+        assert_eq!(
+            app.world().resource::<PlayerCharacter>().attributes,
+            Attributes::default(),
+            "nothing applies without confirm"
+        );
+        assert_eq!(
+            app.world().resource::<Level>().unspent_points,
+            2,
+            "unconfirmed points stay unspent"
+        );
+
+        set_state(&mut app, GameState::FightResult);
+        let draft = app
+            .world()
+            .get_resource::<LevelUpDraft>()
+            .expect("a fresh draft on re-entry");
+        assert_eq!(draft.points_remaining(), 2, "all points offered again");
+        assert_eq!(draft.attributes(), Attributes::default());
     }
 
     #[test]
@@ -352,9 +757,11 @@ mod tests {
     fn back_to_menu_resets_the_run() {
         let mut app = test_app();
         app.insert_resource(Wallet(123));
-        app.insert_resource(PlayerCharacter {
-            name: "Făt-Frumos".to_string(),
-            attributes: Attributes::default(),
+        app.insert_resource(default_character());
+        app.insert_resource(Level {
+            level: 4,
+            xp: 55,
+            unspent_points: 3,
         });
         app.insert_resource(FightOutcome::from_defeat(CombatSide::Enemy, 1));
         set_state(&mut app, GameState::GameOver);
@@ -366,6 +773,11 @@ mod tests {
             *app.world().resource::<Wallet>(),
             Wallet::default(),
             "wallet back to the starting galbeni"
+        );
+        assert_eq!(
+            *app.world().resource::<Level>(),
+            Level::default(),
+            "level back to 1 with nothing gathered"
         );
         assert!(
             app.world().get_resource::<PlayerCharacter>().is_none(),

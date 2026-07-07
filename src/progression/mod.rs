@@ -7,7 +7,10 @@
 //! and, after a short delay so the final blow stays visible, transitions to
 //! [`GameState::FightResult`] or [`GameState::GameOver`].
 
+pub mod level;
 pub mod result_ui;
+
+pub use level::{Level, LevelUpDraft, POINTS_PER_LEVEL, top_up_pool, xp_to_next};
 
 use bevy::prelude::*;
 
@@ -21,11 +24,13 @@ pub const STARTING_GALBENI: u32 = 50;
 pub const REWARD_BASE: u32 = 25;
 /// Per-enemy-level part of the victory payout.
 pub const REWARD_PER_LEVEL: u32 = 10;
-/// Placeholder XP payout per enemy level; stored on [`FightOutcome`] but not
-/// consumed until the leveling issue.
-pub const XP_PER_LEVEL: u32 = 10;
+/// XP payout per enemy level for a victory.
+pub const XP_PER_LEVEL: u32 = 20;
 /// Level of the hardcoded Strigoi; the roster issue supplies real values.
 pub const PLACEHOLDER_ENEMY_LEVEL: u32 = 1;
+/// Whether the hardcoded Strigoi is a boss; the roster issue supplies real
+/// flags.
+pub const PLACEHOLDER_ENEMY_BOSS: bool = false;
 /// Seconds between the killing blow and leaving the fight screen, so the
 /// final hit (and its announcer line) stays visible.
 pub const FIGHT_END_DELAY_SECONDS: f32 = 1.5;
@@ -35,10 +40,12 @@ pub fn fight_reward(enemy_level: u32) -> u32 {
     REWARD_BASE + REWARD_PER_LEVEL * enemy_level
 }
 
-/// XP for beating an enemy of `enemy_level`; a placeholder formula until the
-/// leveling issue consumes it.
-pub fn fight_xp(enemy_level: u32) -> u32 {
-    XP_PER_LEVEL * enemy_level
+/// XP for beating an enemy of `enemy_level`: `20 * enemy_level`, doubled for
+/// bosses (the roster issue supplies the flag; until then every enemy is
+/// level 1, non-boss).
+pub fn fight_xp(enemy_level: u32, is_boss: bool) -> u32 {
+    let base = XP_PER_LEVEL * enemy_level;
+    if is_boss { 2 * base } else { base }
 }
 
 /// The player's run currency, in galbeni. Reset to [`STARTING_GALBENI`] when
@@ -72,13 +79,14 @@ pub struct FightOutcome {
 
 impl FightOutcome {
     /// The outcome recorded when `winner` lands the killing blow on an enemy
-    /// of `enemy_level`.
+    /// of `enemy_level`. The boss flag is hardcoded until the roster issue
+    /// supplies per-enemy values.
     pub fn from_defeat(winner: CombatSide, enemy_level: u32) -> Self {
         Self {
             winner,
             loser: winner.opponent(),
             reward: fight_reward(enemy_level),
-            xp: fight_xp(enemy_level),
+            xp: fight_xp(enemy_level, PLACEHOLDER_ENEMY_BOSS),
             rewarded: false,
         }
     }
@@ -95,6 +103,7 @@ pub struct ProgressionPlugin;
 impl Plugin for ProgressionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Wallet>()
+            .init_resource::<Level>()
             .add_systems(OnEnter(GameState::Fight), clear_fight_outcome)
             .add_systems(
                 Update,
@@ -111,13 +120,20 @@ impl Plugin for ProgressionPlugin {
                 Update,
                 (
                     result_ui::handle_result_actions,
+                    result_ui::handle_allocation_actions,
                     result_ui::update_button_backgrounds,
+                    result_ui::update_allocation_labels
+                        .run_if(resource_exists_and_changed::<LevelUpDraft>),
                 )
+                    .chain()
                     .run_if(in_state(GameState::FightResult)),
             )
             .add_systems(
                 OnExit(GameState::FightResult),
-                despawn_screen::<result_ui::ResultScreen>,
+                (
+                    despawn_screen::<result_ui::ResultScreen>,
+                    clear_level_up_draft,
+                ),
             )
             .add_systems(
                 OnEnter(GameState::GameOver),
@@ -147,6 +163,14 @@ fn clear_fight_outcome(mut commands: Commands) {
 /// exits.
 fn clear_fight_end_delay(mut commands: Commands) {
     commands.remove_resource::<FightEndDelay>();
+}
+
+/// Drops the level-up allocation draft when the result screen exits: only a
+/// confirmed allocation touches [`PlayerCharacter`] and [`Level`], so points
+/// left in an abandoned draft simply stay unspent (a fresh draft is built on
+/// the next visit).
+fn clear_level_up_draft(mut commands: Commands) {
+    commands.remove_resource::<LevelUpDraft>();
 }
 
 /// Watches the combat log for the killing blow: records the [`FightOutcome`]
@@ -196,10 +220,15 @@ fn tick_fight_end_delay(
     });
 }
 
-/// Credits the victory payout to the wallet exactly once per fight; the
-/// `rewarded` flag guards against a double award if the result screen is
-/// re-entered (e.g. via the shop) before the next fight clears the outcome.
-fn award_victory(mut wallet: ResMut<Wallet>, outcome: Option<ResMut<FightOutcome>>) {
+/// Credits the victory payout — galbeni to the wallet, XP to [`Level`] with
+/// every level-up it affords — exactly once per fight; the `rewarded` flag
+/// guards against a double award if the result screen is re-entered (e.g.
+/// via the shop) before the next fight clears the outcome.
+fn award_victory(
+    mut wallet: ResMut<Wallet>,
+    mut level: ResMut<Level>,
+    outcome: Option<ResMut<FightOutcome>>,
+) {
     let Some(mut outcome) = outcome else {
         warn!("entered GameState::FightResult without a FightOutcome; nothing to award");
         return;
@@ -208,13 +237,16 @@ fn award_victory(mut wallet: ResMut<Wallet>, outcome: Option<ResMut<FightOutcome
         return;
     }
     wallet.0 += outcome.reward;
+    level.gain_xp(outcome.xp);
     outcome.rewarded = true;
 }
 
 /// Resets every run-scoped resource so the next run starts clean: a fresh
-/// [`Wallet`], no confirmed [`PlayerCharacter`], no stale [`FightOutcome`].
+/// [`Wallet`], level 1 with no XP or points, no confirmed
+/// [`PlayerCharacter`], no stale [`FightOutcome`].
 pub(crate) fn reset_run(commands: &mut Commands) {
     commands.insert_resource(Wallet::default());
+    commands.insert_resource(Level::default());
     commands.remove_resource::<PlayerCharacter>();
     commands.remove_resource::<FightOutcome>();
 }
@@ -278,6 +310,14 @@ mod tests {
     }
 
     #[test]
+    fn the_xp_scales_with_the_enemy_level_and_doubles_for_bosses() {
+        assert_eq!(fight_xp(1, false), 20, "20 * 1");
+        assert_eq!(fight_xp(3, false), 60);
+        assert_eq!(fight_xp(1, true), 40, "bosses pay double");
+        assert_eq!(fight_xp(3, true), 120);
+    }
+
+    #[test]
     fn a_fresh_wallet_holds_fifty_galbeni() {
         let app = test_app();
         assert_eq!(wallet(&app), STARTING_GALBENI);
@@ -298,7 +338,7 @@ mod tests {
                 winner: CombatSide::Player,
                 loser: CombatSide::Enemy,
                 reward: 35,
-                xp: fight_xp(PLACEHOLDER_ENEMY_LEVEL),
+                xp: fight_xp(PLACEHOLDER_ENEMY_LEVEL, PLACEHOLDER_ENEMY_BOSS),
                 rewarded: false,
             }
         );
@@ -358,6 +398,53 @@ mod tests {
         app.insert_resource(FightOutcome::from_defeat(CombatSide::Enemy, 1));
         set_state(&mut app, GameState::FightResult);
         assert_eq!(wallet(&app), 50, "only the player's wins pay out");
+        assert_eq!(
+            *app.world().resource::<Level>(),
+            Level::default(),
+            "only the player's wins grant XP"
+        );
+    }
+
+    #[test]
+    fn victory_grants_xp_exactly_once() {
+        let mut app = test_app();
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        set_state(&mut app, GameState::FightResult);
+        assert_eq!(
+            *app.world().resource::<Level>(),
+            Level {
+                level: 1,
+                xp: 20,
+                unspent_points: 0,
+            },
+            "the level-1 non-boss enemy pays 20 XP on entry"
+        );
+
+        // A detour to the shop and back must not grant again.
+        set_state(&mut app, GameState::Shop);
+        set_state(&mut app, GameState::FightResult);
+        assert_eq!(app.world().resource::<Level>().xp, 20);
+    }
+
+    #[test]
+    fn an_award_over_the_threshold_levels_up_with_carry() {
+        let mut app = test_app();
+        app.insert_resource(Level {
+            level: 1,
+            xp: 90,
+            unspent_points: 0,
+        });
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        set_state(&mut app, GameState::FightResult);
+        assert_eq!(
+            *app.world().resource::<Level>(),
+            Level {
+                level: 2,
+                xp: 10,
+                unspent_points: POINTS_PER_LEVEL,
+            },
+            "90 + 20 crosses the 100 XP threshold and carries 10"
+        );
     }
 
     #[test]

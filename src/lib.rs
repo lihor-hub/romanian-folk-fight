@@ -11,6 +11,7 @@ pub mod core;
 pub mod creation;
 pub mod menu;
 pub mod progression;
+pub mod ui_widgets;
 
 use bevy::prelude::*;
 

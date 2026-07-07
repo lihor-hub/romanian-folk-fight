@@ -8,6 +8,9 @@
 use bevy::prelude::*;
 
 use crate::character::Attributes;
+// Re-exported so existing `creation::AttributeKind` users keep working after
+// the enum moved to `character` (its canonical home, next to `Attributes`).
+pub use crate::character::AttributeKind;
 
 /// Curated cycling list of Romanian folk hero names. Free-text name entry is
 /// out of scope (Bevy UI has no text-input widget, notably in the browser
@@ -26,36 +29,6 @@ pub const FREE_POINTS: u32 = 10;
 
 /// Every attribute starts at this value and can never drop below it.
 pub const BASE_VALUE: u32 = 1;
-
-/// One of the four allocatable attributes; lets the UI address rows and
-/// buttons generically instead of per-attribute systems.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AttributeKind {
-    Putere,
-    Agilitate,
-    Vitalitate,
-    Noroc,
-}
-
-impl AttributeKind {
-    /// All four kinds, in display order.
-    pub const ALL: [AttributeKind; 4] = [
-        AttributeKind::Putere,
-        AttributeKind::Agilitate,
-        AttributeKind::Vitalitate,
-        AttributeKind::Noroc,
-    ];
-
-    /// Romanian display label for the attribute row.
-    pub fn label(self) -> &'static str {
-        match self {
-            AttributeKind::Putere => "Putere",
-            AttributeKind::Agilitate => "Agilitate",
-            AttributeKind::Vitalitate => "Vitalitate",
-            AttributeKind::Noroc => "Noroc",
-        }
-    }
-}
 
 /// The in-progress character build on the creation screen. Fields are private
 /// so every mutation goes through methods that uphold the invariants. The
@@ -89,21 +62,7 @@ impl CharacterDraft {
 
     /// Current value of one attribute.
     pub fn get(&self, kind: AttributeKind) -> u32 {
-        match kind {
-            AttributeKind::Putere => self.attributes.putere,
-            AttributeKind::Agilitate => self.attributes.agilitate,
-            AttributeKind::Vitalitate => self.attributes.vitalitate,
-            AttributeKind::Noroc => self.attributes.noroc,
-        }
-    }
-
-    fn get_mut(&mut self, kind: AttributeKind) -> &mut u32 {
-        match kind {
-            AttributeKind::Putere => &mut self.attributes.putere,
-            AttributeKind::Agilitate => &mut self.attributes.agilitate,
-            AttributeKind::Vitalitate => &mut self.attributes.vitalitate,
-            AttributeKind::Noroc => &mut self.attributes.noroc,
-        }
+        self.attributes.get(kind)
     }
 
     /// Free points spent so far.
@@ -133,7 +92,7 @@ impl CharacterDraft {
         if !self.can_increase() {
             return false;
         }
-        *self.get_mut(kind) += 1;
+        *self.attributes.get_mut(kind) += 1;
         true
     }
 
@@ -142,7 +101,7 @@ impl CharacterDraft {
         if !self.can_decrease(kind) {
             return false;
         }
-        *self.get_mut(kind) -= 1;
+        *self.attributes.get_mut(kind) -= 1;
         true
     }
 
