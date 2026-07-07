@@ -1,5 +1,7 @@
 # Romanian Folk Fight
 
+**Play now:** <https://lihor-hub.github.io/romanian-folk-fight/>
+
 A browser-based, turn-based arena RPG in the spirit of *Swords and Sandals* —
 remastered, and cast entirely from Romanian folklore. Build your hero, step
 into the arena, and fight your way through strigoi, vârcolaci, and zmei until
