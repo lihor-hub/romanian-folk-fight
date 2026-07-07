@@ -17,6 +17,7 @@ use bevy::prelude::*;
 use crate::combat::{CombatEvent, CombatLogEvent, CombatSide};
 use crate::core::{GameState, despawn_screen};
 use crate::creation::PlayerCharacter;
+use crate::shop::{OwnedItems, PlayerEquipment};
 
 /// Galbeni a fresh run starts with, so the first shop visit isn't pointless.
 pub const STARTING_GALBENI: u32 = 50;
@@ -242,11 +243,13 @@ fn award_victory(
 }
 
 /// Resets every run-scoped resource so the next run starts clean: a fresh
-/// [`Wallet`], level 1 with no XP or points, no confirmed
-/// [`PlayerCharacter`], no stale [`FightOutcome`].
+/// [`Wallet`], level 1 with no XP or points, no owned or equipped shop gear,
+/// no confirmed [`PlayerCharacter`], no stale [`FightOutcome`].
 pub(crate) fn reset_run(commands: &mut Commands) {
     commands.insert_resource(Wallet::default());
     commands.insert_resource(Level::default());
+    commands.insert_resource(OwnedItems::default());
+    commands.insert_resource(PlayerEquipment::default());
     commands.remove_resource::<PlayerCharacter>();
     commands.remove_resource::<FightOutcome>();
 }
