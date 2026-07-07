@@ -396,6 +396,10 @@ mod tests {
         panic!("no seed under 1000000 lands {strikes} clean strikes");
     }
 
+    // The keyboard mapping (and thus every key-driven test) only exists in
+    // debug builds; the HUD tests cover the same resolution paths through
+    // mouse input in every profile.
+    #[cfg(debug_assertions)]
     fn press(app: &mut App, key: KeyCode) {
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
@@ -430,6 +434,7 @@ mod tests {
     /// Drains the enemy's stamina below the quick-strike cost, forcing the
     /// AI's deterministic Rest branch (which consumes no RNG rolls) so the
     /// player-side expectations stay exact.
+    #[cfg(debug_assertions)]
     fn drain_enemy_stamina(app: &mut App) {
         let mut query = app
             .world_mut()
@@ -442,6 +447,7 @@ mod tests {
 
     /// Presses `key` against an inert enemy: the drain must be re-applied
     /// before every press because the forced Rest refills 20 stamina.
+    #[cfg(debug_assertions)]
     fn press_vs_resting_enemy(app: &mut App, key: KeyCode) {
         drain_enemy_stamina(app);
         press(app, key);
@@ -478,6 +484,7 @@ mod tests {
         );
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn key_one_quick_strikes_and_the_drained_enemy_rests() {
         let mut app = test_app();
@@ -489,6 +496,7 @@ mod tests {
         assert_eq!(turn(&app).side, CombatSide::Player);
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn key_two_heavy_strikes_for_double_damage() {
         let mut app = test_app();
@@ -497,6 +505,7 @@ mod tests {
         assert_eq!(player_pools(&mut app), (90, 35), "heavy strike costs 15");
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn key_three_blocks_and_the_guard_holds_until_the_next_turn() {
         let mut app = test_app();
@@ -507,6 +516,7 @@ mod tests {
         assert!(!turn(&app).player_blocking, "guard lapses on the next turn");
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn key_four_rests_stamina_back_up_to_the_cap() {
         let mut app = test_app();
@@ -521,6 +531,7 @@ mod tests {
         assert_eq!(player_pools(&mut app).1, 50, "capped at max stamina");
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn a_strike_without_stamina_is_a_no_op_but_passes_the_turn() {
         let mut app = test_app();
@@ -539,6 +550,7 @@ mod tests {
         );
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn defeat_ends_the_duel_and_stops_combat_input() {
         let mut app = test_app();

@@ -17,9 +17,7 @@ use crate::menu::{
     TEXT_DISABLED,
 };
 
-use super::engine::{
-    BLOCK_COST, CombatAction, CombatEvent, HEAVY_STRIKE_COST, QUICK_STRIKE_COST, REST_RESTORE,
-};
+use super::engine::{CombatAction, CombatEvent, REST_RESTORE};
 use super::systems::{CombatLogEvent, CombatSide, CombatTurn, PlayerActionEvent};
 
 /// How many log lines the combat log keeps and shows.
@@ -105,17 +103,6 @@ pub fn bar_percent(current: i32, max: i32) -> f32 {
     (100.0 * current as f32 / max as f32).clamp(0.0, 100.0)
 }
 
-/// Stamina cost displayed on an action button. Rest costs nothing (it
-/// restores [`REST_RESTORE`] instead).
-pub fn stamina_cost(action: CombatAction) -> i32 {
-    match action {
-        CombatAction::QuickStrike => QUICK_STRIKE_COST,
-        CombatAction::HeavyStrike => HEAVY_STRIKE_COST,
-        CombatAction::Block => BLOCK_COST,
-        CombatAction::Rest => 0,
-    }
-}
-
 /// The Romanian button label for an action.
 pub fn action_label(action: CombatAction) -> &'static str {
     match action {
@@ -126,11 +113,12 @@ pub fn action_label(action: CombatAction) -> &'static str {
     }
 }
 
-/// The stamina-cost line under a button label.
+/// The stamina-cost line under a button label. Rest costs nothing (it
+/// restores [`REST_RESTORE`] instead).
 pub fn cost_label(action: CombatAction) -> String {
     match action {
         CombatAction::Rest => format!("+{REST_RESTORE} stamina"),
-        _ => format!("-{} stamina", stamina_cost(action)),
+        _ => format!("-{} stamina", action.stamina_cost()),
     }
 }
 
@@ -143,7 +131,7 @@ pub fn action_enabled(turn: &CombatTurn, stamina: i32, action: CombatAction) -> 
         return false;
     }
     match action {
-        CombatAction::QuickStrike | CombatAction::HeavyStrike => stamina >= stamina_cost(action),
+        CombatAction::QuickStrike | CombatAction::HeavyStrike => stamina >= action.stamina_cost(),
         CombatAction::Block | CombatAction::Rest => true,
     }
 }
@@ -479,12 +467,21 @@ pub(super) fn update_bar_fills(
     }
 }
 
+/// Query filter: any fighter datum a HUD label displays changed this frame.
+type FighterDataChanged = Or<(Changed<FighterName>, Changed<Health>, Changed<Stamina>)>;
+
 /// Refreshes the name and `current/max` labels from the fighter components.
+/// Skips frames where no fighter data changed, so the string formatting only
+/// runs when a label could actually differ.
 pub(super) fn update_labels(
     player: PlayerData,
     enemy: EnemyData,
+    changed: Query<(), FighterDataChanged>,
     mut labels: Query<(&HudLabel, &mut Text)>,
 ) {
+    if changed.is_empty() {
+        return;
+    }
     for (label, mut text) in &mut labels {
         let side = match label {
             HudLabel::Name(side) | HudLabel::Pool { side, .. } => *side,
@@ -990,7 +987,7 @@ mod tests {
             // Keep the enemy drained so it can only Rest; quick-strike when
             // affordable, otherwise rest — mouse clicks only.
             drain_enemy_stamina(&mut app);
-            let action = if player_pools(&mut app).1 >= QUICK_STRIKE_COST {
+            let action = if player_pools(&mut app).1 >= CombatAction::QuickStrike.stamina_cost() {
                 CombatAction::QuickStrike
             } else {
                 CombatAction::Rest
