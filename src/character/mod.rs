@@ -5,6 +5,8 @@ pub mod stats;
 
 use bevy::prelude::*;
 
+use crate::items::Equipment;
+
 /// Registers the character model. Components are plain data for now; systems
 /// arrive with the combat and progression issues.
 pub struct CharacterPlugin;
@@ -119,7 +121,8 @@ pub struct FighterName(pub String);
 
 /// Spawns a fighter entity with the given name, attributes, and side marker
 /// bundle (e.g. [`PlayerFighter`], or [`EnemyFighter`] plus its AI profile),
-/// at full health and stamina derived from the attributes.
+/// at full health and stamina derived from the attributes, and with empty
+/// [`Equipment`] (gear arrives via the shop or enemy loadouts).
 pub fn spawn_fighter(
     commands: &mut Commands,
     name: impl Into<String>,
@@ -141,6 +144,7 @@ pub fn spawn_fighter(
                 current: max_stamina,
                 max: max_stamina,
             },
+            Equipment::default(),
             marker,
         ))
         .id()
@@ -195,6 +199,11 @@ mod tests {
                 current: 55,
                 max: 55,
             }
+        );
+        assert_eq!(
+            *fighter.get::<Equipment>().unwrap(),
+            Equipment::default(),
+            "fighters spawn unequipped"
         );
     }
 }

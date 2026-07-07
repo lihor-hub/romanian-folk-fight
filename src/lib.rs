@@ -9,6 +9,7 @@ pub mod character;
 pub mod combat;
 pub mod core;
 pub mod creation;
+pub mod items;
 pub mod menu;
 pub mod progression;
 pub mod ui_widgets;
@@ -24,6 +25,7 @@ impl Plugin for GamePlugin {
         app.add_plugins(character::CharacterPlugin);
         app.add_plugins(menu::MenuPlugin);
         app.add_plugins(creation::CreationPlugin);
+        app.add_plugins(items::ItemsPlugin);
         app.add_plugins(arena::ArenaPlugin);
         app.add_plugins(combat::CombatPlugin);
         app.add_plugins(announcer::AnnouncerPlugin);

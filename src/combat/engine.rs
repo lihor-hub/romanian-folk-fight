@@ -63,17 +63,27 @@ pub struct FighterState {
     pub stamina: i32,
     /// The fighter's attributes, source of every derived stat.
     pub attributes: Attributes,
+    /// Flat damage added to every strike's base damage — the equipped
+    /// weapon's damage, aggregated from `Equipment` by the ECS layer.
+    pub damage_bonus: i32,
+    /// Flat reduction of every incoming hit (applied after the block
+    /// halving, floored at 1) — the equipped armor, aggregated from
+    /// `Equipment` by the ECS layer.
+    pub armor: i32,
     /// Whether the fighter is guarding since their last turn.
     pub blocking: bool,
 }
 
 impl FighterState {
-    /// A fighter at full pools (per the #8 formulas) and not blocking.
+    /// A fighter at full pools (per the #8 formulas), unequipped and not
+    /// blocking.
     pub fn new(attributes: Attributes) -> Self {
         Self {
             hp: stats::max_hp(&attributes),
             stamina: stats::max_stamina(&attributes),
             attributes,
+            damage_bonus: 0,
+            armor: 0,
             blocking: false,
         }
     }
@@ -182,18 +192,27 @@ fn strike(
         return vec![CombatEvent::Missed];
     }
 
-    let base = damage_multiplier * stats::base_damage(&actor.attributes);
+    // Order of operations (#18): hit roll, crit roll, block halving, armor
+    // subtraction, floor at 1. The weapon's flat bonus is part of the
+    // strike's base damage, so the heavy multiplier and crits scale it too.
+    let base = damage_multiplier * (stats::base_damage(&actor.attributes) + actor.damage_bonus);
     let crit = roll(rng, stats::crit_percent(&actor.attributes));
-    let (dmg, event) = if target.blocking {
+    let pre_armor = if target.blocking {
         // A guard downgrades crits to normal hits, then halves the damage
-        // (rounded down, min 1).
-        let dmg = (base / 2).max(1);
-        (dmg, CombatEvent::Blocked { dmg })
+        // (rounded down).
+        base / 2
     } else if crit {
-        let dmg = 2 * base;
-        (dmg, CombatEvent::Crit { dmg })
+        2 * base
     } else {
-        (base, CombatEvent::Hit { dmg: base })
+        base
+    };
+    let dmg = (pre_armor - target.armor).max(1);
+    let event = if target.blocking {
+        CombatEvent::Blocked { dmg }
+    } else if crit {
+        CombatEvent::Crit { dmg }
+    } else {
+        CombatEvent::Hit { dmg }
     };
 
     target.hp = (target.hp - dmg).max(0);
@@ -565,6 +584,167 @@ mod tests {
             vec![CombatEvent::Blocked { dmg: 3 }, CombatEvent::Defeated]
         );
         assert_eq!(target.hp, 0);
+    }
+
+    #[test]
+    fn weapon_bonus_adds_to_quick_strike_damage() {
+        let mut actor = fighter();
+        actor.damage_bonus = 10; // e.g. a Paloș
+        let mut target = fighter();
+        let events = resolve_action(
+            &mut actor,
+            &mut target,
+            CombatAction::QuickStrike,
+            &mut rng_hit_no_crit(),
+        );
+        assert_eq!(events, vec![CombatEvent::Hit { dmg: 16 }]);
+        assert_eq!(target.hp, 84, "base_damage 6 + weapon 10");
+    }
+
+    #[test]
+    fn heavy_strikes_double_the_armed_base_damage() {
+        let mut actor = fighter();
+        actor.damage_bonus = 10;
+        let mut target = fighter();
+        let events = resolve_action(
+            &mut actor,
+            &mut target,
+            CombatAction::HeavyStrike,
+            &mut rng_hit_no_crit(),
+        );
+        assert_eq!(events, vec![CombatEvent::Hit { dmg: 32 }]);
+        assert_eq!(target.hp, 68, "2 * (base_damage 6 + weapon 10)");
+    }
+
+    #[test]
+    fn crits_double_the_armed_damage() {
+        let mut actor = fighter();
+        actor.damage_bonus = 10;
+        let mut target = fighter();
+        let events = resolve_action(
+            &mut actor,
+            &mut target,
+            CombatAction::QuickStrike,
+            &mut rng_hit_crit(),
+        );
+        assert_eq!(events, vec![CombatEvent::Crit { dmg: 32 }]);
+        assert_eq!(target.hp, 68, "2 * (base_damage 6 + weapon 10)");
+    }
+
+    #[test]
+    fn armor_subtracts_from_normal_hits() {
+        let mut actor = fighter();
+        let mut target = fighter();
+        target.armor = 4;
+        let events = resolve_action(
+            &mut actor,
+            &mut target,
+            CombatAction::QuickStrike,
+            &mut rng_hit_no_crit(),
+        );
+        assert_eq!(events, vec![CombatEvent::Hit { dmg: 2 }]);
+        assert_eq!(target.hp, 98, "base_damage 6 - armor 4");
+    }
+
+    #[test]
+    fn armor_subtracts_after_the_crit_doubling() {
+        let mut actor = fighter();
+        let mut target = fighter();
+        target.armor = 4;
+        let events = resolve_action(
+            &mut actor,
+            &mut target,
+            CombatAction::QuickStrike,
+            &mut rng_hit_crit(),
+        );
+        assert_eq!(
+            events,
+            vec![CombatEvent::Crit { dmg: 8 }],
+            "2 * 6 - 4, not 2 * (6 - 4)"
+        );
+        assert_eq!(target.hp, 92);
+    }
+
+    #[test]
+    fn armor_subtracts_after_the_block_halving() {
+        let mut actor = fighter();
+        actor.damage_bonus = 10; // armed base 16
+        let mut target = fighter();
+        target.blocking = true;
+        target.armor = 3;
+        let events = resolve_action(
+            &mut actor,
+            &mut target,
+            CombatAction::QuickStrike,
+            &mut rng_hit_no_crit(),
+        );
+        assert_eq!(
+            events,
+            vec![CombatEvent::Blocked { dmg: 5 }],
+            "16 / 2 - 3 = 5, not (16 - 3) / 2 = 6"
+        );
+        assert_eq!(target.hp, 95);
+    }
+
+    #[test]
+    fn armored_damage_floors_at_one() {
+        // Plain hit, blocked hit, and crit against overwhelming armor all
+        // still chip one hp.
+        for (rng, blocking, expected_event) in [
+            (rng_hit_no_crit(), false, CombatEvent::Hit { dmg: 1 }),
+            (rng_hit_no_crit(), true, CombatEvent::Blocked { dmg: 1 }),
+            (rng_hit_crit(), false, CombatEvent::Crit { dmg: 1 }),
+        ] {
+            let mut rng = rng;
+            let mut actor = fighter();
+            let mut target = fighter();
+            target.blocking = blocking;
+            target.armor = 100;
+            let events =
+                resolve_action(&mut actor, &mut target, CombatAction::QuickStrike, &mut rng);
+            assert_eq!(events, vec![expected_event]);
+            assert_eq!(target.hp, 99, "{expected_event:?} floors at 1 damage");
+        }
+    }
+
+    /// Regression pin for the equipment issue (#18): fighters without gear
+    /// must reproduce the exact pre-equipment numbers of this scripted duel
+    /// (values captured from the engine before equipment existed).
+    #[test]
+    fn unarmed_fighters_reproduce_pre_equipment_numbers() {
+        let mut a = fighter();
+        let mut b = FighterState::new(attrs(2, 3, 4, 6));
+        assert_eq!(
+            (a.damage_bonus, a.armor),
+            (0, 0),
+            "new fighters carry no gear"
+        );
+        let mut rng = ChaCha8Rng::seed_from_u64(12);
+        let script = [
+            CombatAction::QuickStrike,
+            CombatAction::HeavyStrike,
+            CombatAction::Block,
+            CombatAction::QuickStrike,
+            CombatAction::Rest,
+            CombatAction::HeavyStrike,
+        ];
+        let events: Vec<Vec<CombatEvent>> = script
+            .iter()
+            .map(|&action| resolve_action(&mut a, &mut b, action, &mut rng))
+            .collect();
+        assert_eq!((a.hp, a.stamina), (100, 32));
+        assert_eq!((b.hp, b.stamina), (78, 50));
+        assert_eq!(
+            events.concat(),
+            vec![
+                CombatEvent::Crit { dmg: 12 },
+                CombatEvent::Missed,
+                CombatEvent::Guarded,
+                CombatEvent::Missed,
+                CombatEvent::Rested { amount: 20 },
+                CombatEvent::Missed,
+            ]
+        );
     }
 
     #[test]
