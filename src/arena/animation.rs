@@ -282,7 +282,7 @@ fn animate_combat_events(
     mut players: SideAnimation<PlayerFighter, EnemyFighter>,
     mut enemies: SideAnimation<EnemyFighter, PlayerFighter>,
 ) {
-    for CombatLogEvent { actor, event } in events.read().copied() {
+    for CombatLogEvent { actor, event, .. } in events.read().copied() {
         let (attacker, defender) = match actor {
             CombatSide::Player => (players.single_mut(), enemies.single_mut()),
             CombatSide::Enemy => (enemies.single_mut(), players.single_mut()),
@@ -475,8 +475,11 @@ mod tests {
     }
 
     fn write_event(app: &mut App, actor: CombatSide, event: CombatEvent) {
-        app.world_mut()
-            .write_message(CombatLogEvent { actor, event });
+        app.world_mut().write_message(CombatLogEvent {
+            actor,
+            action: crate::combat::CombatAction::QuickStrike,
+            event,
+        });
         app.update();
     }
 

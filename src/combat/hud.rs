@@ -523,7 +523,7 @@ pub(super) fn collect_log_lines(
     };
     let player_name = player.single().map(|n| n.0.as_str()).unwrap_or("?");
     let enemy_name = enemy.single().map(|n| n.0.as_str()).unwrap_or("?");
-    for CombatLogEvent { actor, event } in events.read().copied() {
+    for CombatLogEvent { actor, event, .. } in events.read().copied() {
         let (actor_name, opponent_name) = match actor {
             CombatSide::Player => (player_name, enemy_name),
             CombatSide::Enemy => (enemy_name, player_name),
@@ -974,6 +974,7 @@ mod tests {
         for dmg in 1..=10 {
             app.world_mut().write_message(CombatLogEvent {
                 actor: CombatSide::Player,
+                action: CombatAction::QuickStrike,
                 event: CombatEvent::Hit { dmg },
             });
         }

@@ -7,6 +7,7 @@
 //! also gates the start of combat (the combat turn waits for the fighters).
 
 pub mod animation;
+pub mod fx;
 
 use bevy::prelude::*;
 
@@ -18,6 +19,7 @@ use crate::items::Equipment;
 use crate::menu::CREAM;
 use crate::roster::{Boss, LadderProgress};
 use animation::{FighterClip, FighterSpriteSheets};
+use fx::{ArenaBackgrounds, background_tier, spawn_background};
 
 /// Logical resolution the scene is designed for (the window in `main.rs`).
 pub const ARENA_WIDTH: f32 = 800.0;
@@ -40,13 +42,8 @@ pub const PLAYER_ANCHOR: Transform = Transform::from_xyz(-220.0, FIGHTER_Y, 0.0)
 /// Where the opponent stands, facing left; mirrors [`PLAYER_ANCHOR`].
 pub const ENEMY_ANCHOR: Transform = Transform::from_xyz(220.0, FIGHTER_Y, 0.0);
 
-// Placeholder scenery palette; real arena backgrounds are a separate issue.
-const SKY_COLOR: Color = Color::srgb(0.10, 0.09, 0.16);
+/// Ground-strip color under the tiered parallax backgrounds (#23).
 const GROUND_COLOR: Color = Color::srgb(0.30, 0.22, 0.14);
-const PILLAR_COLOR: Color = Color::srgb(0.45, 0.42, 0.38);
-
-const PILLAR_SIZE: Vec2 = Vec2::new(40.0, 280.0);
-const PILLAR_X: f32 = 350.0;
 
 /// Vertical offset of the name label above a fighter's body center.
 const LABEL_OFFSET_Y: f32 = FIGHTER_SIZE.y / 2.0 + 24.0;
@@ -57,13 +54,13 @@ pub const BOSS_LABEL_COLOR: Color = Color::srgb(0.95, 0.45, 0.20);
 /// Marker for every arena entity; all of them despawn on
 /// `OnExit(GameState::Fight)` via [`despawn_screen`].
 #[derive(Component)]
-struct ArenaScreen;
+pub(crate) struct ArenaScreen;
 
 pub struct ArenaPlugin;
 
 impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(animation::AnimationPlugin)
+        app.add_plugins((animation::AnimationPlugin, fx::FxPlugin))
             .add_systems(OnEnter(GameState::Fight), spawn_arena)
             .add_systems(
                 Update,
@@ -82,6 +79,7 @@ fn spawn_arena(
     player: Option<Res<PlayerCharacter>>,
     ladder: Option<Res<LadderProgress>>,
     sheets: Res<FighterSpriteSheets>,
+    backgrounds: Res<ArenaBackgrounds>,
     asset_server: Option<Res<AssetServer>>,
 ) {
     let Some(player) = player else {
@@ -94,7 +92,7 @@ fn spawn_arena(
         // fighters to exist.
         return;
     }
-    spawn_scene(commands, &player, ladder, &sheets);
+    spawn_scene(commands, &player, ladder, &sheets, &backgrounds);
 }
 
 /// The loading-guard retry: once the sheets finish loading mid-fight-screen,
@@ -104,6 +102,7 @@ fn spawn_arena_when_ready(
     player: Option<Res<PlayerCharacter>>,
     ladder: Option<Res<LadderProgress>>,
     sheets: Res<FighterSpriteSheets>,
+    backgrounds: Res<ArenaBackgrounds>,
     asset_server: Option<Res<AssetServer>>,
     spawned: Query<(), With<ArenaScreen>>,
 ) {
@@ -113,7 +112,7 @@ fn spawn_arena_when_ready(
     if !spawned.is_empty() || !sheets.ready(asset_server.as_deref()) {
         return;
     }
-    spawn_scene(commands, &player, ladder, &sheets);
+    spawn_scene(commands, &player, ladder, &sheets, &backgrounds);
 }
 
 /// Builds the whole fight scene: scenery quads, the player's fighter, and
@@ -125,9 +124,11 @@ fn spawn_scene(
     player: &PlayerCharacter,
     ladder: Option<Res<LadderProgress>>,
     sheets: &FighterSpriteSheets,
+    backgrounds: &ArenaBackgrounds,
 ) {
     let ladder = ladder.map(|ladder| *ladder).unwrap_or_default();
     let opponent = ladder.opponent();
+    spawn_background(&mut commands, backgrounds, background_tier(ladder));
     spawn_scenery(&mut commands);
     spawn_arena_fighter(
         &mut commands,
@@ -170,26 +171,14 @@ fn spawn_scene(
     }
 }
 
-/// Placeholder scenery: sky backdrop, ground strip, and two side pillars,
-/// dimensioned relative to the 800x600 logical resolution.
+/// The ground strip the fighters stand on, in front of the parallax
+/// background layers (see [`fx::spawn_background`]).
 fn spawn_scenery(commands: &mut Commands) {
-    commands.spawn((
-        ArenaScreen,
-        Sprite::from_color(SKY_COLOR, Vec2::new(ARENA_WIDTH, ARENA_HEIGHT)),
-        Transform::from_xyz(0.0, 0.0, -10.0),
-    ));
     commands.spawn((
         ArenaScreen,
         Sprite::from_color(GROUND_COLOR, Vec2::new(ARENA_WIDTH, GROUND_HEIGHT)),
         Transform::from_xyz(0.0, (-ARENA_HEIGHT + GROUND_HEIGHT) / 2.0, -9.0),
     ));
-    for x in [-PILLAR_X, PILLAR_X] {
-        commands.spawn((
-            ArenaScreen,
-            Sprite::from_color(PILLAR_COLOR, PILLAR_SIZE),
-            Transform::from_xyz(x, GROUND_TOP_Y + PILLAR_SIZE.y / 2.0, -8.0),
-        ));
-    }
 }
 
 /// The animated sprite of one fighter: its sheet over the shared atlas
@@ -511,7 +500,7 @@ mod tests {
             .query_filtered::<(), (With<ArenaScreen>, With<Sprite>, Without<Fighter>)>()
             .iter(app.world())
             .count();
-        assert_eq!(scenery, 4, "sky + ground + two pillars");
+        assert_eq!(scenery, 3, "two parallax background layers + ground");
     }
 
     #[test]
