@@ -40,3 +40,28 @@ pending replacement by bespoke final art.
 | `backgrounds/forest_near.png` | Pădurea întunecată — trunks, canopy, ferns (near layer) | self-generated | CC0 1.0 |
 | `backgrounds/mountains_far.png` | Munții Carpați — peaks, fortress silhouette (far layer) | self-generated | CC0 1.0 |
 | `backgrounds/mountains_near.png` | Munții Carpați — rocky outcrops of the pass (near layer) | self-generated | CC0 1.0 |
+
+## Audio (music and sound effects)
+
+All audio below is **self-generated placeholder sound** synthesized from
+scratch by `scripts/generate-audio.py` (numpy + soundfile, no samples or
+external recordings). It is dedicated to the public domain (**CC0 1.0**,
+<https://creativecommons.org/publicdomain/zero/1.0/>) and is pending
+replacement by bespoke final audio.
+
+| File | Depicts | Source | License |
+| --- | --- | --- | --- |
+| `audio/music_menu.ogg` | Menu theme (slow doina-like drone + melody loop) | self-generated | CC0 1.0 |
+| `audio/music_arena.ogg` | Arena theme (upbeat hora-like loop) | self-generated | CC0 1.0 |
+| `audio/music_boss.ogg` | Boss theme (ominous low-drone loop) | self-generated | CC0 1.0 |
+| `audio/sfx_hit.ogg` | Sword hit | self-generated | CC0 1.0 |
+| `audio/sfx_crit.ogg` | Critical hit (hit + metallic ring) | self-generated | CC0 1.0 |
+| `audio/sfx_block.ogg` | Block / guard (wood thunk) | self-generated | CC0 1.0 |
+| `audio/sfx_whoosh.ogg` | Missed strike whoosh | self-generated | CC0 1.0 |
+| `audio/sfx_rest.ogg` | Rest (recovering breath) | self-generated | CC0 1.0 |
+| `audio/sfx_fail.ogg` | Out-of-stamina thud | self-generated | CC0 1.0 |
+| `audio/sfx_defeated.ogg` | Fight-ending blow | self-generated | CC0 1.0 |
+| `audio/sfx_click.ogg` | UI button click | self-generated | CC0 1.0 |
+| `audio/sfx_coin.ogg` | Purchase coin jingle | self-generated | CC0 1.0 |
+| `audio/sting_victory.ogg` | Victory sting | self-generated | CC0 1.0 |
+| `audio/sting_defeat.ogg` | Defeat sting | self-generated | CC0 1.0 |
