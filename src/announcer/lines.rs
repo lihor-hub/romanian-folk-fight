@@ -34,11 +34,13 @@ pub enum LineKey {
     OutOfStamina,
     /// `{loser}` fell; `{winner}` stands.
     Defeated,
+    /// `{winner}` beat the lap-1 final boss `{loser}`: the run is won.
+    Victory,
 }
 
 impl LineKey {
     /// Every key, for coverage tests and per-key bookkeeping.
-    pub const ALL: [LineKey; 10] = [
+    pub const ALL: [LineKey; 11] = [
         LineKey::FightStart,
         LineKey::BossIntro,
         LineKey::Missed,
@@ -49,6 +51,7 @@ impl LineKey {
         LineKey::Rested,
         LineKey::OutOfStamina,
         LineKey::Defeated,
+        LineKey::Victory,
     ];
 
     /// Number of keys; sizes the announcer's last-pick table.
@@ -133,6 +136,13 @@ pub const fn pool(key: LineKey) -> &'static [&'static str] {
             "Gata hora: {loser} s-a culcat înainte de finală.",
             "{loser} cade ca frunza toamna. {winner} rămâne în picioare!",
             "Praf și pulbere: {loser} își caută demnitatea prin arenă.",
+        ],
+        LineKey::Victory => &[
+            "{winner} a doborât {loser}! Legenda se scrie chiar acum!",
+            "Sunați clopotele: {winner} e noul viteaz al viteazilor!",
+            "{winner} a răpus spaima voinicilor! Sarmale pentru tot satul!",
+            "Nici în basme nu s-a mai pomenit: {winner} a curățat toată arena!",
+            "Hora victoriei! {winner} rămâne în picioare, {loser} intră în folclor.",
         ],
     }
 }

@@ -250,7 +250,7 @@ fn screen_line(label: String) -> impl Bundle {
 }
 
 /// Query filter: buttons whose interaction changed this frame.
-type ChangedButton = (Changed<Interaction>, With<Button>);
+pub(super) type ChangedButton = (Changed<Interaction>, With<Button>);
 
 /// Runs the [`ResultAction`] of whichever result-screen button was pressed.
 pub(super) fn handle_result_actions(

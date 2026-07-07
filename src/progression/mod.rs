@@ -9,6 +9,7 @@
 
 pub mod level;
 pub mod result_ui;
+pub mod victory_ui;
 
 pub use level::{Level, LevelUpDraft, POINTS_PER_LEVEL, top_up_pool, xp_to_next};
 
@@ -56,6 +57,18 @@ impl Default for Wallet {
     }
 }
 
+/// Total galbeni earned over the run — every victory payout, regardless of
+/// what was later spent in the shop. Shown in the victory recap; reset with
+/// the run.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LifetimeEarnings(pub u32);
+
+/// Fired once when the lap-1 final boss falls and the run is won. The
+/// victory sting (#24) is not wired here to keep the audio module decoupled:
+/// the audio plugin, if present, observes this message and plays the sting.
+#[derive(Message, Debug, Clone, Copy, Default)]
+pub struct VictoryEvent;
+
 /// How the last fight ended. Written once per fight when `Defeated` fires,
 /// cleared when the next fight starts, and read by the result and game-over
 /// screens.
@@ -100,7 +113,9 @@ impl Plugin for ProgressionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Wallet>()
             .init_resource::<Level>()
+            .init_resource::<LifetimeEarnings>()
             .add_message::<SaveRequested>()
+            .add_message::<VictoryEvent>()
             .add_systems(OnEnter(GameState::Fight), clear_fight_outcome)
             .add_systems(
                 Update,
@@ -147,6 +162,22 @@ impl Plugin for ProgressionPlugin {
             .add_systems(
                 OnExit(GameState::GameOver),
                 despawn_screen::<result_ui::GameOverScreen>,
+            )
+            .add_systems(
+                OnEnter(GameState::Victory),
+                (award_victory, victory_ui::spawn_victory_screen).chain(),
+            )
+            .add_systems(
+                Update,
+                (
+                    victory_ui::handle_victory_actions,
+                    result_ui::update_button_backgrounds,
+                )
+                    .run_if(in_state(GameState::Victory)),
+            )
+            .add_systems(
+                OnExit(GameState::Victory),
+                despawn_screen::<victory_ui::VictoryScreen>,
             );
     }
 }
@@ -203,13 +234,17 @@ fn detect_fight_end(
 }
 
 /// Counts down after the killing blow, then leaves the fight screen: the
-/// player's victory goes to the result screen, their defeat to game over.
+/// player's victory goes to the result screen — or, when the fallen opponent
+/// was the lap-1 final boss, to the victory ending (#26) — and their defeat
+/// to game over. Later laps keep the loop behavior.
 fn tick_fight_end_delay(
     mut commands: Commands,
     time: Res<Time>,
     delay: Option<ResMut<FightEndDelay>>,
     outcome: Option<Res<FightOutcome>>,
+    ladder: Option<Res<LadderProgress>>,
     mut next_state: ResMut<NextState<GameState>>,
+    mut victories: MessageWriter<VictoryEvent>,
 ) {
     let (Some(mut delay), Some(outcome)) = (delay, outcome) else {
         return;
@@ -218,7 +253,13 @@ fn tick_fight_end_delay(
         return;
     }
     commands.remove_resource::<FightEndDelay>();
+    let run_won = outcome.winner == CombatSide::Player
+        && ladder.is_some_and(|ladder| ladder.is_final_lap_one_fight());
     next_state.set(match outcome.winner {
+        CombatSide::Player if run_won => {
+            victories.write(VictoryEvent);
+            GameState::Victory
+        }
         CombatSide::Player => GameState::FightResult,
         CombatSide::Enemy => GameState::GameOver,
     });
@@ -233,6 +274,7 @@ fn tick_fight_end_delay(
 fn award_victory(
     mut wallet: ResMut<Wallet>,
     mut level: ResMut<Level>,
+    mut earnings: ResMut<LifetimeEarnings>,
     outcome: Option<ResMut<FightOutcome>>,
     ladder: Option<ResMut<LadderProgress>>,
     mut save_requests: MessageWriter<SaveRequested>,
@@ -245,6 +287,7 @@ fn award_victory(
         return;
     }
     wallet.0 += outcome.reward;
+    earnings.0 += outcome.reward;
     level.gain_xp(outcome.xp);
     if let Some(mut ladder) = ladder {
         ladder.advance();
@@ -260,6 +303,7 @@ fn award_victory(
 pub(crate) fn reset_run(commands: &mut Commands) {
     commands.insert_resource(Wallet::default());
     commands.insert_resource(Level::default());
+    commands.insert_resource(LifetimeEarnings::default());
     commands.insert_resource(LadderProgress::default());
     commands.insert_resource(OwnedItems::default());
     commands.insert_resource(PlayerEquipment::default());
@@ -524,6 +568,134 @@ mod tests {
             LadderProgress(3),
             "losing keeps the run on the same opponent"
         );
+    }
+
+    #[test]
+    fn beating_the_last_opponent_on_lap_one_routes_to_victory() {
+        let mut app = test_app();
+        app.insert_resource(LadderProgress(9));
+        set_state(&mut app, GameState::Fight);
+        write_defeat(&mut app, CombatSide::Player);
+        expire_delay(&mut app);
+        assert_eq!(state(&app), GameState::Victory);
+        assert_eq!(
+            *app.world().resource::<LadderProgress>(),
+            LadderProgress(10),
+            "the win still advances the ladder into lap 2"
+        );
+        assert_eq!(
+            wallet(&app),
+            50 + fight_reward(10),
+            "the final payout is credited on the victory screen"
+        );
+    }
+
+    #[test]
+    fn the_run_win_emits_the_victory_event_for_the_audio_hook() {
+        let mut app = test_app();
+        app.insert_resource(LadderProgress(9));
+        set_state(&mut app, GameState::Fight);
+        write_defeat(&mut app, CombatSide::Player);
+
+        let mut cursor = app
+            .world()
+            .resource::<Messages<VictoryEvent>>()
+            .get_cursor();
+        assert_eq!(
+            cursor
+                .read(app.world().resource::<Messages<VictoryEvent>>())
+                .count(),
+            0,
+            "no victory before the delay expires"
+        );
+        expire_delay(&mut app);
+        assert_eq!(
+            cursor
+                .read(app.world().resource::<Messages<VictoryEvent>>())
+                .count(),
+            1,
+            "exactly one VictoryEvent fires with the transition"
+        );
+    }
+
+    #[test]
+    fn the_lap_two_final_boss_keeps_the_loop_behavior() {
+        let mut app = test_app();
+        app.insert_resource(LadderProgress(19));
+        set_state(&mut app, GameState::Fight);
+        write_defeat(&mut app, CombatSide::Player);
+        expire_delay(&mut app);
+        assert_eq!(state(&app), GameState::FightResult);
+    }
+
+    #[test]
+    fn a_non_final_win_routes_to_the_result_screen() {
+        let mut app = test_app();
+        app.insert_resource(LadderProgress(4));
+        set_state(&mut app, GameState::Fight);
+        write_defeat(&mut app, CombatSide::Player);
+        expire_delay(&mut app);
+        assert_eq!(state(&app), GameState::FightResult);
+    }
+
+    #[test]
+    fn losing_the_final_fight_still_leads_to_game_over() {
+        let mut app = test_app();
+        app.insert_resource(LadderProgress(9));
+        set_state(&mut app, GameState::Fight);
+        write_defeat(&mut app, CombatSide::Enemy);
+        expire_delay(&mut app);
+        assert_eq!(state(&app), GameState::GameOver);
+    }
+
+    #[test]
+    fn lifetime_earnings_accumulate_across_wins_and_reset_with_the_run() {
+        let mut app = test_app();
+        assert_eq!(
+            *app.world().resource::<LifetimeEarnings>(),
+            LifetimeEarnings(0),
+            "a fresh run has earned nothing yet"
+        );
+
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
+        set_state(&mut app, GameState::FightResult);
+        set_state(&mut app, GameState::Fight);
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 2, false));
+        set_state(&mut app, GameState::FightResult);
+        assert_eq!(
+            *app.world().resource::<LifetimeEarnings>(),
+            LifetimeEarnings(fight_reward(1) + fight_reward(2)),
+            "every payout adds up, regardless of spending"
+        );
+
+        // Spending never touches the lifetime total.
+        app.world_mut().resource_mut::<Wallet>().0 = 0;
+        assert_eq!(
+            *app.world().resource::<LifetimeEarnings>(),
+            LifetimeEarnings(fight_reward(1) + fight_reward(2)),
+        );
+
+        set_state(&mut app, GameState::GameOver);
+        press_game_over_back_to_menu(&mut app);
+        assert_eq!(
+            *app.world().resource::<LifetimeEarnings>(),
+            LifetimeEarnings(0),
+            "the run reset clears the lifetime total"
+        );
+    }
+
+    /// Presses the game-over screen's back-to-menu button.
+    fn press_game_over_back_to_menu(app: &mut App) {
+        let button = app
+            .world_mut()
+            .query_filtered::<Entity, (With<Button>, With<result_ui::GameOverAction>)>()
+            .single(app.world())
+            .expect("back-to-menu button exists");
+        app.world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        app.update();
+        app.update();
     }
 
     #[test]

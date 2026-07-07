@@ -13,6 +13,7 @@ pub enum GameState {
     Fight,
     FightResult,
     GameOver,
+    Victory,
 }
 
 pub struct CorePlugin;
