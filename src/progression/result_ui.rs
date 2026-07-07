@@ -10,6 +10,7 @@ use crate::combat::hud::bar_percent;
 use crate::core::GameState;
 use crate::creation::PlayerCharacter;
 use crate::menu::{BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK};
+use crate::save::SaveRequested;
 use crate::ui_widgets::{attribute_row::spawn_attribute_row, wide_button};
 
 use super::{FightOutcome, Level, LevelUpDraft, Wallet, reset_run, top_up_pool, xp_to_next};
@@ -272,7 +273,11 @@ pub(super) fn handle_result_actions(
 /// confirmed build), so a press that would break them is a no-op. Confirm
 /// applies the draft: [`PlayerCharacter`] takes the new attributes, a live
 /// player fighter's pools top up by exactly the vitalitate max-delta,
-/// leftover points persist on [`Level`], and the panel closes.
+/// leftover points persist on [`Level`], the panel closes, and the new
+/// build is autosaved (see [`crate::save`]).
+// A Bevy system: each parameter is a distinct ECS handle the confirm branch
+// needs (draft, level, player, fighter pools, panel, autosave trigger).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_allocation_actions(
     mut commands: Commands,
     interactions: Query<(&Interaction, &AllocateAction), ChangedButton>,
@@ -281,6 +286,7 @@ pub(super) fn handle_allocation_actions(
     player: Option<ResMut<PlayerCharacter>>,
     mut fighters: Query<(&mut Health, &mut Stamina), With<PlayerFighter>>,
     panels: Query<Entity, With<AllocationPanel>>,
+    mut save_requests: MessageWriter<SaveRequested>,
 ) {
     let (Some(mut draft), Some(mut level), Some(mut player)) = (draft, level, player) else {
         return;
@@ -313,6 +319,7 @@ pub(super) fn handle_allocation_actions(
                 for panel in &panels {
                     commands.entity(panel).despawn();
                 }
+                save_requests.write(SaveRequested);
             }
         }
     }

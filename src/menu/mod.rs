@@ -4,6 +4,7 @@
 use bevy::prelude::*;
 
 use crate::core::{GameState, despawn_screen};
+use crate::save::{SaveStore, load_save};
 
 // Placeholder folk palette (deep red / cream / black); real art comes in
 // Phase 4. Public so later screens (e.g. character creation) share the exact
@@ -30,6 +31,9 @@ struct MainMenuScreen;
 pub enum MenuAction {
     /// Start a new game (transition to [`GameState::CharacterCreation`]).
     NewGame,
+    /// Resume the saved run: restore every run resource from the save and
+    /// enter [`GameState::Fight`]. Only spawned when a valid save loads.
+    Continue,
     /// Quit the app; native builds only.
     #[cfg(not(target_arch = "wasm32"))]
     Quit,
@@ -56,7 +60,11 @@ impl Plugin for MenuPlugin {
     }
 }
 
-fn spawn_main_menu(mut commands: Commands) {
+/// Spawns the main menu. **Continuă** is enabled exactly when a valid save
+/// loads from the [`SaveStore`]; a corrupt or version-mismatched save is
+/// discarded by [`load_save`] and the button stays a disabled marker.
+fn spawn_main_menu(mut commands: Commands, store: Option<Res<SaveStore>>) {
+    let has_save = store.is_some_and(|store| load_save(&store).is_some());
     commands
         .spawn((
             MainMenuScreen,
@@ -88,11 +96,18 @@ fn spawn_main_menu(mut commands: Commands) {
                 menu_button("Luptă nouă", CREAM, BUTTON_NORMAL),
                 MenuAction::NewGame,
             ));
-            // Disabled until the save/load issue wires it up.
-            parent.spawn((
-                menu_button("Continuă", TEXT_DISABLED, BUTTON_DISABLED),
-                DisabledButton,
-            ));
+            if has_save {
+                parent.spawn((
+                    menu_button("Continuă", CREAM, BUTTON_NORMAL),
+                    MenuAction::Continue,
+                ));
+            } else {
+                // No (valid) save to resume: a greyed-out, inert marker.
+                parent.spawn((
+                    menu_button("Continuă", TEXT_DISABLED, BUTTON_DISABLED),
+                    DisabledButton,
+                ));
+            }
             #[cfg(not(target_arch = "wasm32"))]
             parent.spawn((menu_button("Ieși", CREAM, BUTTON_NORMAL), MenuAction::Quit));
         });
@@ -129,8 +144,12 @@ type ChangedEnabledButton = (Changed<Interaction>, With<Button>, Without<Disable
 
 /// Generic click handler: runs the [`MenuAction`] of whichever button was
 /// pressed. Disabled buttons never carry a `MenuAction`, so they are ignored.
+/// **Continuă** re-loads the save on the click (never trusting a stale
+/// button), restores every run resource, and enters the fight.
 fn handle_menu_actions(
+    mut commands: Commands,
     interactions: Query<(&Interaction, &MenuAction), ChangedButton>,
+    store: Option<Res<SaveStore>>,
     mut next_state: ResMut<NextState<GameState>>,
     #[cfg(not(target_arch = "wasm32"))] mut app_exit: MessageWriter<AppExit>,
 ) {
@@ -140,6 +159,16 @@ fn handle_menu_actions(
         }
         match action {
             MenuAction::NewGame => next_state.set(GameState::CharacterCreation),
+            MenuAction::Continue => {
+                let save = store.as_ref().and_then(|store| load_save(store));
+                match save {
+                    Some(save) => {
+                        save.restore(&mut commands);
+                        next_state.set(GameState::Fight);
+                    }
+                    None => warn!("Continuă pressed but no valid save loads; staying on the menu"),
+                }
+            }
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::Quit => {
                 app_exit.write(AppExit::Success);
@@ -256,6 +285,159 @@ mod tests {
             .spawn((Button, Interaction::Pressed, MenuAction::Quit));
         app.update();
         assert!(app.should_exit().is_some(), "quit must raise AppExit");
+    }
+
+    // --- Continuă / save-load integration ---
+
+    use crate::character::Attributes;
+    use crate::creation::PlayerCharacter;
+    use crate::items::ItemId;
+    use crate::progression::{Level, Wallet};
+    use crate::roster::LadderProgress;
+    use crate::save::SaveGame;
+    use crate::shop::{OwnedItems, PlayerEquipment};
+    use std::collections::HashSet;
+
+    /// A valid mid-run save as stored JSON.
+    fn saved_run_json() -> String {
+        let player = PlayerCharacter {
+            name: "Greuceanu".to_string(),
+            attributes: Attributes {
+                putere: 6,
+                agilitate: 2,
+                vitalitate: 4,
+                noroc: 2,
+            },
+        };
+        let level = Level {
+            level: 3,
+            xp: 40,
+            unspent_points: 1,
+        };
+        let mut equipment = crate::items::Equipment::default();
+        equipment.equip(ItemId::ToporDePadurar);
+        SaveGame::capture(
+            &player,
+            &level,
+            &Wallet(210),
+            &OwnedItems(HashSet::from([ItemId::ToporDePadurar])),
+            &PlayerEquipment(equipment),
+            &LadderProgress(4),
+        )
+        .to_json()
+        .expect("plain data serializes")
+    }
+
+    /// The menu app over an in-memory save store seeded with `json`.
+    fn test_app_with_save(
+        json: Option<&str>,
+    ) -> (App, std::sync::Arc<std::sync::Mutex<Option<String>>>) {
+        let mut app = test_app();
+        let (store, cell) = SaveStore::in_memory();
+        if let Some(json) = json {
+            store.store(json);
+        }
+        app.insert_resource(store);
+        app.update();
+        (app, cell)
+    }
+
+    fn continue_button(app: &mut App) -> Option<Entity> {
+        app.world_mut()
+            .query_filtered::<(Entity, &MenuAction), With<Button>>()
+            .iter(app.world())
+            .find(|&(_, &action)| action == MenuAction::Continue)
+            .map(|(entity, _)| entity)
+    }
+
+    #[test]
+    fn a_valid_save_enables_continua() {
+        let (mut app, _cell) = test_app_with_save(Some(&saved_run_json()));
+        let button = continue_button(&mut app).expect("Continuă carries MenuAction::Continue");
+        assert!(
+            !app.world().entity(button).contains::<DisabledButton>(),
+            "the resumable button is not a disabled marker"
+        );
+        assert_eq!(count::<DisabledButton>(&mut app), 0);
+    }
+
+    #[test]
+    fn pressing_continua_restores_the_run_and_enters_the_fight() {
+        let (mut app, _cell) = test_app_with_save(Some(&saved_run_json()));
+        let button = continue_button(&mut app).expect("Continuă is enabled");
+        app.world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        app.update(); // handler restores + queues the transition
+        app.update(); // transition applies
+
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::Fight,
+            "Continuă resumes straight into the fight"
+        );
+        let player = app.world().resource::<PlayerCharacter>();
+        assert_eq!(player.name, "Greuceanu");
+        assert_eq!(
+            player.attributes,
+            Attributes {
+                putere: 6,
+                agilitate: 2,
+                vitalitate: 4,
+                noroc: 2,
+            }
+        );
+        assert_eq!(
+            *app.world().resource::<Level>(),
+            Level {
+                level: 3,
+                xp: 40,
+                unspent_points: 1,
+            }
+        );
+        assert_eq!(*app.world().resource::<Wallet>(), Wallet(210));
+        assert_eq!(
+            *app.world().resource::<OwnedItems>(),
+            OwnedItems(HashSet::from([ItemId::ToporDePadurar]))
+        );
+        assert_eq!(
+            app.world()
+                .resource::<PlayerEquipment>()
+                .0
+                .equipped(crate::items::Slot::Weapon),
+            Some(ItemId::ToporDePadurar)
+        );
+        assert_eq!(
+            *app.world().resource::<LadderProgress>(),
+            LadderProgress(4),
+            "the run resumes on the saved opponent"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_save_keeps_continua_disabled_and_clears_the_store() {
+        let (mut app, cell) = test_app_with_save(Some("garbage, not JSON"));
+        assert!(
+            continue_button(&mut app).is_none(),
+            "no resumable button for a corrupt save"
+        );
+        assert_eq!(count::<DisabledButton>(&mut app), 1, "greyed-out marker");
+        assert_eq!(
+            *cell.lock().expect("test store lock"),
+            None,
+            "the corrupt save is cleared on the menu load"
+        );
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::MainMenu
+        );
+    }
+
+    #[test]
+    fn an_empty_store_keeps_continua_disabled() {
+        let (mut app, _cell) = test_app_with_save(None);
+        assert!(continue_button(&mut app).is_none());
+        assert_eq!(count::<DisabledButton>(&mut app), 1);
     }
 
     #[test]

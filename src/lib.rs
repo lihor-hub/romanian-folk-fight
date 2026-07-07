@@ -13,6 +13,7 @@ pub mod items;
 pub mod menu;
 pub mod progression;
 pub mod roster;
+pub mod save;
 pub mod shop;
 pub mod ui_widgets;
 
@@ -33,6 +34,7 @@ impl Plugin for GamePlugin {
         app.add_plugins(announcer::AnnouncerPlugin);
         app.add_plugins(progression::ProgressionPlugin);
         app.add_plugins(roster::RosterPlugin);
+        app.add_plugins(save::SavePlugin);
         app.add_plugins(shop::ShopPlugin);
     }
 }
