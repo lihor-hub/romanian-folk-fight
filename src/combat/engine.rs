@@ -37,6 +37,21 @@ pub enum CombatAction {
     Rest,
 }
 
+impl CombatAction {
+    /// Stamina cost of the action — the single cost table shared by the
+    /// resolver and the HUD (cost labels and button-enabled states). Rest
+    /// costs nothing. Only strikes are ever rejected for lack of stamina;
+    /// [`resolve_action`] saturates the block cost at zero instead.
+    pub fn stamina_cost(self) -> i32 {
+        match self {
+            Self::QuickStrike => QUICK_STRIKE_COST,
+            Self::HeavyStrike => HEAVY_STRIKE_COST,
+            Self::Block => BLOCK_COST,
+            Self::Rest => 0,
+        }
+    }
+}
+
 /// Snapshot of one fighter for the pure resolver, constructed from the ECS
 /// `Health`/`Stamina`/`Attributes` components (and the blocking flag tracked
 /// by the turn resource).
@@ -116,7 +131,7 @@ pub fn resolve_action(
         CombatAction::QuickStrike => strike(
             actor,
             target,
-            QUICK_STRIKE_COST,
+            action.stamina_cost(),
             QUICK_STRIKE_BASE_HIT,
             1,
             rng,
@@ -124,7 +139,7 @@ pub fn resolve_action(
         CombatAction::HeavyStrike => strike(
             actor,
             target,
-            HEAVY_STRIKE_COST,
+            action.stamina_cost(),
             HEAVY_STRIKE_BASE_HIT,
             HEAVY_DAMAGE_MULTIPLIER,
             rng,
@@ -132,7 +147,7 @@ pub fn resolve_action(
         CombatAction::Block => {
             // Blocking is always available; the cost saturates at 0 so a
             // spent fighter is never left without a defensive option.
-            actor.stamina = (actor.stamina - BLOCK_COST).max(0);
+            actor.stamina = (actor.stamina - action.stamina_cost()).max(0);
             actor.blocking = true;
             vec![CombatEvent::Guarded]
         }
