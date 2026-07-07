@@ -5,6 +5,7 @@
 
 pub mod announcer;
 pub mod arena;
+pub mod audio;
 pub mod character;
 pub mod combat;
 pub mod core;
@@ -32,6 +33,7 @@ impl Plugin for GamePlugin {
         app.add_plugins(arena::ArenaPlugin);
         app.add_plugins(combat::CombatPlugin);
         app.add_plugins(announcer::AnnouncerPlugin);
+        app.add_plugins(audio::GameAudioPlugin);
         app.add_plugins(progression::ProgressionPlugin);
         app.add_plugins(roster::RosterPlugin);
         app.add_plugins(save::SavePlugin);
