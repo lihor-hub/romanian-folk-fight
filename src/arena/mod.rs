@@ -2,8 +2,11 @@
 //! player's fighter (from [`PlayerCharacter`]) on the left, and the current
 //! [`LadderProgress`] opponent from the folklore roster on the right —
 //! attributes (lap-scaled), AI profile, and equipment all come from the
-//! ladder data. Later issues (sprites, animation) build on this scene; the
-//! anchor constants are reused by the animation work.
+//! ladder data. Fighters render as animated sprite-sheet characters (#22,
+//! see [`animation`]); they only spawn once their sheets are loaded, which
+//! also gates the start of combat (the combat turn waits for the fighters).
+
+pub mod animation;
 
 use bevy::prelude::*;
 
@@ -14,14 +17,15 @@ use crate::creation::PlayerCharacter;
 use crate::items::Equipment;
 use crate::menu::CREAM;
 use crate::roster::{Boss, LadderProgress};
+use animation::{FighterClip, FighterSpriteSheets};
 
 /// Logical resolution the scene is designed for (the window in `main.rs`).
 pub const ARENA_WIDTH: f32 = 800.0;
 /// Logical height matching [`ARENA_WIDTH`].
 pub const ARENA_HEIGHT: f32 = 600.0;
 
-/// Size of a placeholder fighter body quad.
-pub const FIGHTER_SIZE: Vec2 = Vec2::new(60.0, 120.0);
+/// Rendered size of a fighter: one 128x128 sprite-sheet frame.
+pub const FIGHTER_SIZE: Vec2 = Vec2::new(128.0, 128.0);
 
 /// Height of the ground strip along the bottom of the arena.
 const GROUND_HEIGHT: f32 = 120.0;
@@ -36,12 +40,10 @@ pub const PLAYER_ANCHOR: Transform = Transform::from_xyz(-220.0, FIGHTER_Y, 0.0)
 /// Where the opponent stands, facing left; mirrors [`PLAYER_ANCHOR`].
 pub const ENEMY_ANCHOR: Transform = Transform::from_xyz(220.0, FIGHTER_Y, 0.0);
 
-// Placeholder palette; real backgrounds and sprites arrive in Phase 4.
+// Placeholder scenery palette; real arena backgrounds are a separate issue.
 const SKY_COLOR: Color = Color::srgb(0.10, 0.09, 0.16);
 const GROUND_COLOR: Color = Color::srgb(0.30, 0.22, 0.14);
 const PILLAR_COLOR: Color = Color::srgb(0.45, 0.42, 0.38);
-const PLAYER_COLOR: Color = Color::srgb(0.75, 0.20, 0.15);
-const ENEMY_COLOR: Color = Color::srgb(0.55, 0.50, 0.65);
 
 const PILLAR_SIZE: Vec2 = Vec2::new(40.0, 280.0);
 const PILLAR_X: f32 = 350.0;
@@ -61,26 +63,69 @@ pub struct ArenaPlugin;
 
 impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(GameState::Fight), spawn_arena)
+        app.add_plugins(animation::AnimationPlugin)
+            .add_systems(OnEnter(GameState::Fight), spawn_arena)
+            .add_systems(
+                Update,
+                spawn_arena_when_ready.run_if(in_state(GameState::Fight)),
+            )
             .add_systems(OnExit(GameState::Fight), despawn_screen::<ArenaScreen>);
     }
 }
 
-/// Builds the whole fight scene: scenery quads, the player's fighter, and
-/// the current ladder opponent (attributes lap-scaled, AI profile and
-/// equipment from the roster data; bosses get the [`Boss`] tag and the
-/// distinct label color). Skips (with a warning) if no [`PlayerCharacter`]
-/// was confirmed, which only happens if the state flow is driven out of
-/// order.
+/// `OnEnter(Fight)` entry point: spawns the scene immediately when the
+/// sprite sheets are already loaded (the usual case — loading starts at app
+/// startup). Warns and skips if no [`PlayerCharacter`] was confirmed, which
+/// only happens if the state flow is driven out of order.
 fn spawn_arena(
-    mut commands: Commands,
+    commands: Commands,
     player: Option<Res<PlayerCharacter>>,
     ladder: Option<Res<LadderProgress>>,
+    sheets: Res<FighterSpriteSheets>,
+    asset_server: Option<Res<AssetServer>>,
 ) {
     let Some(player) = player else {
         warn!("entered GameState::Fight without a PlayerCharacter; arena not spawned");
         return;
     };
+    if !sheets.ready(asset_server.as_deref()) {
+        // The loading guard: `spawn_arena_when_ready` retries every frame.
+        // Combat cannot start either — its turn resource waits for the
+        // fighters to exist.
+        return;
+    }
+    spawn_scene(commands, &player, ladder, &sheets);
+}
+
+/// The loading-guard retry: once the sheets finish loading mid-fight-screen,
+/// spawns the scene that [`spawn_arena`] skipped.
+fn spawn_arena_when_ready(
+    commands: Commands,
+    player: Option<Res<PlayerCharacter>>,
+    ladder: Option<Res<LadderProgress>>,
+    sheets: Res<FighterSpriteSheets>,
+    asset_server: Option<Res<AssetServer>>,
+    spawned: Query<(), With<ArenaScreen>>,
+) {
+    let Some(player) = player else {
+        return; // spawn_arena already warned
+    };
+    if !spawned.is_empty() || !sheets.ready(asset_server.as_deref()) {
+        return;
+    }
+    spawn_scene(commands, &player, ladder, &sheets);
+}
+
+/// Builds the whole fight scene: scenery quads, the player's fighter, and
+/// the current ladder opponent (attributes lap-scaled, AI profile and
+/// equipment from the roster data; bosses get the [`Boss`] tag and the
+/// distinct label color).
+fn spawn_scene(
+    mut commands: Commands,
+    player: &PlayerCharacter,
+    ladder: Option<Res<LadderProgress>>,
+    sheets: &FighterSpriteSheets,
+) {
     let ladder = ladder.map(|ladder| *ladder).unwrap_or_default();
     let opponent = ladder.opponent();
     spawn_scenery(&mut commands);
@@ -90,10 +135,9 @@ fn spawn_arena(
         player.attributes,
         PlayerFighter,
         PLAYER_ANCHOR,
-        PLAYER_COLOR,
-        CREAM,
         // The player faces right, towards the opponent.
-        false,
+        fighter_sprite(sheets.player.clone(), sheets, false),
+        CREAM,
     );
     let enemy = spawn_arena_fighter(
         &mut commands,
@@ -106,14 +150,13 @@ fn spawn_arena(
             },
         ),
         ENEMY_ANCHOR,
-        ENEMY_COLOR,
+        // The opponent faces left, back towards the player.
+        fighter_sprite(sheets.opponent(ladder.0), sheets, true),
         if opponent.is_boss {
             BOSS_LABEL_COLOR
         } else {
             CREAM
         },
-        // The opponent faces left, back towards the player.
-        true,
     );
     let mut equipment = Equipment::default();
     for &id in opponent.equipment {
@@ -149,20 +192,35 @@ fn spawn_scenery(commands: &mut Commands) {
     }
 }
 
+/// The animated sprite of one fighter: its sheet over the shared atlas
+/// layout, opened on the first idle frame. `flip_x` mirrors the
+/// right-facing art for the opponent side.
+fn fighter_sprite(sheet: Handle<Image>, sheets: &FighterSpriteSheets, flip_x: bool) -> Sprite {
+    Sprite {
+        flip_x,
+        ..Sprite::from_atlas_image(
+            sheet,
+            TextureAtlas {
+                layout: sheets.layout.clone(),
+                index: FighterClip::Idle.animation().first,
+            },
+        )
+    }
+}
+
 /// Spawns one fighter through the shared [`spawn_fighter`] (so it carries the
-/// #8 components and full pools), then dresses it with the arena visuals: a
-/// colored body quad at its anchor and a world-space name label above (in
-/// `label_color`, so bosses read differently at a glance).
-#[allow(clippy::too_many_arguments)]
+/// #8 components and full pools), then dresses it with the arena visuals: its
+/// animated sprite at its anchor (starting on the idle loop) and a
+/// world-space name label above (in `label_color`, so bosses read
+/// differently at a glance).
 fn spawn_arena_fighter(
     commands: &mut Commands,
     name: impl Into<String>,
     attrs: Attributes,
     marker: impl Bundle,
     anchor: Transform,
-    color: Color,
+    sprite: Sprite,
     label_color: Color,
-    flip_x: bool,
 ) -> Entity {
     let name = name.into();
     let label = name.clone();
@@ -171,10 +229,9 @@ fn spawn_arena_fighter(
         .entity(fighter)
         .insert((
             ArenaScreen,
-            Sprite {
-                flip_x,
-                ..Sprite::from_color(color, FIGHTER_SIZE)
-            },
+            sprite,
+            FighterClip::Idle,
+            FighterClip::Idle.animation(),
             anchor,
         ))
         .with_children(|body| {
