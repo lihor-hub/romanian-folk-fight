@@ -93,7 +93,7 @@ pub fn track_for(state: GameState, boss_fight: bool) -> Option<MusicTrack> {
         } else {
             MusicTrack::Arena
         }),
-        GameState::FightResult | GameState::GameOver => None,
+        GameState::FightResult | GameState::GameOver | GameState::Victory => None,
     }
 }
 
@@ -197,6 +197,7 @@ impl Plugin for GameAudioPlugin {
             .add_systems(OnEnter(GameState::MainMenu), spawn_speaker_toggle)
             .add_systems(OnExit(GameState::MainMenu), despawn_screen::<SpeakerToggle>)
             .add_systems(OnEnter(GameState::FightResult), play_victory_sting)
+            .add_systems(OnEnter(GameState::Victory), play_victory_sting)
             .add_systems(OnEnter(GameState::GameOver), play_defeat_sting)
             .add_systems(
                 Update,
@@ -483,6 +484,7 @@ mod tests {
         for boss in [false, true] {
             assert_eq!(track_for(GameState::FightResult, boss), None);
             assert_eq!(track_for(GameState::GameOver, boss), None);
+            assert_eq!(track_for(GameState::Victory, boss), None);
         }
     }
 
