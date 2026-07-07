@@ -16,6 +16,7 @@ use crate::menu::{
     BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, DisabledButton,
     NIGHT_BLACK, TEXT_DISABLED,
 };
+use crate::ui_widgets::{attribute_row::spawn_attribute_row, small_button, wide_button};
 
 /// The confirmed player character: chosen name plus final attributes. Written
 /// by the confirm button and read by the fight screen.
@@ -156,47 +157,14 @@ fn spawn_creation_screen(mut commands: Commands, draft: Res<CharacterDraft>) {
             ));
 
             for kind in AttributeKind::ALL {
-                parent
-                    .spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(12.0),
-                        ..default()
-                    })
-                    .with_children(|row| {
-                        row.spawn(Node {
-                            width: Val::Px(140.0),
-                            ..default()
-                        })
-                        .with_children(|slot| {
-                            slot.spawn((
-                                Text::new(kind.label()),
-                                TextFont {
-                                    font_size: FontSize::Px(24.0),
-                                    ..default()
-                                },
-                                TextColor(CREAM),
-                            ));
-                        });
-                        row.spawn((small_button("-"), CreationAction::Decrease(kind)));
-                        row.spawn(Node {
-                            width: Val::Px(48.0),
-                            justify_content: JustifyContent::Center,
-                            ..default()
-                        })
-                        .with_children(|slot| {
-                            slot.spawn((
-                                Text::new(draft.get(kind).to_string()),
-                                TextFont {
-                                    font_size: FontSize::Px(24.0),
-                                    ..default()
-                                },
-                                TextColor(CREAM),
-                                CreationLabel::Value(kind),
-                            ));
-                        });
-                        row.spawn((small_button("+"), CreationAction::Increase(kind)));
-                    });
+                spawn_attribute_row(
+                    parent,
+                    kind,
+                    draft.get(kind),
+                    CreationAction::Decrease(kind),
+                    CreationAction::Increase(kind),
+                    CreationLabel::Value(kind),
+                );
             }
 
             parent.spawn((
@@ -231,38 +199,6 @@ fn preview_text(draft: &CharacterDraft) -> String {
         stats::max_hp(&attrs),
         stats::max_stamina(&attrs),
         stats::base_damage(&attrs),
-    )
-}
-
-/// A small square button (name arrows, `-` / `+`).
-fn small_button(label: &str) -> impl Bundle {
-    button_bundle(label, Val::Px(48.0), Val::Px(48.0), 24.0)
-}
-
-/// A wide button (confirm, back), sized like the main-menu buttons.
-fn wide_button(label: &str) -> impl Bundle {
-    button_bundle(label, Val::Px(260.0), Val::Px(56.0), 24.0)
-}
-
-fn button_bundle(label: &str, width: Val, height: Val, font_size: f32) -> impl Bundle {
-    (
-        Button,
-        Node {
-            width,
-            height,
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        },
-        BackgroundColor(BUTTON_NORMAL),
-        children![(
-            Text::new(label),
-            TextFont {
-                font_size: FontSize::Px(font_size),
-                ..default()
-            },
-            TextColor(CREAM),
-        )],
     )
 }
 

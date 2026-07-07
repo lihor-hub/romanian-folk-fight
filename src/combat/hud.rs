@@ -16,6 +16,7 @@ use crate::menu::{
     BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, DisabledButton,
     TEXT_DISABLED,
 };
+use crate::progression::Level;
 
 use super::engine::{CombatAction, CombatEvent, REST_RESTORE};
 use super::systems::{CombatLogEvent, CombatSide, CombatTurn, PlayerActionEvent};
@@ -476,6 +477,7 @@ type FighterDataChanged = Or<(Changed<FighterName>, Changed<Health>, Changed<Sta
 pub(super) fn update_labels(
     player: PlayerData,
     enemy: EnemyData,
+    level: Option<Res<Level>>,
     changed: Query<(), FighterDataChanged>,
     mut labels: Query<(&HudLabel, &mut Text)>,
 ) {
@@ -490,7 +492,14 @@ pub(super) fn update_labels(
             continue;
         };
         let value = match label {
-            HudLabel::Name(_) => name.0.clone(),
+            HudLabel::Name(_) => match level.as_deref() {
+                // The player's panel carries their level; enemy levels come
+                // with the roster issue.
+                Some(level) if side == CombatSide::Player => {
+                    format!("{} (Nv. {})", name.0, level.level)
+                }
+                _ => name.0.clone(),
+            },
             HudLabel::Pool { pool, .. } => {
                 let (current, max) = pool_values(*pool, health, stamina);
                 format!("{current}/{max}")
@@ -856,6 +865,38 @@ mod tests {
                 }
             ),
             "40/40"
+        );
+    }
+
+    #[test]
+    fn the_player_panel_shows_the_level_next_to_the_name() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin));
+        app.add_plugins((ArenaPlugin, CombatPlugin));
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.insert_resource(PlayerCharacter {
+            name: "Făt-Frumos".to_string(),
+            attributes: PLAYER_ATTRIBUTES,
+        });
+        app.insert_resource(CombatRng(strikes_rng(4)));
+        app.insert_resource(Level {
+            level: 3,
+            xp: 40,
+            unspent_points: 0,
+        });
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Fight);
+        app.update();
+        assert_eq!(
+            label_text(&mut app, HudLabel::Name(CombatSide::Player)),
+            "Făt-Frumos (Nv. 3)"
+        );
+        assert_eq!(
+            label_text(&mut app, HudLabel::Name(CombatSide::Enemy)),
+            "Strigoi",
+            "enemies have no level until the roster issue"
         );
     }
 
