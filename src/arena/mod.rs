@@ -6,6 +6,7 @@
 use bevy::prelude::*;
 
 use crate::character::{Attributes, EnemyFighter, PlayerFighter, spawn_fighter};
+use crate::combat::AiProfile;
 use crate::core::{GameState, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::menu::CREAM;
@@ -90,7 +91,9 @@ fn spawn_arena(mut commands: Commands, player: Option<Res<PlayerCharacter>>) {
         &mut commands,
         ENEMY_NAME,
         ENEMY_ATTRIBUTES,
-        EnemyFighter,
+        // The Strigoi fights with the default balanced aggression; the
+        // opponent ladder issue tunes profiles per archetype.
+        (EnemyFighter, AiProfile::default()),
         ENEMY_ANCHOR,
         ENEMY_COLOR,
         // The opponent faces left, back towards the player.
@@ -127,7 +130,7 @@ fn spawn_arena_fighter(
     commands: &mut Commands,
     name: impl Into<String>,
     attrs: Attributes,
-    marker: impl Component,
+    marker: impl Bundle,
     anchor: Transform,
     color: Color,
     flip_x: bool,
@@ -258,6 +261,24 @@ mod tests {
             .expect("player fighter exists");
         assert_eq!(name.0, "Făt-Frumos");
         assert_eq!(*attrs, PLAYER_ATTRIBUTES);
+    }
+
+    #[test]
+    fn the_enemy_carries_the_default_ai_profile_and_the_player_none() {
+        let mut app = test_app();
+        let profile = app
+            .world_mut()
+            .query_filtered::<&AiProfile, With<EnemyFighter>>()
+            .single(app.world())
+            .expect("enemy fighter has an AI profile");
+        assert_eq!(*profile, AiProfile::default(), "balanced 0.5 aggression");
+        assert!(
+            app.world_mut()
+                .query_filtered::<&AiProfile, With<PlayerFighter>>()
+                .single(app.world())
+                .is_err(),
+            "the player is human-driven and carries no AI profile"
+        );
     }
 
     #[test]

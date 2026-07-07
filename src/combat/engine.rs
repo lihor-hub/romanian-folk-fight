@@ -19,6 +19,9 @@ pub const REST_RESTORE: i32 = 20;
 pub const QUICK_STRIKE_BASE_HIT: i32 = 80;
 /// Base hit chance in percent for [`CombatAction::HeavyStrike`].
 pub const HEAVY_STRIKE_BASE_HIT: i32 = 60;
+/// Damage multiplier of [`CombatAction::HeavyStrike`] over base damage; the
+/// AI's kill-range check builds on the same number.
+pub const HEAVY_DAMAGE_MULTIPLIER: i32 = 2;
 
 /// One of the four things a fighter can do on their turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,7 +126,7 @@ pub fn resolve_action(
             target,
             HEAVY_STRIKE_COST,
             HEAVY_STRIKE_BASE_HIT,
-            2,
+            HEAVY_DAMAGE_MULTIPLIER,
             rng,
         ),
         CombatAction::Block => {
@@ -186,8 +189,9 @@ fn strike(
     events
 }
 
-/// One `0..100` roll against a percent chance.
-fn roll(rng: &mut impl Rng, percent: i32) -> bool {
+/// One `0..100` roll against a percent chance; shared with the combat AI so
+/// every percent roll in the module follows the same convention.
+pub(super) fn roll(rng: &mut impl Rng, percent: i32) -> bool {
     rng.random_range(0..100) < percent
 }
 
