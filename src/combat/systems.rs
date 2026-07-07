@@ -1,17 +1,18 @@
 //! ECS glue for the combat engine: the turn resource, the seeded RNG
-//! resource, temporary keyboard input (1–4), the AI-driven enemy reply, and
-//! the write-back of [`engine::resolve_action`] results onto `Health` and
-//! `Stamina` components.
+//! resource, the HUD input hookup (plus a debug-only 1–4 keyboard mapping),
+//! the AI-driven enemy reply, and the write-back of
+//! [`engine::resolve_action`] results onto `Health` and `Stamina` components.
 
 use bevy::prelude::*;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
 use crate::character::{Attributes, EnemyFighter, Health, PlayerFighter, Stamina};
-use crate::core::GameState;
+use crate::core::{GameState, despawn_screen};
 
 use super::ai::{self, AiProfile};
 use super::engine::{self, CombatAction, CombatEvent};
+use super::hud;
 
 /// The two sides of a duel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,8 +55,8 @@ pub struct CombatTurn {
 #[derive(Resource, Debug, Clone)]
 pub struct CombatRng(pub ChaCha8Rng);
 
-/// The player's chosen action for this turn. Written by the temporary 1–4
-/// keyboard mapping until the HUD issue replaces it.
+/// The player's chosen action for this turn. Written by the HUD action
+/// buttons (and, in debug builds, the 1–4 keyboard mapping).
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlayerActionEvent(pub CombatAction);
 
@@ -75,14 +76,44 @@ impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<PlayerActionEvent>()
             .add_message::<CombatLogEvent>()
-            .add_systems(OnEnter(GameState::Fight), setup_combat)
-            .add_systems(OnExit(GameState::Fight), teardown_combat)
+            .add_systems(OnEnter(GameState::Fight), (setup_combat, hud::spawn_hud))
+            .add_systems(
+                OnExit(GameState::Fight),
+                (
+                    teardown_combat,
+                    hud::teardown_hud,
+                    despawn_screen::<hud::HudScreen>,
+                ),
+            )
             .add_systems(
                 Update,
-                (init_turn, player_input, resolve_player_action, enemy_turn)
+                (
+                    init_turn,
+                    hud::handle_action_buttons,
+                    resolve_player_action,
+                    enemy_turn,
+                    hud::collect_log_lines,
+                    hud::update_button_backgrounds,
+                    hud::update_action_buttons,
+                    (
+                        hud::update_bar_fills,
+                        hud::update_labels,
+                        hud::update_log_text.run_if(resource_exists_and_changed::<hud::CombatLog>),
+                    ),
+                )
                     .chain()
                     .run_if(in_state(GameState::Fight)),
             );
+        // The pre-HUD keyboard mapping stays as a debug convenience only;
+        // release builds are mouse-driven through the HUD.
+        #[cfg(debug_assertions)]
+        app.add_systems(
+            Update,
+            player_input
+                .after(init_turn)
+                .before(resolve_player_action)
+                .run_if(in_state(GameState::Fight)),
+        );
     }
 }
 
@@ -144,9 +175,10 @@ fn init_turn(
     });
 }
 
-/// Temporary keyboard mapping until the HUD issue lands: 1 = quick strike,
-/// 2 = heavy strike, 3 = block, 4 = rest. Only listens on the player's turn
-/// while the duel is running.
+/// Debug-only keyboard mapping (the HUD buttons are the real input):
+/// 1 = quick strike, 2 = heavy strike, 3 = block, 4 = rest. Only listens on
+/// the player's turn while the duel is running.
+#[cfg(debug_assertions)]
 fn player_input(
     keys: Res<ButtonInput<KeyCode>>,
     turn: Option<Res<CombatTurn>>,
