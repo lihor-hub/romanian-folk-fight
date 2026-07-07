@@ -18,6 +18,7 @@ use crate::combat::{CombatEvent, CombatLogEvent, CombatSide};
 use crate::core::{GameState, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::roster::LadderProgress;
+use crate::save::SaveRequested;
 use crate::shop::{OwnedItems, PlayerEquipment};
 
 /// Galbeni a fresh run starts with, so the first shop visit isn't pointless.
@@ -99,6 +100,7 @@ impl Plugin for ProgressionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Wallet>()
             .init_resource::<Level>()
+            .add_message::<SaveRequested>()
             .add_systems(OnEnter(GameState::Fight), clear_fight_outcome)
             .add_systems(
                 Update,
@@ -226,12 +228,14 @@ fn tick_fight_end_delay(
 /// every level-up it affords — and advances the opponent ladder, exactly
 /// once per fight; the `rewarded` flag guards against a double award (or
 /// double advance) if the result screen is re-entered (e.g. via the shop)
-/// before the next fight clears the outcome.
+/// before the next fight clears the outcome. The credited run is autosaved
+/// (see [`crate::save`]).
 fn award_victory(
     mut wallet: ResMut<Wallet>,
     mut level: ResMut<Level>,
     outcome: Option<ResMut<FightOutcome>>,
     ladder: Option<ResMut<LadderProgress>>,
+    mut save_requests: MessageWriter<SaveRequested>,
 ) {
     let Some(mut outcome) = outcome else {
         warn!("entered GameState::FightResult without a FightOutcome; nothing to award");
@@ -246,6 +250,7 @@ fn award_victory(
         ladder.advance();
     }
     outcome.rewarded = true;
+    save_requests.write(SaveRequested);
 }
 
 /// Resets every run-scoped resource so the next run starts clean: a fresh

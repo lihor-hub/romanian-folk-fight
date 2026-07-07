@@ -18,6 +18,7 @@ use crate::menu::{
     NIGHT_BLACK, TEXT_DISABLED,
 };
 use crate::progression::Wallet;
+use crate::save::SaveRequested;
 use crate::ui_widgets::wide_button;
 
 /// The items bought this run: a set of catalog ids. Persists across fights
@@ -106,6 +107,7 @@ impl Plugin for ShopPlugin {
         app.init_resource::<Wallet>()
             .init_resource::<OwnedItems>()
             .init_resource::<PlayerEquipment>()
+            .add_message::<SaveRequested>()
             .add_systems(OnEnter(GameState::Shop), spawn_shop_screen)
             .add_systems(
                 Update,
@@ -378,13 +380,15 @@ type ChangedEnabledButton = (Changed<Interaction>, With<Button>, Without<Disable
 /// Runs the [`ShopAction`] of whichever shop button was pressed: buys (via
 /// [`try_buy`]) and auto-equips, equips owned items, or leaves for the
 /// arena. State is re-derived from the resources on every press, so a
-/// stale-looking button can never overdraw the wallet.
+/// stale-looking button can never overdraw the wallet. Every successful
+/// purchase or equip swap autosaves the run (see [`crate::save`]).
 fn handle_shop_actions(
     interactions: Query<(&Interaction, &ShopAction), ChangedButton>,
     mut wallet: ResMut<Wallet>,
     mut owned: ResMut<OwnedItems>,
     mut equipment: ResMut<PlayerEquipment>,
     mut next_state: ResMut<NextState<GameState>>,
+    mut save_requests: MessageWriter<SaveRequested>,
 ) {
     for (interaction, action) in &interactions {
         if *interaction != Interaction::Pressed {
@@ -396,10 +400,12 @@ fn handle_shop_actions(
                 match ItemButtonState::of(id, &wallet, &owned, &equipment) {
                     ItemButtonState::Equip => {
                         equipment.0.equip(id);
+                        save_requests.write(SaveRequested);
                     }
                     ItemButtonState::Buy => {
                         if try_buy(&mut wallet, &mut owned, id).is_ok() {
                             equipment.0.equip(id);
+                            save_requests.write(SaveRequested);
                         }
                     }
                     // Inert markers; presses on them change nothing.

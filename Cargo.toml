@@ -9,6 +9,16 @@ bevy = { version = "0.19.0" }
 # and the default `os_rng` backend does not build on wasm32-unknown-unknown.
 rand = { version = "0.10", default-features = false }
 rand_chacha = { version = "0.10", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Native save backend: the save file lives under `dirs::data_dir()`.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dirs = "6"
+
+# Web save backend: the save lives in `window.localStorage`.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Storage", "Window"] }
 
 [features]
 # Fast incremental native builds; never enable for release or wasm builds.
