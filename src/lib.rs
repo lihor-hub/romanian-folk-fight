@@ -10,6 +10,7 @@ pub mod combat;
 pub mod core;
 pub mod creation;
 pub mod menu;
+pub mod progression;
 
 use bevy::prelude::*;
 
@@ -25,5 +26,6 @@ impl Plugin for GamePlugin {
         app.add_plugins(arena::ArenaPlugin);
         app.add_plugins(combat::CombatPlugin);
         app.add_plugins(announcer::AnnouncerPlugin);
+        app.add_plugins(progression::ProgressionPlugin);
     }
 }
