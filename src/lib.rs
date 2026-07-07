@@ -12,6 +12,7 @@ pub mod creation;
 pub mod items;
 pub mod menu;
 pub mod progression;
+pub mod shop;
 pub mod ui_widgets;
 
 use bevy::prelude::*;
@@ -30,5 +31,6 @@ impl Plugin for GamePlugin {
         app.add_plugins(combat::CombatPlugin);
         app.add_plugins(announcer::AnnouncerPlugin);
         app.add_plugins(progression::ProgressionPlugin);
+        app.add_plugins(shop::ShopPlugin);
     }
 }
