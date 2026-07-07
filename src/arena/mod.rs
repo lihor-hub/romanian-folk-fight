@@ -1,7 +1,9 @@
 //! Arena scene for `GameState::Fight`: placeholder scenery quads, the
-//! player's fighter (from [`PlayerCharacter`]) on the left, and a hardcoded
-//! opponent on the right. Later issues (combat engine, HUD, sprites) build on
-//! this scene; the anchor constants are reused by the animation work.
+//! player's fighter (from [`PlayerCharacter`]) on the left, and the current
+//! [`LadderProgress`] opponent from the folklore roster on the right —
+//! attributes (lap-scaled), AI profile, and equipment all come from the
+//! ladder data. Later issues (sprites, animation) build on this scene; the
+//! anchor constants are reused by the animation work.
 
 use bevy::prelude::*;
 
@@ -9,7 +11,9 @@ use crate::character::{Attributes, EnemyFighter, PlayerFighter, spawn_fighter};
 use crate::combat::AiProfile;
 use crate::core::{GameState, despawn_screen};
 use crate::creation::PlayerCharacter;
+use crate::items::Equipment;
 use crate::menu::CREAM;
+use crate::roster::{Boss, LadderProgress};
 
 /// Logical resolution the scene is designed for (the window in `main.rs`).
 pub const ARENA_WIDTH: f32 = 800.0;
@@ -32,15 +36,6 @@ pub const PLAYER_ANCHOR: Transform = Transform::from_xyz(-220.0, FIGHTER_Y, 0.0)
 /// Where the opponent stands, facing left; mirrors [`PLAYER_ANCHOR`].
 pub const ENEMY_ANCHOR: Transform = Transform::from_xyz(220.0, FIGHTER_Y, 0.0);
 
-/// The hardcoded Phase 1 opponent; the opponent ladder (Phase 3) replaces it.
-const ENEMY_NAME: &str = "Strigoi";
-const ENEMY_ATTRIBUTES: Attributes = Attributes {
-    putere: 2,
-    agilitate: 2,
-    vitalitate: 2,
-    noroc: 1,
-};
-
 // Placeholder palette; real backgrounds and sprites arrive in Phase 4.
 const SKY_COLOR: Color = Color::srgb(0.10, 0.09, 0.16);
 const GROUND_COLOR: Color = Color::srgb(0.30, 0.22, 0.14);
@@ -53,6 +48,9 @@ const PILLAR_X: f32 = 350.0;
 
 /// Vertical offset of the name label above a fighter's body center.
 const LABEL_OFFSET_Y: f32 = FIGHTER_SIZE.y / 2.0 + 24.0;
+
+/// Name-label color for boss opponents; regular fighters use [`CREAM`].
+pub const BOSS_LABEL_COLOR: Color = Color::srgb(0.95, 0.45, 0.20);
 
 /// Marker for every arena entity; all of them despawn on
 /// `OnExit(GameState::Fight)` via [`despawn_screen`].
@@ -68,14 +66,23 @@ impl Plugin for ArenaPlugin {
     }
 }
 
-/// Builds the whole fight scene: scenery quads plus the two fighters at their
-/// anchors. Skips (with a warning) if no [`PlayerCharacter`] was confirmed,
-/// which only happens if the state flow is driven out of order.
-fn spawn_arena(mut commands: Commands, player: Option<Res<PlayerCharacter>>) {
+/// Builds the whole fight scene: scenery quads, the player's fighter, and
+/// the current ladder opponent (attributes lap-scaled, AI profile and
+/// equipment from the roster data; bosses get the [`Boss`] tag and the
+/// distinct label color). Skips (with a warning) if no [`PlayerCharacter`]
+/// was confirmed, which only happens if the state flow is driven out of
+/// order.
+fn spawn_arena(
+    mut commands: Commands,
+    player: Option<Res<PlayerCharacter>>,
+    ladder: Option<Res<LadderProgress>>,
+) {
     let Some(player) = player else {
         warn!("entered GameState::Fight without a PlayerCharacter; arena not spawned");
         return;
     };
+    let ladder = ladder.map(|ladder| *ladder).unwrap_or_default();
+    let opponent = ladder.opponent();
     spawn_scenery(&mut commands);
     spawn_arena_fighter(
         &mut commands,
@@ -84,21 +91,40 @@ fn spawn_arena(mut commands: Commands, player: Option<Res<PlayerCharacter>>) {
         PlayerFighter,
         PLAYER_ANCHOR,
         PLAYER_COLOR,
+        CREAM,
         // The player faces right, towards the opponent.
         false,
     );
-    spawn_arena_fighter(
+    let enemy = spawn_arena_fighter(
         &mut commands,
-        ENEMY_NAME,
-        ENEMY_ATTRIBUTES,
-        // The Strigoi fights with the default balanced aggression; the
-        // opponent ladder issue tunes profiles per archetype.
-        (EnemyFighter, AiProfile::default()),
+        ladder.display_name(),
+        ladder.attributes(),
+        (
+            EnemyFighter,
+            AiProfile {
+                aggression: opponent.aggression,
+            },
+        ),
         ENEMY_ANCHOR,
         ENEMY_COLOR,
+        if opponent.is_boss {
+            BOSS_LABEL_COLOR
+        } else {
+            CREAM
+        },
         // The opponent faces left, back towards the player.
         true,
     );
+    let mut equipment = Equipment::default();
+    for &id in opponent.equipment {
+        equipment.equip(id);
+    }
+    commands.entity(enemy).insert(equipment);
+    if opponent.is_boss {
+        commands.entity(enemy).insert(Boss {
+            intro_line: opponent.intro_line,
+        });
+    }
 }
 
 /// Placeholder scenery: sky backdrop, ground strip, and two side pillars,
@@ -125,7 +151,9 @@ fn spawn_scenery(commands: &mut Commands) {
 
 /// Spawns one fighter through the shared [`spawn_fighter`] (so it carries the
 /// #8 components and full pools), then dresses it with the arena visuals: a
-/// colored body quad at its anchor and a world-space name label above.
+/// colored body quad at its anchor and a world-space name label above (in
+/// `label_color`, so bosses read differently at a glance).
+#[allow(clippy::too_many_arguments)]
 fn spawn_arena_fighter(
     commands: &mut Commands,
     name: impl Into<String>,
@@ -133,8 +161,9 @@ fn spawn_arena_fighter(
     marker: impl Bundle,
     anchor: Transform,
     color: Color,
+    label_color: Color,
     flip_x: bool,
-) {
+) -> Entity {
     let name = name.into();
     let label = name.clone();
     let fighter = spawn_fighter(commands, name, attrs, marker);
@@ -155,10 +184,11 @@ fn spawn_arena_fighter(
                     font_size: FontSize::Px(20.0),
                     ..default()
                 },
-                TextColor(CREAM),
+                TextColor(label_color),
                 Transform::from_xyz(0.0, LABEL_OFFSET_Y, 0.1),
             ));
         });
+    fighter
 }
 
 #[cfg(test)]
@@ -166,6 +196,8 @@ mod tests {
     use super::*;
     use crate::character::{Fighter, FighterName, Health, Stamina, stats};
     use crate::core::CorePlugin;
+    use crate::items::{ItemId, Slot};
+    use crate::roster::LADDER;
     use bevy::state::app::StatesPlugin;
 
     const PLAYER_ATTRIBUTES: Attributes = Attributes {
@@ -182,11 +214,19 @@ mod tests {
         }
     }
 
-    /// Headless app already inside the fight arena.
+    /// Headless app already inside the fight arena, at the start of the run
+    /// (first ladder opponent: the Hoț de codru).
     fn test_app() -> App {
+        test_app_at(LadderProgress::default())
+    }
+
+    /// Headless app already inside the fight arena, at `progress` on the
+    /// ladder.
+    fn test_app_at(progress: LadderProgress) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, ArenaPlugin));
         app.insert_resource(player_character());
+        app.insert_resource(progress);
         app.update();
         app.world_mut()
             .resource_mut::<NextState<GameState>>()
@@ -247,7 +287,7 @@ mod tests {
                     max: 40,
                 },
             )],
-            "exactly one Strigoi (2/2/2/1) at full pools"
+            "exactly one Hoț de codru (2/2/2/1) at full pools"
         );
     }
 
@@ -264,14 +304,20 @@ mod tests {
     }
 
     #[test]
-    fn the_enemy_carries_the_default_ai_profile_and_the_player_none() {
+    fn the_enemy_carries_its_roster_ai_profile_and_the_player_none() {
         let mut app = test_app();
         let profile = app
             .world_mut()
             .query_filtered::<&AiProfile, With<EnemyFighter>>()
             .single(app.world())
             .expect("enemy fighter has an AI profile");
-        assert_eq!(*profile, AiProfile::default(), "balanced 0.5 aggression");
+        assert_eq!(
+            *profile,
+            AiProfile {
+                aggression: LADDER[0].aggression,
+            },
+            "the Hoț de codru fights with its low roster aggression"
+        );
         assert!(
             app.world_mut()
                 .query_filtered::<&AiProfile, With<PlayerFighter>>()
@@ -320,7 +366,83 @@ mod tests {
         labels.sort();
         assert_eq!(
             labels,
-            vec!["Făt-Frumos".to_string(), "Strigoi".to_string()]
+            vec!["Făt-Frumos".to_string(), "Hoț de codru".to_string()]
+        );
+    }
+
+    /// The enemy's `(FighterName, Attributes, Equipment, Option<Boss>)` and
+    /// its label's `TextColor`.
+    fn enemy_snapshot(app: &mut App) -> (String, Attributes, Equipment, Option<Boss>, Color) {
+        let (entity, name, attrs, equipment, boss) = app
+            .world_mut()
+            .query_filtered::<(Entity, &FighterName, &Attributes, &Equipment, Option<&Boss>), With<EnemyFighter>>()
+            .single(app.world())
+            .expect("exactly one enemy fighter");
+        let (name, attrs, equipment, boss) =
+            (name.0.clone(), *attrs, equipment.clone(), boss.copied());
+        let label_color = app
+            .world_mut()
+            .query::<(&TextColor, &ChildOf)>()
+            .iter(app.world())
+            .find(|(_, child_of)| child_of.parent() == entity)
+            .map(|(color, _)| color.0)
+            .expect("the enemy has a name label");
+        (name, attrs, equipment, boss, label_color)
+    }
+
+    #[test]
+    fn the_ladder_position_picks_the_spawned_opponent() {
+        // LadderProgress(4) is the acceptance-criteria fight: Muma Pădurii,
+        // the first boss.
+        let mut app = test_app_at(LadderProgress(4));
+        let (name, attrs, _, boss, label_color) = enemy_snapshot(&mut app);
+        assert_eq!(name, "Muma Pădurii");
+        assert_eq!(attrs, LADDER[4].attrs);
+        assert_eq!(
+            boss,
+            Some(Boss {
+                intro_line: LADDER[4].intro_line,
+            }),
+            "the boss flag rides on the fighter"
+        );
+        assert_eq!(label_color, BOSS_LABEL_COLOR, "boss label color");
+    }
+
+    #[test]
+    fn a_regular_opponent_carries_no_boss_tag_and_the_cream_label() {
+        let mut app = test_app();
+        let (name, _, equipment, boss, label_color) = enemy_snapshot(&mut app);
+        assert_eq!(name, "Hoț de codru");
+        assert_eq!(boss, None);
+        assert_eq!(label_color, CREAM);
+        assert_eq!(equipment, Equipment::default(), "the Hoț fights bare");
+    }
+
+    #[test]
+    fn equipped_opponents_spawn_with_their_roster_gear() {
+        let mut app = test_app_at(LadderProgress(9));
+        let (name, _, equipment, boss, _) = enemy_snapshot(&mut app);
+        assert_eq!(name, "Zmeul Zmeilor");
+        assert!(boss.is_some());
+        assert_eq!(
+            equipment.equipped(Slot::Weapon),
+            Some(ItemId::BuzduganCuTreiPeceti)
+        );
+        assert_eq!(equipment.equipped(Slot::Torso), Some(ItemId::CamasaDeZale));
+    }
+
+    #[test]
+    fn a_second_lap_opponent_is_stronger_and_labeled_with_the_lap() {
+        let mut app = test_app_at(LadderProgress(10));
+        let (name, attrs, _, boss, _) = enemy_snapshot(&mut app);
+        assert_eq!(name, "Hoț de codru (Turul 2)");
+        assert_eq!(boss, None);
+        use crate::roster::attribute_total;
+        let total = attribute_total(&attrs);
+        assert_eq!(total, 8, "total 7 scaled by 1.2 rounds to 8");
+        assert!(
+            total > attribute_total(&LADDER[0].attrs),
+            "lap 2 is measurably stronger"
         );
     }
 
