@@ -656,6 +656,7 @@ mod tests {
         let mut app = test_app();
         app.world_mut().write_message(CombatLogEvent {
             actor: crate::combat::CombatSide::Player,
+            action: crate::combat::CombatAction::QuickStrike,
             event: CombatEvent::Hit { dmg: 4 },
         });
         app.update();
