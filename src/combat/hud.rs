@@ -556,7 +556,7 @@ mod tests {
     use rand_chacha::ChaCha8Rng;
 
     /// Same player build as the combat systems tests: putere 4 (damage 6),
-    /// agilitate 2 (ties the Strigoi), vitalitate 4 (90 hp, 50 stamina).
+    /// agilitate 2 (ties the Hoț de codru), vitalitate 4 (90 hp, 50 stamina).
     const PLAYER_ATTRIBUTES: Attributes = Attributes {
         putere: 4,
         agilitate: 2,
@@ -844,7 +844,7 @@ mod tests {
         );
         assert_eq!(
             label_text(&mut app, HudLabel::Name(CombatSide::Enemy)),
-            "Strigoi"
+            "Hoț de codru"
         );
         assert_eq!(
             label_text(
@@ -895,8 +895,8 @@ mod tests {
         );
         assert_eq!(
             label_text(&mut app, HudLabel::Name(CombatSide::Enemy)),
-            "Strigoi",
-            "enemies have no level until the roster issue"
+            "Hoț de codru",
+            "enemy panels show the roster name without a level"
         );
     }
 
@@ -962,7 +962,7 @@ mod tests {
             lines,
             vec![
                 "Făt-Frumos lovește pentru 6!",
-                "Strigoi se odihnește și recuperează 20 stamina.",
+                "Hoț de codru se odihnește și recuperează 20 stamina.",
             ]
         );
         assert_eq!(log_text(&mut app), lines.join("\n"), "text node in sync");
@@ -1039,7 +1039,7 @@ mod tests {
         assert_eq!(enemy_pools(&mut app).0, 0, "enemy is defeated");
         assert!(player_pools(&mut app).0 > 0, "player survives");
         assert!(
-            log_text(&mut app).contains("Strigoi este învins!"),
+            log_text(&mut app).contains("Hoț de codru este învins!"),
             "the defeat is logged"
         );
         for action in [

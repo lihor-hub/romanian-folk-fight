@@ -18,6 +18,7 @@ use crate::character::{EnemyFighter, FighterName, PlayerFighter};
 use crate::combat::{CombatEvent, CombatLogEvent, CombatRng, CombatSide};
 use crate::core::{GameState, despawn_screen};
 use crate::menu::CREAM;
+use crate::roster::Boss;
 
 pub use lines::LineKey;
 
@@ -41,9 +42,9 @@ struct BannerPanel;
 #[derive(Component)]
 struct BannerText;
 
-/// A request to announce something outside the combat-event stream. The
-/// fight-start hook is written by this plugin; the roster issue writes
-/// [`LineKey::BossIntro`] requests through the same message.
+/// A request to announce something outside the combat-event stream: the
+/// fight-start hook, and the [`LineKey::BossIntro`] written when the roster
+/// spawns a [`Boss`] opponent.
 #[derive(Message, Debug, Clone)]
 pub struct AnnouncementRequest {
     /// Which pool to draw from.
@@ -54,15 +55,21 @@ pub struct AnnouncementRequest {
     pub opponent: String,
     /// Fills `{dmg}`/`{amount}`.
     pub value: i32,
+    /// A verbatim line shown instead of a pool draw (placeholders are still
+    /// filled); bosses announce their own roster intro line this way.
+    pub line: Option<String>,
 }
 
 /// Per-fight announcer bookkeeping: the last pick per pool (for the
-/// no-immediate-repeat rule), the banner lifetime, and the fight-start latch.
+/// no-immediate-repeat rule), the banner lifetime, the fight-start latch,
+/// and the boss-intro hold that keeps the intro on screen for its full
+/// lifetime even while the opening exchange already logs combat events.
 #[derive(Resource, Debug)]
 pub struct AnnouncerState {
     last: [Option<usize>; LineKey::COUNT],
     timer: Timer,
     fight_announced: bool,
+    hold: bool,
 }
 
 impl Default for AnnouncerState {
@@ -75,6 +82,7 @@ impl Default for AnnouncerState {
             last: [None; LineKey::COUNT],
             timer,
             fight_announced: false,
+            hold: false,
         }
     }
 }
@@ -259,12 +267,22 @@ impl BannerWidgets<'_, '_> {
 type NameOf<'w, 's, Side, Other> =
     Query<'w, 's, &'static FighterName, (With<Side>, Without<Other>)>;
 
+/// Query for the enemy's name plus its optional [`Boss`] tag.
+type EnemyIntro<'w, 's> = Query<
+    'w,
+    's,
+    (&'static FighterName, Option<&'static Boss>),
+    (With<EnemyFighter>, Without<PlayerFighter>),
+>;
+
 /// Announces the fight once per fight, as soon as both fighters exist (they
-/// are spawned by the arena's own `OnEnter` system).
+/// are spawned by the arena's own `OnEnter` system). Against a [`Boss`]
+/// opponent, the boss's own roster intro line follows in the same frame and
+/// wins the banner.
 fn announce_fight_start(
     state: Option<ResMut<AnnouncerState>>,
     player: NameOf<PlayerFighter, EnemyFighter>,
-    enemy: NameOf<EnemyFighter, PlayerFighter>,
+    enemy: EnemyIntro,
     mut requests: MessageWriter<AnnouncementRequest>,
 ) {
     let Some(mut state) = state else {
@@ -273,7 +291,7 @@ fn announce_fight_start(
     if state.fight_announced {
         return;
     }
-    let (Ok(player), Ok(enemy)) = (player.single(), enemy.single()) else {
+    let (Ok(player), Ok((enemy, boss))) = (player.single(), enemy.single()) else {
         return;
     };
     state.fight_announced = true;
@@ -282,7 +300,17 @@ fn announce_fight_start(
         actor: player.0.clone(),
         opponent: enemy.0.clone(),
         value: 0,
+        line: None,
     });
+    if let Some(boss) = boss {
+        requests.write(AnnouncementRequest {
+            key: LineKey::BossIntro,
+            actor: player.0.clone(),
+            opponent: enemy.0.clone(),
+            value: 0,
+            line: Some(boss.intro_line.to_string()),
+        });
+    }
 }
 
 /// Turns this frame's [`AnnouncementRequest`]s and [`CombatLogEvent`]s into
@@ -301,17 +329,29 @@ fn show_announcements(
     };
     let mut line = None;
     for request in requests.read() {
-        line = Some(state.compose(
-            request.key,
-            &request.actor,
-            &request.opponent,
-            request.value,
-            &mut rng.0,
-        ));
+        line = Some(match &request.line {
+            Some(template) => {
+                fill_placeholders(template, &request.actor, &request.opponent, request.value)
+            }
+            None => state.compose(
+                request.key,
+                &request.actor,
+                &request.opponent,
+                request.value,
+                &mut rng.0,
+            ),
+        });
+        // A boss intro holds the banner for its full lifetime: a fast boss
+        // acts in the very same frame, and its opening strike line must not
+        // eat the intro (the HUD log still records the exchange).
+        state.hold = request.key == LineKey::BossIntro;
     }
     let player_name = player.single().map(|n| n.0.as_str()).unwrap_or("?");
     let enemy_name = enemy.single().map(|n| n.0.as_str()).unwrap_or("?");
     for CombatLogEvent { actor, event } in events.read().copied() {
+        if state.hold {
+            continue;
+        }
         let (actor_name, opponent_name) = match actor {
             CombatSide::Player => (player_name, enemy_name),
             CombatSide::Enemy => (enemy_name, player_name),
@@ -340,6 +380,7 @@ fn expire_banner(
     }
     state.timer.tick(time.delta());
     if state.timer.is_finished() {
+        state.hold = false;
         banner.hide();
     } else {
         let remaining = state.timer.remaining_secs();
@@ -481,16 +522,25 @@ mod tests {
         noroc: 3,
     };
 
-    /// Headless app on the fight screen with a fixed duel RNG.
+    /// Headless app on the fight screen with a fixed duel RNG, facing the
+    /// first ladder opponent (the Hoț de codru).
     fn test_app() -> App {
+        test_app_at(crate::roster::LadderProgress::default(), PLAYER_ATTRIBUTES)
+    }
+
+    /// Headless app on the fight screen at `progress` on the ladder. The
+    /// player build must not be out-paced by the opponent, or the enemy's
+    /// opening action overwrites the fight-start banner in the same frame.
+    fn test_app_at(progress: crate::roster::LadderProgress, attributes: Attributes) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin));
         app.add_plugins((ArenaPlugin, CombatPlugin, AnnouncerPlugin));
         app.init_resource::<ButtonInput<KeyCode>>();
         app.insert_resource(PlayerCharacter {
             name: "Făt-Frumos".to_string(),
-            attributes: PLAYER_ATTRIBUTES,
+            attributes,
         });
+        app.insert_resource(progress);
         app.insert_resource(CombatRng(ChaCha8Rng::seed_from_u64(9)));
         app.update();
         app.world_mut()
@@ -537,10 +587,57 @@ mod tests {
         let mut app = test_app();
         let text = banner_text(&mut app);
         assert!(
-            text.contains("Făt-Frumos") && text.contains("Strigoi"),
+            text.contains("Făt-Frumos") && text.contains("Hoț de codru"),
             "fight-start line names both fighters: {text}"
         );
         assert_eq!(banner_visibility(&mut app), Visibility::Visible);
+    }
+
+    #[test]
+    fn entering_a_boss_fight_opens_with_the_boss_own_intro_line() {
+        // LadderProgress(4) spawns Muma Pădurii, the first boss; the player
+        // ties her agilitate 3 so the opening turn stays with the player.
+        let mut app = test_app_at(
+            crate::roster::LadderProgress(4),
+            Attributes {
+                agilitate: 3,
+                ..PLAYER_ATTRIBUTES
+            },
+        );
+        assert_eq!(
+            banner_text(&mut app),
+            crate::roster::LADDER[4].intro_line,
+            "the boss's roster intro line wins the banner"
+        );
+        assert_eq!(banner_visibility(&mut app), Visibility::Visible);
+    }
+
+    #[test]
+    fn the_boss_intro_outlives_the_opening_exchange_then_events_resume() {
+        // A fast boss strikes in the same breath as its intro; the intro
+        // must hold the banner for its full lifetime anyway.
+        let mut app = test_app_at(
+            crate::roster::LadderProgress(4),
+            Attributes {
+                agilitate: 3,
+                ..PLAYER_ATTRIBUTES
+            },
+        );
+        let intro = crate::roster::LADDER[4].intro_line;
+        write_event(&mut app, CombatSide::Enemy, CombatEvent::Hit { dmg: 9 });
+        assert_eq!(
+            banner_text(&mut app),
+            intro,
+            "combat lines never eat a live boss intro"
+        );
+
+        expire_current_line(&mut app);
+        write_event(&mut app, CombatSide::Player, CombatEvent::Hit { dmg: 6 });
+        let text = banner_text(&mut app);
+        assert!(
+            text.contains("Făt-Frumos") && text.contains('6'),
+            "after the intro expires the event lines take over: {text}"
+        );
     }
 
     #[test]
@@ -565,7 +662,7 @@ mod tests {
         );
         let text = banner_text(&mut app);
         assert!(
-            text.contains("Strigoi") && !text.contains("Făt-Frumos"),
+            text.contains("Hoț de codru") && !text.contains("Făt-Frumos"),
             "rest line names the resting enemy, not the player: {text}"
         );
     }
@@ -576,7 +673,7 @@ mod tests {
         write_event(&mut app, CombatSide::Player, CombatEvent::Defeated);
         let text = banner_text(&mut app);
         assert!(
-            text.contains("Strigoi"),
+            text.contains("Hoț de codru"),
             "the player's victory names the enemy as the loser: {text}"
         );
     }
@@ -606,7 +703,7 @@ mod tests {
         );
         let text = banner_text(&mut app);
         assert!(
-            text.contains("Strigoi"),
+            text.contains("Hoț de codru"),
             "guard line names the actor: {text}"
         );
         assert!(
@@ -623,6 +720,7 @@ mod tests {
             actor: "Făt-Frumos".to_string(),
             opponent: "Zmeul Zmeilor".to_string(),
             value: 0,
+            line: None,
         });
         app.update();
         let text = banner_text(&mut app);

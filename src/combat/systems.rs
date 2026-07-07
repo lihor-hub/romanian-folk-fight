@@ -355,7 +355,7 @@ mod tests {
     use rand::RngExt as _;
 
     /// Same player build as the arena tests: putere 4 (damage 6), agilitate
-    /// 2 (ties the Strigoi), vitalitate 4 (90 hp, 50 stamina), noroc 3.
+    /// 2 (ties the Hoț de codru), vitalitate 4 (90 hp, 50 stamina), noroc 3.
     const PLAYER_ATTRIBUTES: Attributes = Attributes {
         putere: 4,
         agilitate: 2,
@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn the_turn_opens_with_the_player_on_an_agility_tie() {
-        let mut app = test_app(); // player agilitate 2 vs Strigoi 2
+        let mut app = test_app(); // player agilitate 2 vs Hoț de codru 2
         assert_eq!(
             turn(&app),
             CombatTurn {
@@ -481,7 +481,7 @@ mod tests {
     #[test]
     fn a_faster_enemy_opens_the_round_and_acts_immediately() {
         let mut app = test_app_with(Attributes {
-            agilitate: 1, // Strigoi has 2
+            agilitate: 1, // the Hoț de codru has 2
             ..PLAYER_ATTRIBUTES
         });
         // The enemy opened via the AI and passed the turn. Whatever it

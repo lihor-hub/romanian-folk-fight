@@ -388,7 +388,7 @@ mod tests {
     }
 
     /// Same player build as the arena/combat tests: agilitate 2 ties the
-    /// Strigoi, so the player opens and combat idles without input.
+    /// Hoț de codru, so the player opens and combat idles without input.
     const PLAYER_ATTRIBUTES: Attributes = Attributes {
         putere: 4,
         agilitate: 2,
@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn the_victory_screen_shows_the_payout_and_the_credited_wallet() {
         let mut app = test_app();
-        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
         set_state(&mut app, GameState::FightResult);
 
         let texts = texts(&mut app);
@@ -514,7 +514,7 @@ mod tests {
     #[test]
     fn the_victory_screen_shows_the_xp_progress_after_the_award() {
         let mut app = test_app();
-        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
         set_state(&mut app, GameState::FightResult);
 
         let texts = texts(&mut app);
@@ -542,7 +542,7 @@ mod tests {
             xp: 0,
             unspent_points: 2,
         });
-        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
         set_state(&mut app, GameState::FightResult);
 
         assert_eq!(count::<AllocationPanel>(&mut app), 1, "panel spawned");
@@ -572,7 +572,7 @@ mod tests {
             xp: 0,
             unspent_points: 2,
         });
-        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
         set_state(&mut app, GameState::FightResult);
 
         press_allocate_button(
@@ -616,7 +616,7 @@ mod tests {
             xp: 10,
             unspent_points: 3,
         });
-        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
         set_state(&mut app, GameState::FightResult);
         // A wounded player fighter left over from the fight: 41/60 HP,
         // 10/35 stamina (the default build's pools).
@@ -694,7 +694,7 @@ mod tests {
             xp: 0,
             unspent_points: 2,
         });
-        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
         set_state(&mut app, GameState::FightResult);
 
         press_allocate_button(&mut app, AllocateAction::Increase(AttributeKind::Putere));
@@ -728,7 +728,7 @@ mod tests {
     #[test]
     fn la_pravalie_leads_to_the_shop_and_the_screen_despawns() {
         let mut app = test_app();
-        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
         set_state(&mut app, GameState::FightResult);
 
         press_result_button(&mut app, ResultAction::GoToShop);
@@ -757,13 +757,14 @@ mod tests {
     fn back_to_menu_resets_the_run() {
         let mut app = test_app();
         app.insert_resource(Wallet(123));
+        app.insert_resource(crate::roster::LadderProgress(7));
         app.insert_resource(default_character());
         app.insert_resource(Level {
             level: 4,
             xp: 55,
             unspent_points: 3,
         });
-        app.insert_resource(FightOutcome::from_defeat(CombatSide::Enemy, 1));
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Enemy, 1, false));
         set_state(&mut app, GameState::GameOver);
 
         press_back_to_menu(&mut app);
@@ -778,6 +779,11 @@ mod tests {
             *app.world().resource::<Level>(),
             Level::default(),
             "level back to 1 with nothing gathered"
+        );
+        assert_eq!(
+            *app.world().resource::<crate::roster::LadderProgress>(),
+            crate::roster::LadderProgress::default(),
+            "the ladder starts over with the run"
         );
         assert!(
             app.world().get_resource::<PlayerCharacter>().is_none(),

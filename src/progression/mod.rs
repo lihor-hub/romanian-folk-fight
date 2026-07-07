@@ -17,6 +17,7 @@ use bevy::prelude::*;
 use crate::combat::{CombatEvent, CombatLogEvent, CombatSide};
 use crate::core::{GameState, despawn_screen};
 use crate::creation::PlayerCharacter;
+use crate::roster::LadderProgress;
 use crate::shop::{OwnedItems, PlayerEquipment};
 
 /// Galbeni a fresh run starts with, so the first shop visit isn't pointless.
@@ -27,11 +28,6 @@ pub const REWARD_BASE: u32 = 25;
 pub const REWARD_PER_LEVEL: u32 = 10;
 /// XP payout per enemy level for a victory.
 pub const XP_PER_LEVEL: u32 = 20;
-/// Level of the hardcoded Strigoi; the roster issue supplies real values.
-pub const PLACEHOLDER_ENEMY_LEVEL: u32 = 1;
-/// Whether the hardcoded Strigoi is a boss; the roster issue supplies real
-/// flags.
-pub const PLACEHOLDER_ENEMY_BOSS: bool = false;
 /// Seconds between the killing blow and leaving the fight screen, so the
 /// final hit (and its announcer line) stays visible.
 pub const FIGHT_END_DELAY_SECONDS: f32 = 1.5;
@@ -42,8 +38,7 @@ pub fn fight_reward(enemy_level: u32) -> u32 {
 }
 
 /// XP for beating an enemy of `enemy_level`: `20 * enemy_level`, doubled for
-/// bosses (the roster issue supplies the flag; until then every enemy is
-/// level 1, non-boss).
+/// bosses (level and flag come from the opponent ladder).
 pub fn fight_xp(enemy_level: u32, is_boss: bool) -> u32 {
     let base = XP_PER_LEVEL * enemy_level;
     if is_boss { 2 * base } else { base }
@@ -80,14 +75,13 @@ pub struct FightOutcome {
 
 impl FightOutcome {
     /// The outcome recorded when `winner` lands the killing blow on an enemy
-    /// of `enemy_level`. The boss flag is hardcoded until the roster issue
-    /// supplies per-enemy values.
-    pub fn from_defeat(winner: CombatSide, enemy_level: u32) -> Self {
+    /// of `enemy_level`; bosses (`is_boss`) pay double XP.
+    pub fn from_defeat(winner: CombatSide, enemy_level: u32, is_boss: bool) -> Self {
         Self {
             winner,
             loser: winner.opponent(),
             reward: fight_reward(enemy_level),
-            xp: fight_xp(enemy_level, PLACEHOLDER_ENEMY_BOSS),
+            xp: fight_xp(enemy_level, is_boss),
             rewarded: false,
         }
     }
@@ -175,13 +169,19 @@ fn clear_level_up_draft(mut commands: Commands) {
 }
 
 /// Watches the combat log for the killing blow: records the [`FightOutcome`]
-/// (the actor of the `Defeated` event is the winner) and arms the
+/// (the actor of the `Defeated` event is the winner, the reward and XP come
+/// from the current ladder opponent's level and boss flag) and arms the
 /// end-of-fight delay. Only the first `Defeated` of a fight counts.
 fn detect_fight_end(
     mut commands: Commands,
     mut events: MessageReader<CombatLogEvent>,
     outcome: Option<Res<FightOutcome>>,
+    ladder: Option<Res<LadderProgress>>,
 ) {
+    let (enemy_level, enemy_is_boss) = ladder.map_or((1, false), |ladder| {
+        let opponent = ladder.opponent();
+        (opponent.level, opponent.is_boss)
+    });
     let mut already_ended = outcome.is_some();
     for event in events.read() {
         if already_ended || event.event != CombatEvent::Defeated {
@@ -190,7 +190,8 @@ fn detect_fight_end(
         already_ended = true;
         commands.insert_resource(FightOutcome::from_defeat(
             event.actor,
-            PLACEHOLDER_ENEMY_LEVEL,
+            enemy_level,
+            enemy_is_boss,
         ));
         commands.insert_resource(FightEndDelay(Timer::from_seconds(
             FIGHT_END_DELAY_SECONDS,
@@ -222,13 +223,15 @@ fn tick_fight_end_delay(
 }
 
 /// Credits the victory payout — galbeni to the wallet, XP to [`Level`] with
-/// every level-up it affords — exactly once per fight; the `rewarded` flag
-/// guards against a double award if the result screen is re-entered (e.g.
-/// via the shop) before the next fight clears the outcome.
+/// every level-up it affords — and advances the opponent ladder, exactly
+/// once per fight; the `rewarded` flag guards against a double award (or
+/// double advance) if the result screen is re-entered (e.g. via the shop)
+/// before the next fight clears the outcome.
 fn award_victory(
     mut wallet: ResMut<Wallet>,
     mut level: ResMut<Level>,
     outcome: Option<ResMut<FightOutcome>>,
+    ladder: Option<ResMut<LadderProgress>>,
 ) {
     let Some(mut outcome) = outcome else {
         warn!("entered GameState::FightResult without a FightOutcome; nothing to award");
@@ -239,15 +242,20 @@ fn award_victory(
     }
     wallet.0 += outcome.reward;
     level.gain_xp(outcome.xp);
+    if let Some(mut ladder) = ladder {
+        ladder.advance();
+    }
     outcome.rewarded = true;
 }
 
 /// Resets every run-scoped resource so the next run starts clean: a fresh
 /// [`Wallet`], level 1 with no XP or points, no owned or equipped shop gear,
-/// no confirmed [`PlayerCharacter`], no stale [`FightOutcome`].
+/// the opponent ladder back at the first rung, no confirmed
+/// [`PlayerCharacter`], no stale [`FightOutcome`].
 pub(crate) fn reset_run(commands: &mut Commands) {
     commands.insert_resource(Wallet::default());
     commands.insert_resource(Level::default());
+    commands.insert_resource(LadderProgress::default());
     commands.insert_resource(OwnedItems::default());
     commands.insert_resource(PlayerEquipment::default());
     commands.remove_resource::<PlayerCharacter>();
@@ -341,9 +349,10 @@ mod tests {
                 winner: CombatSide::Player,
                 loser: CombatSide::Enemy,
                 reward: 35,
-                xp: fight_xp(PLACEHOLDER_ENEMY_LEVEL, PLACEHOLDER_ENEMY_BOSS),
+                xp: fight_xp(1, false),
                 rewarded: false,
-            }
+            },
+            "without a ladder the outcome falls back to a level-1 non-boss"
         );
         app.update();
         assert_eq!(state(&app), GameState::Fight, "still waiting out the delay");
@@ -384,7 +393,7 @@ mod tests {
     #[test]
     fn victory_credits_the_wallet_exactly_once() {
         let mut app = test_app();
-        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
         set_state(&mut app, GameState::FightResult);
         assert_eq!(wallet(&app), 85, "50 + reward 35, credited on entry");
         assert!(app.world().resource::<FightOutcome>().rewarded);
@@ -398,7 +407,7 @@ mod tests {
     #[test]
     fn an_enemy_victory_never_credits_the_wallet() {
         let mut app = test_app();
-        app.insert_resource(FightOutcome::from_defeat(CombatSide::Enemy, 1));
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Enemy, 1, false));
         set_state(&mut app, GameState::FightResult);
         assert_eq!(wallet(&app), 50, "only the player's wins pay out");
         assert_eq!(
@@ -411,7 +420,7 @@ mod tests {
     #[test]
     fn victory_grants_xp_exactly_once() {
         let mut app = test_app();
-        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
         set_state(&mut app, GameState::FightResult);
         assert_eq!(
             *app.world().resource::<Level>(),
@@ -437,7 +446,7 @@ mod tests {
             xp: 90,
             unspent_points: 0,
         });
-        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
         set_state(&mut app, GameState::FightResult);
         assert_eq!(
             *app.world().resource::<Level>(),
@@ -453,11 +462,62 @@ mod tests {
     #[test]
     fn entering_a_new_fight_clears_the_previous_outcome() {
         let mut app = test_app();
-        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1));
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
         set_state(&mut app, GameState::Fight);
         assert!(
             app.world().get_resource::<FightOutcome>().is_none(),
             "a fresh fight has no outcome yet"
+        );
+    }
+
+    #[test]
+    fn the_outcome_takes_level_and_boss_flag_from_the_ladder() {
+        let mut app = test_app();
+        // LadderProgress(4) is the first boss fight: Muma Pădurii, level 5.
+        app.insert_resource(LadderProgress(4));
+        set_state(&mut app, GameState::Fight);
+        write_defeat(&mut app, CombatSide::Player);
+
+        let outcome = *app.world().resource::<FightOutcome>();
+        assert_eq!(outcome.reward, fight_reward(5), "level-5 payout");
+        assert_eq!(outcome.xp, fight_xp(5, true), "boss XP is doubled");
+        assert_eq!(outcome.xp, 200, "20 * 5 * 2");
+    }
+
+    #[test]
+    fn victory_advances_the_ladder_exactly_once() {
+        let mut app = test_app();
+        app.insert_resource(LadderProgress(3));
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 4, false));
+        set_state(&mut app, GameState::FightResult);
+        assert_eq!(
+            *app.world().resource::<LadderProgress>(),
+            LadderProgress(4),
+            "the win moves the run to the next opponent"
+        );
+
+        // A detour to the shop and back must not advance again.
+        set_state(&mut app, GameState::Shop);
+        set_state(&mut app, GameState::FightResult);
+        assert_eq!(
+            *app.world().resource::<LadderProgress>(),
+            LadderProgress(4),
+            "re-entry never double-advances"
+        );
+    }
+
+    #[test]
+    fn a_defeat_never_advances_the_ladder() {
+        let mut app = test_app();
+        app.insert_resource(LadderProgress(3));
+        set_state(&mut app, GameState::Fight);
+        write_defeat(&mut app, CombatSide::Enemy);
+        expire_delay(&mut app);
+        assert_eq!(state(&app), GameState::GameOver);
+        assert_eq!(
+            *app.world().resource::<LadderProgress>(),
+            LadderProgress(3),
+            "losing keeps the run on the same opponent"
         );
     }
 
