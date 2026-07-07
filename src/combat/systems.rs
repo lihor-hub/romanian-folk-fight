@@ -9,6 +9,7 @@ use rand_chacha::ChaCha8Rng;
 
 use crate::character::{Attributes, EnemyFighter, Health, PlayerFighter, Stamina};
 use crate::core::{GameState, despawn_screen};
+use crate::items::Equipment;
 
 use super::ai::{self, AiProfile};
 use super::engine::{self, CombatAction, CombatEvent};
@@ -123,6 +124,7 @@ type FighterComponents<'w, 's, Side, OtherSide> = Query<
     's,
     (
         &'static Attributes,
+        &'static Equipment,
         &'static mut Health,
         &'static mut Stamina,
     ),
@@ -276,16 +278,24 @@ fn enemy_turn(
 }
 
 /// One side's components as yielded by a [`FighterComponents`] query.
-type FighterItem<'a> = (&'a Attributes, Mut<'a, Health>, Mut<'a, Stamina>);
+type FighterItem<'a> = (
+    &'a Attributes,
+    &'a Equipment,
+    Mut<'a, Health>,
+    Mut<'a, Stamina>,
+);
 
 /// Snapshots one side's components (plus its blocking flag from the turn
-/// resource) into a pure [`engine::FighterState`].
+/// resource) into a pure [`engine::FighterState`], aggregating the equipped
+/// gear into the flat damage/armor bonuses the engine consumes.
 fn snapshot(fighter: &FighterItem, blocking: bool) -> engine::FighterState {
-    let (attributes, hp, stamina) = fighter;
+    let (attributes, equipment, hp, stamina) = fighter;
     engine::FighterState {
         hp: hp.current,
         stamina: stamina.current,
         attributes: **attributes,
+        damage_bonus: equipment.total_damage_bonus(),
+        armor: equipment.total_armor(),
         blocking,
     }
 }
@@ -311,8 +321,8 @@ fn apply_action(
     };
     let mut actor_state = snapshot(&actor, *actor_blocking);
     let mut target_state = snapshot(&target, *target_blocking);
-    let (_, mut actor_hp, mut actor_stamina) = actor;
-    let (_, mut target_hp, mut target_stamina) = target;
+    let (_, _, mut actor_hp, mut actor_stamina) = actor;
+    let (_, _, mut target_hp, mut target_stamina) = target;
 
     let events = engine::resolve_action(&mut actor_state, &mut target_state, action, &mut rng.0);
 
@@ -494,6 +504,46 @@ mod tests {
         assert_eq!(enemy_pools(&mut app), (64, 20));
         assert_eq!(player_pools(&mut app), (90, 45));
         assert_eq!(turn(&app).side, CombatSide::Player);
+    }
+
+    /// Equips `id` on the fighter marked `M`; fighters spawn with an empty
+    /// [`Equipment`], so this mirrors what the shop issue will do.
+    #[cfg(debug_assertions)]
+    fn equip<M: Component>(app: &mut App, id: crate::items::ItemId) {
+        let mut query = app.world_mut().query_filtered::<&mut Equipment, With<M>>();
+        query
+            .single_mut(app.world_mut())
+            .expect("fighter exists")
+            .equip(id);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn an_equipped_weapon_raises_the_damage_written_back() {
+        use crate::items::ItemId;
+        let mut app = test_app();
+        equip::<PlayerFighter>(&mut app, ItemId::Palos); // damage 10
+        press_vs_resting_enemy(&mut app, KeyCode::Digit1);
+        assert_eq!(
+            enemy_pools(&mut app).0,
+            54,
+            "70 hp - (base damage 6 + Paloș 10)"
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn equipped_armor_reduces_the_damage_written_back() {
+        use crate::items::ItemId;
+        let mut app = test_app();
+        equip::<EnemyFighter>(&mut app, ItemId::CojocGros); // armor 2
+        equip::<EnemyFighter>(&mut app, ItemId::CaciulaDeOaie); // armor 1
+        press_vs_resting_enemy(&mut app, KeyCode::Digit1);
+        assert_eq!(
+            enemy_pools(&mut app).0,
+            67,
+            "70 hp - (base damage 6 - armor 3)"
+        );
     }
 
     #[cfg(debug_assertions)]
