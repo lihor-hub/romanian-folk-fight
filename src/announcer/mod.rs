@@ -348,7 +348,7 @@ fn show_announcements(
     }
     let player_name = player.single().map(|n| n.0.as_str()).unwrap_or("?");
     let enemy_name = enemy.single().map(|n| n.0.as_str()).unwrap_or("?");
-    for CombatLogEvent { actor, event } in events.read().copied() {
+    for CombatLogEvent { actor, event, .. } in events.read().copied() {
         if state.hold {
             continue;
         }
@@ -567,8 +567,11 @@ mod tests {
     }
 
     fn write_event(app: &mut App, actor: CombatSide, event: CombatEvent) {
-        app.world_mut()
-            .write_message(CombatLogEvent { actor, event });
+        app.world_mut().write_message(CombatLogEvent {
+            actor,
+            action: crate::combat::CombatAction::QuickStrike,
+            event,
+        });
         app.update();
     }
 

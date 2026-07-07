@@ -67,6 +67,9 @@ pub struct PlayerActionEvent(pub CombatAction);
 pub struct CombatLogEvent {
     /// Who performed the action that produced this event.
     pub actor: CombatSide,
+    /// The action the actor performed (the arena FX shake heavy strikes
+    /// differently from regular ones).
+    pub action: CombatAction,
     /// What happened.
     pub event: CombatEvent,
 }
@@ -338,6 +341,7 @@ fn apply_action(
     for event in events {
         log.write(CombatLogEvent {
             actor: actor_side,
+            action,
             event,
         });
     }

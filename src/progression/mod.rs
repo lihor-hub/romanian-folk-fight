@@ -303,6 +303,7 @@ mod tests {
     fn write_defeat(app: &mut App, actor: CombatSide) {
         app.world_mut().write_message(CombatLogEvent {
             actor,
+            action: crate::combat::CombatAction::QuickStrike,
             event: CombatEvent::Defeated,
         });
         app.update();

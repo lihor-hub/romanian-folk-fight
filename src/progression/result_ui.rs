@@ -817,6 +817,7 @@ mod tests {
             .current = 1;
         app.world_mut().write_message(CombatLogEvent {
             actor: CombatSide::Player,
+            action: crate::combat::CombatAction::QuickStrike,
             event: CombatEvent::Defeated,
         });
         app.update();
