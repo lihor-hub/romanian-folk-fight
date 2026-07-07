@@ -293,6 +293,13 @@ impl LadderProgress {
     pub fn advance(&mut self) {
         self.0 += 1;
     }
+
+    /// Whether the current fight is the last ladder entry on lap 1 — the
+    /// lap-1 final boss whose defeat ends the run with the victory screen
+    /// (#26). Later laps loop as usual.
+    pub fn is_final_lap_one_fight(&self) -> bool {
+        self.0 == LADDER.len() - 1
+    }
 }
 
 /// Registers the ladder-position resource; the ladder itself is static data.
@@ -453,6 +460,17 @@ mod tests {
         assert_eq!(LadderProgress(19).lap(), 2);
         assert_eq!(LadderProgress(20).lap(), 3);
         assert_eq!(LadderProgress(24).opponent().name, "Muma Pădurii");
+    }
+
+    #[test]
+    fn only_the_tenth_fight_of_lap_one_is_the_final_lap_one_fight() {
+        assert!(LadderProgress(9).is_final_lap_one_fight());
+        assert!(!LadderProgress(0).is_final_lap_one_fight());
+        assert!(!LadderProgress(8).is_final_lap_one_fight());
+        assert!(
+            !LadderProgress(19).is_final_lap_one_fight(),
+            "the lap-2 Zmeul Zmeilor keeps the loop behavior"
+        );
     }
 
     #[test]
