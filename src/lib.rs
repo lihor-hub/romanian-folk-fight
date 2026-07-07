@@ -3,6 +3,7 @@
 //! Game logic lives in this library so it is unit-testable; the binary in
 //! `main.rs` only configures the window and adds [`GamePlugin`].
 
+pub mod announcer;
 pub mod arena;
 pub mod character;
 pub mod combat;
@@ -23,5 +24,6 @@ impl Plugin for GamePlugin {
         app.add_plugins(creation::CreationPlugin);
         app.add_plugins(arena::ArenaPlugin);
         app.add_plugins(combat::CombatPlugin);
+        app.add_plugins(announcer::AnnouncerPlugin);
     }
 }
