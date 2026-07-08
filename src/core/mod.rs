@@ -16,11 +16,61 @@ pub enum GameState {
     Victory,
 }
 
+/// Asset path of the bundled UI font (Alegreya variable, OFL — see
+/// `assets/CREDITS.md`). It covers the Romanian comma-below diacritics
+/// Ș/ș/Ț/ț (U+0218–U+021B) plus Ă/ă, Â/â, Î/î that Bevy's default font lacks.
+pub const UI_FONT_PATH: &str = "fonts/Alegreya-Variable.ttf";
+
+/// The game-wide UI font. Every text spawn must build its [`TextFont`]
+/// through [`UiFont::text_font`] / [`UiFont::text_font_bold`] instead of
+/// constructing one directly, so no screen falls back to the default font.
+///
+/// Defaults to `Handle::default()` so headless tests (no `AssetPlugin`)
+/// keep working; [`CorePlugin`] swaps in the real handle at startup.
+#[derive(Resource, Default)]
+pub struct UiFont {
+    pub font: Handle<Font>,
+}
+
+impl UiFont {
+    /// A [`TextFont`] of the given size using the bundled UI font.
+    pub fn text_font(&self, font_size: f32) -> TextFont {
+        TextFont {
+            font: self.font.clone().into(),
+            font_size: font_size.into(),
+            ..default()
+        }
+    }
+
+    /// Bold variant (weight 700 on the font's `wght` axis).
+    pub fn text_font_bold(&self, font_size: f32) -> TextFont {
+        TextFont {
+            weight: FontWeight::BOLD,
+            ..self.text_font(font_size)
+        }
+    }
+}
+
+/// Loads the bundled UI font into the [`UiFont`] resource. Tolerates a
+/// missing [`AssetServer`] or an uninitialized `Font` asset type (headless
+/// test apps without the text plugins) by keeping the default handle.
+fn load_ui_font(
+    mut ui_font: ResMut<UiFont>,
+    asset_server: Option<Res<AssetServer>>,
+    fonts: Option<Res<Assets<Font>>>,
+) {
+    if let (Some(asset_server), Some(_fonts)) = (asset_server, fonts) {
+        ui_font.font = asset_server.load(UI_FONT_PATH);
+    }
+}
+
 pub struct CorePlugin;
 
 impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<GameState>()
+            .init_resource::<UiFont>()
+            .add_systems(PreStartup, load_ui_font)
             .add_systems(Startup, spawn_camera);
     }
 }
@@ -70,6 +120,40 @@ mod tests {
 
     #[derive(Component)]
     struct TestScreen;
+
+    /// The bundled font must actually map the Romanian diacritics — the
+    /// comma-below letters (U+0218–U+021B) are the ones most fonts miss.
+    #[test]
+    fn bundled_font_covers_romanian_diacritics() {
+        let data = include_bytes!("../../assets/fonts/Alegreya-Variable.ttf");
+        let face = ttf_parser::Face::parse(data, 0).expect("font parses");
+        for ch in ['Ș', 'ș', 'Ț', 'ț', 'Ă', 'ă', 'Â', 'â', 'Î', 'î'] {
+            assert!(
+                face.glyph_index(ch).is_some(),
+                "font is missing glyph for {ch:?} (U+{:04X})",
+                ch as u32
+            );
+        }
+        // Regular + bold both live on the variable weight axis.
+        let wght = face
+            .variation_axes()
+            .into_iter()
+            .find(|a| a.tag == ttf_parser::Tag::from_bytes(b"wght"))
+            .expect("font has a wght axis");
+        assert!(wght.min_value <= 400.0 && wght.max_value >= 700.0);
+    }
+
+    #[test]
+    fn core_plugin_provides_ui_font_and_helpers() {
+        let mut app = test_app();
+        app.update();
+        let ui_font = app.world().resource::<UiFont>();
+        let font = ui_font.text_font(24.0);
+        assert_eq!(font.font_size, 24.0.into());
+        assert_eq!(font.weight, FontWeight::default());
+        let bold = ui_font.text_font_bold(24.0);
+        assert_eq!(bold.weight, FontWeight::BOLD);
+    }
 
     #[test]
     fn despawn_screen_removes_only_tagged_entities() {

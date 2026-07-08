@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 
-use crate::core::{GameState, despawn_screen};
+use crate::core::{GameState, UiFont, despawn_screen};
 use crate::save::{SaveStore, load_save};
 use crate::settings::SettingsOpen;
 
@@ -66,7 +66,7 @@ impl Plugin for MenuPlugin {
 /// Spawns the main menu. **Continuă** is enabled exactly when a valid save
 /// loads from the [`SaveStore`]; a corrupt or version-mismatched save is
 /// discarded by [`load_save`] and the button stays a disabled marker.
-fn spawn_main_menu(mut commands: Commands, store: Option<Res<SaveStore>>) {
+fn spawn_main_menu(mut commands: Commands, store: Option<Res<SaveStore>>, ui_font: Res<UiFont>) {
     let has_save = store.is_some_and(|store| load_save(&store).is_some());
     commands
         .spawn((
@@ -85,10 +85,7 @@ fn spawn_main_menu(mut commands: Commands, store: Option<Res<SaveStore>>) {
         .with_children(|parent| {
             parent.spawn((
                 Text::new("Romanian Folk Fight"),
-                TextFont {
-                    font_size: FontSize::Px(56.0),
-                    ..default()
-                },
+                ui_font.text_font_bold(56.0),
                 TextColor(CREAM),
                 Node {
                     margin: UiRect::bottom(Val::Px(32.0)),
@@ -96,32 +93,35 @@ fn spawn_main_menu(mut commands: Commands, store: Option<Res<SaveStore>>) {
                 },
             ));
             parent.spawn((
-                menu_button("Luptă nouă", CREAM, BUTTON_NORMAL),
+                menu_button("Luptă nouă", CREAM, BUTTON_NORMAL, &ui_font),
                 MenuAction::NewGame,
             ));
             if has_save {
                 parent.spawn((
-                    menu_button("Continuă", CREAM, BUTTON_NORMAL),
+                    menu_button("Continuă", CREAM, BUTTON_NORMAL, &ui_font),
                     MenuAction::Continue,
                 ));
             } else {
                 // No (valid) save to resume: a greyed-out, inert marker.
                 parent.spawn((
-                    menu_button("Continuă", TEXT_DISABLED, BUTTON_DISABLED),
+                    menu_button("Continuă", TEXT_DISABLED, BUTTON_DISABLED, &ui_font),
                     DisabledButton,
                 ));
             }
             parent.spawn((
-                menu_button("Setări", CREAM, BUTTON_NORMAL),
+                menu_button("Setări", CREAM, BUTTON_NORMAL, &ui_font),
                 MenuAction::Settings,
             ));
             #[cfg(not(target_arch = "wasm32"))]
-            parent.spawn((menu_button("Ieși", CREAM, BUTTON_NORMAL), MenuAction::Quit));
+            parent.spawn((
+                menu_button("Ieși", CREAM, BUTTON_NORMAL, &ui_font),
+                MenuAction::Quit,
+            ));
         });
 }
 
 /// A menu button with a centered text label.
-fn menu_button(label: &str, text_color: Color, background: Color) -> impl Bundle {
+fn menu_button(label: &str, text_color: Color, background: Color, ui_font: &UiFont) -> impl Bundle {
     (
         Button,
         Node {
@@ -134,10 +134,7 @@ fn menu_button(label: &str, text_color: Color, background: Color) -> impl Bundle
         BackgroundColor(background),
         children![(
             Text::new(label),
-            TextFont {
-                font_size: FontSize::Px(24.0),
-                ..default()
-            },
+            ui_font.text_font(24.0),
             TextColor(text_color),
         )],
     )

@@ -69,3 +69,14 @@ replacement by bespoke final audio.
 ## Web page icons and social card (issue #32)
 
 - `web/favicon.svg`, `web/favicon-32.png`, `web/apple-touch-icon.png`, `web/og-image.png` — self-generated for this project (hand-written SVG shield/embroidery mark in the game palette; PNGs rendered from the SVGs with rsvg-convert). No third-party assets. License: same as the project.
+
+## Fonts (`assets/fonts/`)
+
+| File | Font | Source | License |
+| --- | --- | --- | --- |
+| `fonts/Alegreya-Variable.ttf` | Alegreya (variable, wght 400–900) | [google/fonts `ofl/alegreya`](https://github.com/google/fonts/tree/main/ofl/alegreya), © 2011 The Alegreya Project Authors | [SIL OFL 1.1](fonts/OFL-Alegreya.txt) |
+
+Alegreya was chosen for its rustic serif feel and confirmed Latin Extended-B
+coverage: the cmap contains the Romanian comma-below letters Ș/ș/Ț/ț
+(U+0218–U+021B) as well as Ă/ă, Â/â, Î/î (verified with fontTools; see PR #27).
+The full OFL license text ships alongside the font as `fonts/OFL-Alegreya.txt`.

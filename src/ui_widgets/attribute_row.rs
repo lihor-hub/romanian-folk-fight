@@ -9,6 +9,7 @@
 use bevy::prelude::*;
 
 use crate::character::AttributeKind;
+use crate::core::UiFont;
 use crate::menu::CREAM;
 
 use super::small_button;
@@ -23,8 +24,17 @@ pub fn spawn_attribute_row(
     decrease: impl Bundle,
     increase: impl Bundle,
     value_label: impl Bundle,
+    ui_font: &UiFont,
 ) {
-    spawn_stepper_row(parent, kind.label(), value, decrease, increase, value_label);
+    spawn_stepper_row(
+        parent,
+        kind.label(),
+        value,
+        decrease,
+        increase,
+        value_label,
+        ui_font,
+    );
 }
 
 /// The generic `-` / value / `+` stepper row behind [`spawn_attribute_row`],
@@ -38,6 +48,7 @@ pub fn spawn_stepper_row(
     decrease: impl Bundle,
     increase: impl Bundle,
     value_label: impl Bundle,
+    ui_font: &UiFont,
 ) {
     parent
         .spawn(Node {
@@ -52,16 +63,9 @@ pub fn spawn_stepper_row(
                 ..default()
             })
             .with_children(|slot| {
-                slot.spawn((
-                    Text::new(label),
-                    TextFont {
-                        font_size: FontSize::Px(24.0),
-                        ..default()
-                    },
-                    TextColor(CREAM),
-                ));
+                slot.spawn((Text::new(label), ui_font.text_font(24.0), TextColor(CREAM)));
             });
-            row.spawn((small_button("-"), decrease));
+            row.spawn((small_button("-", ui_font), decrease));
             row.spawn(Node {
                 width: Val::Px(48.0),
                 justify_content: JustifyContent::Center,
@@ -70,14 +74,11 @@ pub fn spawn_stepper_row(
             .with_children(|slot| {
                 slot.spawn((
                     Text::new(value.to_string()),
-                    TextFont {
-                        font_size: FontSize::Px(24.0),
-                        ..default()
-                    },
+                    ui_font.text_font(24.0),
                     TextColor(CREAM),
                     value_label,
                 ));
             });
-            row.spawn((small_button("+"), increase));
+            row.spawn((small_button("+", ui_font), increase));
         });
 }

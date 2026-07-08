@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::character::{Attributes, PlayerFighter, stats};
-use crate::core::{GameState, despawn_screen};
+use crate::core::{GameState, UiFont, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::items::{CATALOG, Equipment, Item, ItemId, Slot};
 use crate::menu::{
@@ -237,6 +237,7 @@ fn spawn_shop_screen(
     owned: Res<OwnedItems>,
     equipment: Res<PlayerEquipment>,
     player: Option<Res<PlayerCharacter>>,
+    ui_font: Res<UiFont>,
 ) {
     let attributes = player_attributes(player);
     commands
@@ -266,18 +267,18 @@ fn spawn_shop_screen(
                 .with_children(|header| {
                     header.spawn((
                         Text::new("Prăvălia lui Moș Pintea"),
-                        TextFont {
-                            font_size: FontSize::Px(32.0),
-                            ..default()
-                        },
+                        ui_font.text_font_bold(32.0),
                         TextColor(CREAM),
                     ));
-                    header.spawn((line_text(wallet_text(&wallet), 20.0), ShopLabel::Wallet));
+                    header.spawn((
+                        line_text(wallet_text(&wallet), 20.0, &ui_font),
+                        ShopLabel::Wallet,
+                    ));
                 });
             // The catalog, grouped by slot.
             for slot in Slot::ALL {
                 parent.spawn((
-                    line_text(slot_label(slot).to_string(), 18.0),
+                    line_text(slot_label(slot).to_string(), 18.0, &ui_font),
                     Node {
                         margin: UiRect::top(Val::Px(4.0)),
                         ..default()
@@ -285,7 +286,7 @@ fn spawn_shop_screen(
                 ));
                 for item in CATALOG.iter().filter(|item| item.slot == slot) {
                     let state = ItemButtonState::of(item.id, &wallet, &owned, &equipment);
-                    spawn_item_row(parent, item, state);
+                    spawn_item_row(parent, item, state, &ui_font);
                 }
             }
             // Live stat summary: purchases visibly matter.
@@ -297,30 +298,41 @@ fn spawn_shop_screen(
                 })
                 .with_children(|panel| {
                     panel.spawn((
-                        line_text(attack_text(&attributes, &equipment), 20.0),
+                        line_text(attack_text(&attributes, &equipment), 20.0, &ui_font),
                         ShopLabel::Attack,
                     ));
-                    panel.spawn((line_text(armor_text(&equipment), 20.0), ShopLabel::Armor));
-                    panel.spawn((line_text(health_text(&attributes), 20.0), ShopLabel::Health));
+                    panel.spawn((
+                        line_text(armor_text(&equipment), 20.0, &ui_font),
+                        ShopLabel::Armor,
+                    ));
+                    panel.spawn((
+                        line_text(health_text(&attributes), 20.0, &ui_font),
+                        ShopLabel::Health,
+                    ));
                 });
-            parent.spawn((wide_button("Înapoi în arenă"), ShopAction::BackToArena));
+            parent.spawn((
+                wide_button("Înapoi în arenă", &ui_font),
+                ShopAction::BackToArena,
+            ));
         });
 }
 
 /// A cream text line of the given font size.
-fn line_text(label: String, font_size: f32) -> impl Bundle {
+fn line_text(label: String, font_size: f32, ui_font: &UiFont) -> impl Bundle {
     (
         Text::new(label),
-        TextFont {
-            font_size: FontSize::Px(font_size),
-            ..default()
-        },
+        ui_font.text_font(font_size),
         TextColor(CREAM),
     )
 }
 
 /// One catalog row: name, stat, price, and the buy/equip/equipped button.
-fn spawn_item_row(parent: &mut ChildSpawnerCommands, item: &Item, state: ItemButtonState) {
+fn spawn_item_row(
+    parent: &mut ChildSpawnerCommands,
+    item: &Item,
+    state: ItemButtonState,
+    ui_font: &UiFont,
+) {
     parent
         .spawn(Node {
             align_items: AlignItems::Center,
@@ -328,11 +340,14 @@ fn spawn_item_row(parent: &mut ChildSpawnerCommands, item: &Item, state: ItemBut
             ..default()
         })
         .with_children(|row| {
-            row.spawn((column(220.0), line_text(item.name.to_string(), 16.0)));
-            row.spawn((column(90.0), line_text(stat_text(item), 16.0)));
+            row.spawn((
+                column(220.0),
+                line_text(item.name.to_string(), 16.0, ui_font),
+            ));
+            row.spawn((column(90.0), line_text(stat_text(item), 16.0, ui_font)));
             row.spawn((
                 column(90.0),
-                line_text(format!("{} galbeni", item.price), 16.0),
+                line_text(format!("{} galbeni", item.price), 16.0, ui_font),
             ));
             let mut button = row.spawn((
                 Button,
@@ -352,10 +367,7 @@ fn spawn_item_row(parent: &mut ChildSpawnerCommands, item: &Item, state: ItemBut
             button.with_children(|button| {
                 button.spawn((
                     Text::new(state.label()),
-                    TextFont {
-                        font_size: FontSize::Px(16.0),
-                        ..default()
-                    },
+                    ui_font.text_font(16.0),
                     TextColor(state.text_color()),
                     ShopLabel::ItemButton(item.id),
                 ));

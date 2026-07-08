@@ -6,29 +6,43 @@ pub mod attribute_row;
 
 use bevy::prelude::*;
 
+use crate::core::UiFont;
 use crate::menu::{BUTTON_NORMAL, CREAM};
 
 /// A small square button (name arrows, `-` / `+`).
-pub fn small_button(label: &str) -> impl Bundle {
-    button_bundle(label, Val::Px(48.0), Val::Px(48.0), 24.0)
+pub fn small_button(label: &str, ui_font: &UiFont) -> impl Bundle {
+    button_bundle(label, Val::Px(48.0), Val::Px(48.0), 24.0, ui_font)
 }
 
 /// A wide button (confirm, back, screen navigation), sized like the
 /// main-menu buttons.
-pub fn wide_button(label: &str) -> impl Bundle {
-    button_bundle(label, Val::Px(260.0), Val::Px(56.0), 24.0)
+pub fn wide_button(label: &str, ui_font: &UiFont) -> impl Bundle {
+    button_bundle(label, Val::Px(260.0), Val::Px(56.0), 24.0, ui_font)
 }
 
 /// A [`wide_button`] whose label text additionally carries `text_marker`, for
 /// callers that update the label at runtime (e.g. the settings overlay's mute
 /// toggle).
-pub fn wide_button_labeled(label: &str, text_marker: impl Bundle) -> impl Bundle {
-    labeled_button_bundle(label, Val::Px(260.0), Val::Px(56.0), 24.0, text_marker)
+pub fn wide_button_labeled(label: &str, text_marker: impl Bundle, ui_font: &UiFont) -> impl Bundle {
+    labeled_button_bundle(
+        label,
+        Val::Px(260.0),
+        Val::Px(56.0),
+        24.0,
+        text_marker,
+        ui_font,
+    )
 }
 
 /// A button with a centered text label, mirroring the main-menu buttons.
-pub fn button_bundle(label: &str, width: Val, height: Val, font_size: f32) -> impl Bundle {
-    labeled_button_bundle(label, width, height, font_size, ())
+pub fn button_bundle(
+    label: &str,
+    width: Val,
+    height: Val,
+    font_size: f32,
+    ui_font: &UiFont,
+) -> impl Bundle {
+    labeled_button_bundle(label, width, height, font_size, (), ui_font)
 }
 
 /// The shared shape behind every button helper: the label text carries
@@ -39,6 +53,7 @@ pub fn labeled_button_bundle(
     height: Val,
     font_size: f32,
     text_marker: impl Bundle,
+    ui_font: &UiFont,
 ) -> impl Bundle {
     (
         Button,
@@ -52,10 +67,7 @@ pub fn labeled_button_bundle(
         BackgroundColor(BUTTON_NORMAL),
         children![(
             Text::new(label),
-            TextFont {
-                font_size: FontSize::Px(font_size),
-                ..default()
-            },
+            ui_font.text_font(font_size),
             TextColor(CREAM),
             text_marker,
         )],

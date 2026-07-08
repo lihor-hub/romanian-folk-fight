@@ -11,7 +11,7 @@ use bevy::prelude::*;
 pub use draft::{AttributeKind, CharacterDraft, FOLK_NAMES, FREE_POINTS};
 
 use crate::character::{Attributes, stats};
-use crate::core::{GameState, despawn_screen};
+use crate::core::{GameState, UiFont, despawn_screen};
 use crate::menu::{
     BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, DisabledButton,
     NIGHT_BLACK, TEXT_DISABLED,
@@ -83,7 +83,7 @@ impl Plugin for CreationPlugin {
     }
 }
 
-fn spawn_creation_screen(mut commands: Commands, draft: Res<CharacterDraft>) {
+fn spawn_creation_screen(mut commands: Commands, draft: Res<CharacterDraft>, ui_font: Res<UiFont>) {
     commands
         .spawn((
             CreationScreen,
@@ -101,10 +101,7 @@ fn spawn_creation_screen(mut commands: Commands, draft: Res<CharacterDraft>) {
         .with_children(|parent| {
             parent.spawn((
                 Text::new("Creează-ți eroul"),
-                TextFont {
-                    font_size: FontSize::Px(44.0),
-                    ..default()
-                },
+                ui_font.text_font_bold(44.0),
                 TextColor(CREAM),
                 Node {
                     margin: UiRect::bottom(Val::Px(20.0)),
@@ -122,7 +119,7 @@ fn spawn_creation_screen(mut commands: Commands, draft: Res<CharacterDraft>) {
                     ..default()
                 })
                 .with_children(|row| {
-                    row.spawn((small_button("<"), CreationAction::PreviousName));
+                    row.spawn((small_button("<", &ui_font), CreationAction::PreviousName));
                     row.spawn(Node {
                         width: Val::Px(320.0),
                         justify_content: JustifyContent::Center,
@@ -131,23 +128,17 @@ fn spawn_creation_screen(mut commands: Commands, draft: Res<CharacterDraft>) {
                     .with_children(|slot| {
                         slot.spawn((
                             Text::new(draft.name()),
-                            TextFont {
-                                font_size: FontSize::Px(30.0),
-                                ..default()
-                            },
+                            ui_font.text_font(30.0),
                             TextColor(CREAM),
                             CreationLabel::Name,
                         ));
                     });
-                    row.spawn((small_button(">"), CreationAction::NextName));
+                    row.spawn((small_button(">", &ui_font), CreationAction::NextName));
                 });
 
             parent.spawn((
                 Text::new(points_text(&draft)),
-                TextFont {
-                    font_size: FontSize::Px(24.0),
-                    ..default()
-                },
+                ui_font.text_font(24.0),
                 TextColor(CREAM),
                 CreationLabel::Points,
                 Node {
@@ -164,15 +155,13 @@ fn spawn_creation_screen(mut commands: Commands, draft: Res<CharacterDraft>) {
                     CreationAction::Decrease(kind),
                     CreationAction::Increase(kind),
                     CreationLabel::Value(kind),
+                    &ui_font,
                 );
             }
 
             parent.spawn((
                 Text::new(preview_text(&draft)),
-                TextFont {
-                    font_size: FontSize::Px(22.0),
-                    ..default()
-                },
+                ui_font.text_font(22.0),
                 TextColor(CREAM),
                 CreationLabel::Preview,
                 Node {
@@ -181,8 +170,11 @@ fn spawn_creation_screen(mut commands: Commands, draft: Res<CharacterDraft>) {
                 },
             ));
 
-            parent.spawn((wide_button("Începe lupta"), CreationAction::Confirm));
-            parent.spawn((wide_button("Înapoi"), CreationAction::Back));
+            parent.spawn((
+                wide_button("Începe lupta", &ui_font),
+                CreationAction::Confirm,
+            ));
+            parent.spawn((wide_button("Înapoi", &ui_font), CreationAction::Back));
         });
 }
 

@@ -13,7 +13,7 @@ use bevy::prelude::*;
 
 use crate::character::{Attributes, EnemyFighter, PlayerFighter, spawn_fighter};
 use crate::combat::AiProfile;
-use crate::core::{GameState, despawn_screen};
+use crate::core::{GameState, UiFont, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::items::Equipment;
 use crate::menu::CREAM;
@@ -81,6 +81,7 @@ fn spawn_arena(
     sheets: Res<FighterSpriteSheets>,
     backgrounds: Res<ArenaBackgrounds>,
     asset_server: Option<Res<AssetServer>>,
+    ui_font: Res<UiFont>,
 ) {
     let Some(player) = player else {
         warn!("entered GameState::Fight without a PlayerCharacter; arena not spawned");
@@ -92,11 +93,13 @@ fn spawn_arena(
         // fighters to exist.
         return;
     }
-    spawn_scene(commands, &player, ladder, &sheets, &backgrounds);
+    spawn_scene(commands, &player, ladder, &sheets, &backgrounds, &ui_font);
 }
 
 /// The loading-guard retry: once the sheets finish loading mid-fight-screen,
 /// spawns the scene that [`spawn_arena`] skipped.
+// A Bevy system: each parameter is a distinct ECS handle the scene spawn needs.
+#[allow(clippy::too_many_arguments)]
 fn spawn_arena_when_ready(
     commands: Commands,
     player: Option<Res<PlayerCharacter>>,
@@ -105,6 +108,7 @@ fn spawn_arena_when_ready(
     backgrounds: Res<ArenaBackgrounds>,
     asset_server: Option<Res<AssetServer>>,
     spawned: Query<(), With<ArenaScreen>>,
+    ui_font: Res<UiFont>,
 ) {
     let Some(player) = player else {
         return; // spawn_arena already warned
@@ -112,7 +116,7 @@ fn spawn_arena_when_ready(
     if !spawned.is_empty() || !sheets.ready(asset_server.as_deref()) {
         return;
     }
-    spawn_scene(commands, &player, ladder, &sheets, &backgrounds);
+    spawn_scene(commands, &player, ladder, &sheets, &backgrounds, &ui_font);
 }
 
 /// Builds the whole fight scene: scenery quads, the player's fighter, and
@@ -125,6 +129,7 @@ fn spawn_scene(
     ladder: Option<Res<LadderProgress>>,
     sheets: &FighterSpriteSheets,
     backgrounds: &ArenaBackgrounds,
+    ui_font: &UiFont,
 ) {
     let ladder = ladder.map(|ladder| *ladder).unwrap_or_default();
     let opponent = ladder.opponent();
@@ -139,6 +144,7 @@ fn spawn_scene(
         // The player faces right, towards the opponent.
         fighter_sprite(sheets.player.clone(), sheets, false),
         CREAM,
+        ui_font,
     );
     let enemy = spawn_arena_fighter(
         &mut commands,
@@ -158,6 +164,7 @@ fn spawn_scene(
         } else {
             CREAM
         },
+        ui_font,
     );
     let mut equipment = Equipment::default();
     for &id in opponent.equipment {
@@ -202,6 +209,9 @@ fn fighter_sprite(sheet: Handle<Image>, sheets: &FighterSpriteSheets, flip_x: bo
 /// animated sprite at its anchor (starting on the idle loop) and a
 /// world-space name label above (in `label_color`, so bosses read
 /// differently at a glance).
+// Each argument is one distinct piece of the fighter's dressing; bundling
+// them into a struct for one call site would only add indirection.
+#[allow(clippy::too_many_arguments)]
 fn spawn_arena_fighter(
     commands: &mut Commands,
     name: impl Into<String>,
@@ -210,6 +220,7 @@ fn spawn_arena_fighter(
     anchor: Transform,
     sprite: Sprite,
     label_color: Color,
+    ui_font: &UiFont,
 ) -> Entity {
     let name = name.into();
     let label = name.clone();
@@ -226,10 +237,7 @@ fn spawn_arena_fighter(
         .with_children(|body| {
             body.spawn((
                 Text2d::new(label),
-                TextFont {
-                    font_size: FontSize::Px(20.0),
-                    ..default()
-                },
+                ui_font.text_font(20.0),
                 TextColor(label_color),
                 Transform::from_xyz(0.0, LABEL_OFFSET_Y, 0.1),
             ));
