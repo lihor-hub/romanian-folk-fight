@@ -403,8 +403,9 @@ fn set_cutout_pose(
 }
 
 /// Maps this frame's combat events onto clips: any strike attempt plays the
-/// attacker's attack (with a lunge), Hit/Crit/Blocked plays the defender's
-/// hurt, and Defeated plays the defender's KO (which then freezes).
+/// attacker's attack (with a lunge), miss/reach failures make the defender
+/// avoid, Hit/Crit/Blocked plays the defender's reaction, and Defeated plays
+/// the defender's KO (which then freezes).
 fn animate_combat_events(
     mut commands: Commands,
     mut events: MessageReader<CombatLogEvent>,
@@ -437,7 +438,7 @@ fn animate_combat_events(
                     set_cutout_pose(&mut commands, entity, CutoutPose::Attack, &mut pose);
                     commands.entity(entity).insert(AttackLunge::for_side(actor));
                 }
-                if matches!(event, CombatEvent::Missed)
+                if matches!(event, CombatEvent::Missed | CombatEvent::OutOfReach)
                     && let Ok((entity, _, _, _, mut pose)) = defender
                 {
                     set_cutout_pose(&mut commands, entity, CutoutPose::Dodge, &mut pose);
@@ -972,6 +973,20 @@ mod tests {
         assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::HitReaction);
 
         let mut app = test_app();
+        write_event(
+            &mut app,
+            CombatSide::Player,
+            CombatEvent::Blocked { dmg: 2 },
+        );
+        assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::Attack);
+        assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::Block);
+
+        let mut app = test_app();
+        write_event(&mut app, CombatSide::Enemy, CombatEvent::Blocked { dmg: 2 });
+        assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::Attack);
+        assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::Block);
+
+        let mut app = test_app();
         write_event(&mut app, CombatSide::Player, CombatEvent::Guarded);
         assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::Block);
         assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::Idle);
@@ -988,6 +1003,16 @@ mod tests {
 
         let mut app = test_app();
         write_event(&mut app, CombatSide::Player, CombatEvent::Missed);
+        assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::Attack);
+        assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::Dodge);
+
+        let mut app = test_app();
+        write_event(&mut app, CombatSide::Enemy, CombatEvent::OutOfReach);
+        assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::Attack);
+        assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::Dodge);
+
+        let mut app = test_app();
+        write_event(&mut app, CombatSide::Player, CombatEvent::OutOfReach);
         assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::Attack);
         assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::Dodge);
 
