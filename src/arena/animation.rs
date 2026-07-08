@@ -2,15 +2,15 @@
 //! timer component driving a `TextureAtlas` index, the per-fighter clip
 //! table ([`FighterClip`]), the sprite-sheet handles and readiness guard
 //! ([`FighterSpriteSheets`]), and the wiring that turns [`CombatLogEvent`]s
-//! into attack / hurt / KO animations plus the attack lunge between the
-//! arena anchors.
+//! into attack / hurt / KO / footwork animations plus the attack lunge and
+//! presentation-only footwork between the arena anchors.
 
 use std::time::Duration;
 
 use bevy::prelude::*;
 
 use crate::character::{EnemyFighter, PlayerFighter};
-use crate::combat::{CombatEvent, CombatLogEvent, CombatSide};
+use crate::combat::{CombatAction, CombatEvent, CombatLogEvent, CombatSide};
 use crate::roster::LADDER;
 
 use super::{ENEMY_ANCHOR, PLAYER_ANCHOR};
@@ -18,10 +18,11 @@ use super::{ENEMY_ANCHOR, PLAYER_ANCHOR};
 /// Side length of one sprite-sheet frame in pixels.
 pub const FRAME_SIZE: u32 = 128;
 /// Frames per sheet row; the sheets are a [`ATLAS_COLUMNS`] x [`ATLAS_ROWS`]
-/// grid in row-major order (idle row, attack row, hurt + KO row).
+/// grid in row-major order (idle row, attack row, hurt + KO row, footwork
+/// row).
 pub const ATLAS_COLUMNS: u32 = 4;
 /// Rows per sprite sheet.
-pub const ATLAS_ROWS: u32 = 3;
+pub const ATLAS_ROWS: u32 = 4;
 
 /// The player's sprite sheet.
 const PLAYER_SHEET: &str = "sprites/player.png";
@@ -44,6 +45,12 @@ const OPPONENT_SHEETS: [&str; 10] = [
 /// How far towards the opponent's anchor the attack lunge peaks, as a
 /// fraction of the distance between the two anchors.
 const LUNGE_FRACTION: f32 = 0.35;
+
+/// Presentation-only horizontal distance of a footwork step, in world units.
+const FOOTWORK_DISTANCE: f32 = 28.0;
+
+/// Duration of a footwork step-in or step-back tween.
+const FOOTWORK_DURATION: Duration = Duration::from_millis(500);
 
 /// How a [`SpriteAnimation`] behaves at its last frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,7 +134,7 @@ impl SpriteAnimation {
     }
 }
 
-/// The four fighter clips, mapped onto the shared sheet layout. Doubles as
+/// The fighter clips, mapped onto the shared sheet layout. Doubles as
 /// the component tracking which clip a fighter is currently playing.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FighterClip {
@@ -135,16 +142,20 @@ pub enum FighterClip {
     Attack,
     Hurt,
     Ko,
+    StepForward,
+    StepBack,
 }
 
 impl FighterClip {
-    /// The animation for this clip on the shared 4x3 sheet layout.
+    /// The animation for this clip on the shared 4x4 sheet layout.
     pub fn animation(self) -> SpriteAnimation {
         match self {
             Self::Idle => SpriteAnimation::new(0, 3, 6.0, AnimationMode::Loop),
             Self::Attack => SpriteAnimation::new(4, 7, 10.0, AnimationMode::Once),
             Self::Hurt => SpriteAnimation::new(8, 9, 8.0, AnimationMode::Once),
             Self::Ko => SpriteAnimation::new(10, 11, 6.0, AnimationMode::Once),
+            Self::StepForward => SpriteAnimation::new(12, 13, 4.0, AnimationMode::Once),
+            Self::StepBack => SpriteAnimation::new(14, 15, 4.0, AnimationMode::Once),
         }
     }
 }
@@ -245,6 +256,62 @@ pub fn lunge_position(from: Vec3, toward: Vec3, progress: f32) -> Vec3 {
     position
 }
 
+/// Presentation-only footwork step: a short out-and-back horizontal motion
+/// around the fighter's anchor. Combat distance changes live in the engine;
+/// this component only makes them readable.
+#[derive(Component, Debug, Clone)]
+struct FootworkStep {
+    anchor: Vec3,
+    direction: f32,
+    timer: Timer,
+}
+
+impl FootworkStep {
+    /// Footwork for `side` and movement clip. Forward always means towards
+    /// the opponent; backward means away, so the enemy side mirrors the x
+    /// direction.
+    fn for_side(side: CombatSide, clip: FighterClip) -> Self {
+        let anchor = match side {
+            CombatSide::Player => PLAYER_ANCHOR.translation,
+            CombatSide::Enemy => ENEMY_ANCHOR.translation,
+        };
+        let side_forward = match side {
+            CombatSide::Player => 1.0,
+            CombatSide::Enemy => -1.0,
+        };
+        let direction = match clip {
+            FighterClip::StepForward => side_forward,
+            FighterClip::StepBack => -side_forward,
+            _ => side_forward,
+        };
+        Self {
+            anchor,
+            direction,
+            timer: Timer::new(FOOTWORK_DURATION, TimerMode::Once),
+        }
+    }
+
+    fn position(&self) -> Vec3 {
+        footwork_position(self.anchor, self.direction, self.timer.fraction())
+    }
+}
+
+/// Position of a fighter during footwork at `progress` in `0..=1`.
+/// Movement eases out to [`FOOTWORK_DISTANCE`] at the midpoint, then returns
+/// to the exact anchor by the end.
+fn footwork_position(anchor: Vec3, direction: f32, progress: f32) -> Vec3 {
+    let progress = progress.clamp(0.0, 1.0);
+    let leg = if progress <= 0.5 {
+        progress * 2.0
+    } else {
+        (1.0 - progress) * 2.0
+    };
+    let eased = (leg * std::f32::consts::FRAC_PI_2).sin();
+    let mut position = anchor;
+    position.x += FOOTWORK_DISTANCE * direction.signum() * eased;
+    position
+}
+
 /// Swaps a fighter onto `clip`: restarts the animation and snaps the atlas
 /// index to the clip's first frame.
 fn set_clip(
@@ -282,7 +349,12 @@ fn animate_combat_events(
     mut players: SideAnimation<PlayerFighter, EnemyFighter>,
     mut enemies: SideAnimation<EnemyFighter, PlayerFighter>,
 ) {
-    for CombatLogEvent { actor, event, .. } in events.read().copied() {
+    for CombatLogEvent {
+        actor,
+        action,
+        event,
+    } in events.read().copied()
+    {
         let (attacker, defender) = match actor {
             CombatSide::Player => (players.single_mut(), enemies.single_mut()),
             CombatSide::Enemy => (enemies.single_mut(), players.single_mut()),
@@ -309,10 +381,24 @@ fn animate_combat_events(
                     set_clip(FighterClip::Ko, &mut clip, &mut anim, &mut sprite);
                 }
             }
-            CombatEvent::Guarded
-            | CombatEvent::Rested { .. }
-            | CombatEvent::Moved { .. }
-            | CombatEvent::OutOfStamina => {}
+            CombatEvent::Guarded | CombatEvent::Rested { .. } | CombatEvent::OutOfStamina => {}
+            CombatEvent::Moved { .. } => {
+                let clip = match action {
+                    CombatAction::StepBack => FighterClip::StepBack,
+                    CombatAction::StepForward | CombatAction::LeapForward => {
+                        FighterClip::StepForward
+                    }
+                    _ => FighterClip::StepForward,
+                };
+                if let Ok((entity, mut current, mut anim, mut sprite)) = attacker
+                    && *current != FighterClip::Ko
+                {
+                    set_clip(clip, &mut current, &mut anim, &mut sprite);
+                    commands
+                        .entity(entity)
+                        .insert(FootworkStep::for_side(actor, clip));
+                }
+            }
         }
     }
 }
@@ -359,6 +445,24 @@ fn apply_lunges(
     }
 }
 
+/// Applies presentation-only footwork and snaps fighters exactly back to
+/// their anchors at the end.
+fn apply_footwork(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut query: Query<(Entity, &mut FootworkStep, &mut Transform)>,
+) {
+    for (entity, mut footwork, mut transform) in &mut query {
+        footwork.timer.tick(time.delta());
+        if footwork.timer.is_finished() {
+            transform.translation = footwork.anchor;
+            commands.entity(entity).remove::<FootworkStep>();
+        } else {
+            transform.translation = footwork.position();
+        }
+    }
+}
+
 /// Registers the sheet loading and the animation systems; added by the
 /// arena plugin.
 pub(super) struct AnimationPlugin;
@@ -375,6 +479,7 @@ impl Plugin for AnimationPlugin {
                 advance_animations,
                 return_to_idle,
                 apply_lunges,
+                apply_footwork,
             )
                 .chain()
                 .run_if(in_state(crate::core::GameState::Fight)),
@@ -434,13 +539,17 @@ mod tests {
         let attack = FighterClip::Attack.animation();
         let hurt = FighterClip::Hurt.animation();
         let ko = FighterClip::Ko.animation();
+        let step_forward = FighterClip::StepForward.animation();
+        let step_back = FighterClip::StepBack.animation();
         assert_eq!((idle.first, idle.last), (0, 3));
         assert_eq!((attack.first, attack.last), (4, 7));
         assert_eq!((hurt.first, hurt.last), (8, 9));
         assert_eq!((ko.first, ko.last), (10, 11));
-        assert_eq!(ko.last as u32 + 1, ATLAS_COLUMNS * ATLAS_ROWS);
+        assert_eq!((step_forward.first, step_forward.last), (12, 13));
+        assert_eq!((step_back.first, step_back.last), (14, 15));
+        assert_eq!(step_back.last as u32 + 1, ATLAS_COLUMNS * ATLAS_ROWS);
         assert_eq!(idle.mode, AnimationMode::Loop);
-        for once in [attack, hurt, ko] {
+        for once in [attack, hurt, ko, step_forward, step_back] {
             assert_eq!(once.mode, AnimationMode::Once);
         }
     }
@@ -617,6 +726,82 @@ mod tests {
         );
         lunge.timer.tick(half);
         assert!(lunge.timer.is_finished(), "lunge ends with the attack clip");
+    }
+
+    #[test]
+    fn footwork_positions_ease_out_and_restore_the_anchor() {
+        let anchor = PLAYER_ANCHOR.translation;
+        assert_eq!(footwork_position(anchor, 1.0, 0.0), anchor);
+        assert_eq!(footwork_position(anchor, 1.0, 1.0), anchor);
+
+        let quarter = footwork_position(anchor, 1.0, 0.25);
+        let half = footwork_position(anchor, 1.0, 0.5);
+        let three_quarters = footwork_position(anchor, 1.0, 0.75);
+        assert!(quarter.x > anchor.x, "forward footwork starts rightward");
+        assert!(
+            (half.x - (anchor.x + FOOTWORK_DISTANCE)).abs() < 1e-3,
+            "midpoint reaches the configured step distance"
+        );
+        assert!(
+            three_quarters.x > anchor.x && three_quarters.x < half.x,
+            "the second half returns towards the anchor"
+        );
+        assert_eq!(half.z, anchor.z, "z never changes");
+    }
+
+    #[test]
+    fn enemy_forward_footwork_mirrors_towards_the_player() {
+        let mut player = FootworkStep::for_side(CombatSide::Player, FighterClip::StepForward);
+        let mut enemy = FootworkStep::for_side(CombatSide::Enemy, FighterClip::StepForward);
+        player.timer.tick(player.timer.duration() / 2);
+        enemy.timer.tick(enemy.timer.duration() / 2);
+        let player_mid = player.position();
+        let enemy_mid = enemy.position();
+        assert!(player_mid.x > PLAYER_ANCHOR.translation.x);
+        assert!(enemy_mid.x < ENEMY_ANCHOR.translation.x);
+    }
+
+    #[test]
+    fn movement_events_play_the_actor_footwork_clip() {
+        let mut app = test_app();
+        app.world_mut().write_message(CombatLogEvent {
+            actor: CombatSide::Player,
+            action: crate::combat::CombatAction::StepForward,
+            event: CombatEvent::Moved {
+                from: crate::combat::DuelDistance::NEAR,
+                to: crate::combat::DuelDistance::CLOSE,
+            },
+        });
+        app.update();
+
+        let (clip, index) = side_state::<PlayerFighter>(&mut app);
+        assert_eq!(clip, FighterClip::StepForward);
+        assert_eq!(index, FighterClip::StepForward.animation().first);
+        let footwork = app
+            .world_mut()
+            .query_filtered::<(), (With<FootworkStep>, With<PlayerFighter>)>()
+            .iter(app.world())
+            .count();
+        assert_eq!(footwork, 1, "the actor gets a footwork tween");
+    }
+
+    #[test]
+    fn backward_movement_events_play_the_back_step_clip() {
+        let mut app = test_app();
+        app.world_mut().write_message(CombatLogEvent {
+            actor: CombatSide::Enemy,
+            action: crate::combat::CombatAction::StepBack,
+            event: CombatEvent::Moved {
+                from: crate::combat::DuelDistance::CLOSE,
+                to: crate::combat::DuelDistance::NEAR,
+            },
+        });
+        app.update();
+
+        assert_eq!(
+            side_state::<EnemyFighter>(&mut app).0,
+            FighterClip::StepBack
+        );
     }
 
     #[test]

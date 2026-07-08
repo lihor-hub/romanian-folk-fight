@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the placeholder fighter sprite sheets under assets/sprites/.
 
-Self-contained (Python 3 stdlib only). Each sheet is a 4x3 grid of 128x128
+Self-contained (Python 3 stdlib only). Each sheet is a 4x4 grid of 128x128
 frames drawn as chunky pixel art (32x32 logical pixels, scaled x4), following
 docs/art-direction.md: side-view fighters facing right, palette of deep red,
 black, cream, and gold with one accent color per creature.
@@ -10,6 +10,7 @@ Frame layout (row-major, matching src/arena/animation.rs):
   row 0: idle   frames 0-3
   row 1: attack frames 4-7
   row 2: hurt   frames 8-9, KO frames 10-11
+  row 3: step forward frames 12-13, step back frames 14-15
 
 Usage: python3 scripts/generate-placeholder-sprites.py
 
@@ -25,7 +26,7 @@ import zlib
 LOGICAL = 32  # logical pixels per frame side
 SCALE = 4  # screen pixels per logical pixel
 FRAME = LOGICAL * SCALE  # 128
-COLS, ROWS = 4, 3
+COLS, ROWS = 4, 4
 SHEET_W, SHEET_H = COLS * FRAME, ROWS * FRAME
 
 # Art-direction palette (docs/art-direction.md).
@@ -202,8 +203,19 @@ def draw_lying(f, spec):
     f.px(7, GROUND_Y - 3, BLACK)  # closed eye
 
 
+def draw_footwork(f, spec, forward=True, phase=0):
+    """Presentation-only step frames; the engine supplies the real x tween."""
+    draw_standing(
+        f,
+        spec,
+        bob=phase,
+        lean=-1 if forward else 1,
+        arm=0.15 if forward else 0.0,
+    )
+
+
 def frames_for(spec):
-    """The 12 frames of one fighter, in atlas order."""
+    """The 16 frames of one fighter, in atlas order."""
     frames = []
     for bob in (0, 1, 2, 1):  # idle
         f = Frame()
@@ -223,6 +235,14 @@ def frames_for(spec):
     f = Frame()
     draw_lying(f, spec)
     frames.append(f)
+    for phase in (1, 0):  # step forward
+        f = Frame()
+        draw_footwork(f, spec, forward=True, phase=phase)
+        frames.append(f)
+    for phase in (1, 0):  # step back
+        f = Frame()
+        draw_footwork(f, spec, forward=False, phase=phase)
+        frames.append(f)
     return frames
 
 

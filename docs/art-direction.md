@@ -32,9 +32,9 @@ coherent but every opponent is distinct at a glance.
 
 ## Sprite sheets
 
-- One sheet per fighter under `assets/sprites/`, 4x3 grid of 128x128 frames:
-  idle (4), attack (4), hurt (2), KO (2) — the layout consumed by
-  `src/arena/animation.rs`.
+- One sheet per fighter under `assets/sprites/`, 4x4 grid of 128x128 frames:
+  idle (4), attack (4), hurt (2), KO (2), step forward (2), step back (2)
+  — the layout consumed by `src/arena/animation.rs`.
 - Current sheets are self-generated pixel-art placeholders
   (`scripts/generate-placeholder-sprites.py`); bespoke painted art per
   folklore creature is follow-up work and must keep the same frame layout.
