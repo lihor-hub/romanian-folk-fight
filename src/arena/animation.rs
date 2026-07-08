@@ -11,6 +11,7 @@ use bevy::prelude::*;
 
 use crate::character::{EnemyFighter, PlayerFighter};
 use crate::combat::{CombatAction, CombatEvent, CombatLogEvent, CombatSide};
+use crate::cutout::{CutoutPartMarker, CutoutPartRestPose, CutoutPose, CutoutRig};
 use crate::roster::LADDER;
 
 use super::{ENEMY_ANCHOR, PLAYER_ANCHOR};
@@ -51,6 +52,9 @@ const FOOTWORK_DISTANCE: f32 = 28.0;
 
 /// Duration of a footwork step-in or step-back tween.
 const FOOTWORK_DURATION: Duration = Duration::from_millis(500);
+
+/// Short readable hold for non-sheet rig-only defensive reactions.
+const RIG_REACTION_DURATION: Duration = Duration::from_millis(360);
 
 /// How a [`SpriteAnimation`] behaves at its last frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -350,9 +354,53 @@ type SideAnimation<'w, 's, Side, Other> = Query<
         &'static mut FighterClip,
         &'static mut SpriteAnimation,
         Option<&'static mut Sprite>,
+        &'static mut CutoutPose,
     ),
     (With<Side>, Without<Other>),
 >;
+
+/// Timer for a non-idle [`CutoutPose`] that should return to idle once its
+/// presentation beat has read. Knockdowns intentionally do not carry one.
+#[derive(Component, Debug, Clone)]
+struct CutoutPoseTimer(Timer);
+
+fn set_cutout_pose(
+    commands: &mut Commands,
+    entity: Entity,
+    pose: CutoutPose,
+    slot: &mut CutoutPose,
+) {
+    *slot = pose;
+    match pose {
+        CutoutPose::Idle | CutoutPose::Knockdown => {
+            commands.entity(entity).remove::<CutoutPoseTimer>();
+        }
+        CutoutPose::Attack => {
+            commands.entity(entity).insert(CutoutPoseTimer(Timer::new(
+                FighterClip::Attack.animation().clip_duration(),
+                TimerMode::Once,
+            )));
+        }
+        CutoutPose::HitReaction => {
+            commands.entity(entity).insert(CutoutPoseTimer(Timer::new(
+                FighterClip::Hurt.animation().clip_duration(),
+                TimerMode::Once,
+            )));
+        }
+        CutoutPose::StepForward | CutoutPose::StepBack => {
+            commands.entity(entity).insert(CutoutPoseTimer(Timer::new(
+                FOOTWORK_DURATION,
+                TimerMode::Once,
+            )));
+        }
+        CutoutPose::Block | CutoutPose::Dodge => {
+            commands.entity(entity).insert(CutoutPoseTimer(Timer::new(
+                RIG_REACTION_DURATION,
+                TimerMode::Once,
+            )));
+        }
+    }
+}
 
 /// Maps this frame's combat events onto clips: any strike attempt plays the
 /// attacker's attack (with a lunge), Hit/Crit/Blocked plays the defender's
@@ -379,17 +427,22 @@ fn animate_combat_events(
             | CombatEvent::Hit { .. }
             | CombatEvent::Crit { .. }
             | CombatEvent::Blocked { .. } => {
-                if let Ok((entity, mut clip, mut anim, mut sprite)) = attacker {
+                if let Ok((entity, mut clip, mut anim, mut sprite, mut pose)) = attacker {
                     set_clip(
                         FighterClip::Attack,
                         &mut clip,
                         &mut anim,
                         sprite.as_deref_mut(),
                     );
+                    set_cutout_pose(&mut commands, entity, CutoutPose::Attack, &mut pose);
                     commands.entity(entity).insert(AttackLunge::for_side(actor));
                 }
-                if !matches!(event, CombatEvent::Missed | CombatEvent::OutOfReach)
-                    && let Ok((_, mut clip, mut anim, mut sprite)) = defender
+                if matches!(event, CombatEvent::Missed)
+                    && let Ok((entity, _, _, _, mut pose)) = defender
+                {
+                    set_cutout_pose(&mut commands, entity, CutoutPose::Dodge, &mut pose);
+                } else if !matches!(event, CombatEvent::Missed | CombatEvent::OutOfReach)
+                    && let Ok((entity, mut clip, mut anim, mut sprite, mut pose)) = defender
                     && *clip != FighterClip::Ko
                 {
                     set_clip(
@@ -398,14 +451,25 @@ fn animate_combat_events(
                         &mut anim,
                         sprite.as_deref_mut(),
                     );
+                    let pose_kind = match event {
+                        CombatEvent::Blocked { .. } => CutoutPose::Block,
+                        _ => CutoutPose::HitReaction,
+                    };
+                    set_cutout_pose(&mut commands, entity, pose_kind, &mut pose);
                 }
             }
             CombatEvent::Defeated => {
-                if let Ok((_, mut clip, mut anim, mut sprite)) = defender {
+                if let Ok((entity, mut clip, mut anim, mut sprite, mut pose)) = defender {
                     set_clip(FighterClip::Ko, &mut clip, &mut anim, sprite.as_deref_mut());
+                    set_cutout_pose(&mut commands, entity, CutoutPose::Knockdown, &mut pose);
                 }
             }
-            CombatEvent::Guarded | CombatEvent::Rested { .. } | CombatEvent::OutOfStamina => {}
+            CombatEvent::Guarded => {
+                if let Ok((entity, _, _, _, mut pose)) = attacker {
+                    set_cutout_pose(&mut commands, entity, CutoutPose::Block, &mut pose);
+                }
+            }
+            CombatEvent::Rested { .. } | CombatEvent::OutOfStamina => {}
             CombatEvent::Moved { .. } => {
                 let clip = match action {
                     CombatAction::StepBack => FighterClip::StepBack,
@@ -414,15 +478,36 @@ fn animate_combat_events(
                     }
                     _ => FighterClip::StepForward,
                 };
-                if let Ok((entity, mut current, mut anim, mut sprite)) = attacker
+                if let Ok((entity, mut current, mut anim, mut sprite, mut pose)) = attacker
                     && *current != FighterClip::Ko
                 {
                     set_clip(clip, &mut current, &mut anim, sprite.as_deref_mut());
+                    let pose_kind = match clip {
+                        FighterClip::StepBack => CutoutPose::StepBack,
+                        _ => CutoutPose::StepForward,
+                    };
+                    set_cutout_pose(&mut commands, entity, pose_kind, &mut pose);
                     commands
                         .entity(entity)
                         .insert(FootworkStep::for_side(actor, clip));
                 }
             }
+        }
+    }
+}
+
+/// Returns timed rig-only poses to idle. The sprite-sheet clip system remains
+/// authoritative for root clip state; this only clears jointed body poses.
+fn tick_cutout_pose_timers(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut query: Query<(Entity, &mut CutoutPose, &mut CutoutPoseTimer)>,
+) {
+    for (entity, mut pose, mut timer) in &mut query {
+        timer.0.tick(time.delta());
+        if timer.0.is_finished() {
+            *pose = CutoutPose::Idle;
+            commands.entity(entity).remove::<CutoutPoseTimer>();
         }
     }
 }
@@ -459,6 +544,168 @@ fn return_to_idle(mut query: Query<(&mut FighterClip, &mut SpriteAnimation, Opti
                 sprite.as_deref_mut(),
             );
         }
+    }
+}
+
+/// Applies the current jointed pose to every body-part child, rebuilding from
+/// the part's neutral transform so gear parented beneath hands/arms/shields
+/// inherits the same motion without independent drift.
+fn apply_cutout_poses(
+    fighters: Query<(&CutoutPose, Option<&CutoutRig>)>,
+    mut parts: Query<(
+        &CutoutPartMarker,
+        &ChildOf,
+        &CutoutPartRestPose,
+        &mut Transform,
+    )>,
+) {
+    for (marker, child_of, rest, mut transform) in &mut parts {
+        let Ok((pose, rig)) = fighters.get(child_of.parent()) else {
+            continue;
+        };
+        let flip_x = rig.map(|rig| rig.flip_x).unwrap_or(false);
+        *transform = posed_part_transform(marker.kind, rest, *pose, flip_x);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct JointedPartDelta {
+    offset: Vec2,
+    rotation: f32,
+}
+
+fn posed_part_transform(
+    kind: crate::cutout::CutoutPartKind,
+    rest: &CutoutPartRestPose,
+    pose: CutoutPose,
+    flip_x: bool,
+) -> Transform {
+    let mut delta = jointed_part_delta(kind, pose);
+    if flip_x {
+        delta.offset.x = -delta.offset.x;
+        delta.rotation = -delta.rotation;
+    }
+
+    let mut transform = rest.transform;
+    let pivot_shift = pivot_shift(kind, rest.size, delta.rotation);
+    let rest_angle = transform.rotation.to_euler(EulerRot::XYZ).2;
+    let pivot_shift = rotate_vec2(pivot_shift, rest_angle);
+    transform.translation.x += delta.offset.x + pivot_shift.x;
+    transform.translation.y += delta.offset.y + pivot_shift.y;
+    transform.rotation *= Quat::from_rotation_z(delta.rotation);
+    transform
+}
+
+fn pivot_shift(kind: crate::cutout::CutoutPartKind, size: Vec2, angle: f32) -> Vec2 {
+    let pivot = joint_pivot(kind, size);
+    pivot - rotate_vec2(pivot, angle)
+}
+
+fn joint_pivot(kind: crate::cutout::CutoutPartKind, size: Vec2) -> Vec2 {
+    use crate::cutout::CutoutPartKind::*;
+    match kind {
+        UpperArmBack | UpperArmFront | ForearmBack | ForearmFront | ThighBack | ThighFront
+        | ShinBack | ShinFront => Vec2::new(0.0, size.y * 0.42),
+        HandBack | HandFront => Vec2::new(0.0, size.y * 0.28),
+        FootBack | FootFront => Vec2::new(-size.x * 0.28, 0.0),
+        Torso => Vec2::new(0.0, -size.y * 0.34),
+        Head | Hair => Vec2::new(0.0, -size.y * 0.38),
+    }
+}
+
+fn rotate_vec2(v: Vec2, angle: f32) -> Vec2 {
+    let (sin, cos) = angle.sin_cos();
+    Vec2::new(v.x * cos - v.y * sin, v.x * sin + v.y * cos)
+}
+
+fn jointed_part_delta(kind: crate::cutout::CutoutPartKind, pose: CutoutPose) -> JointedPartDelta {
+    use crate::cutout::CutoutPartKind::*;
+    let (x, y, rotation) = match pose {
+        CutoutPose::Idle => (0.0, 0.0, 0.0),
+        CutoutPose::Attack => match kind {
+            UpperArmFront => (8.0, 3.0, -0.64),
+            ForearmFront => (17.0, 7.0, -0.92),
+            HandFront => (24.0, 9.0, -0.48),
+            UpperArmBack => (-3.0, 3.0, 0.34),
+            ForearmBack => (-5.0, 6.0, 0.48),
+            HandBack => (-4.0, 7.0, 0.2),
+            Torso => (3.0, 0.0, -0.08),
+            Head | Hair => (4.0, 0.0, -0.06),
+            ThighFront | ShinBack => (2.0, -1.0, -0.12),
+            ThighBack | ShinFront => (-1.0, 1.0, 0.1),
+            FootFront => (3.0, -1.0, 0.04),
+            FootBack => (-1.0, 0.0, -0.04),
+        },
+        CutoutPose::Block => match kind {
+            UpperArmFront => (-8.0, 11.0, 0.58),
+            ForearmFront => (-14.0, 21.0, 1.05),
+            HandFront => (-16.0, 28.0, 0.78),
+            UpperArmBack => (2.0, 8.0, -0.32),
+            ForearmBack => (7.0, 15.0, -0.5),
+            HandBack => (8.0, 20.0, -0.3),
+            Torso => (-2.0, -1.0, 0.08),
+            Head | Hair => (-3.0, 1.0, 0.05),
+            _ => (0.0, 0.0, 0.0),
+        },
+        CutoutPose::Dodge => match kind {
+            Torso => (-12.0, -2.0, 0.24),
+            Head | Hair => (-18.0, -1.0, 0.28),
+            UpperArmFront | ForearmFront | HandFront => (-13.0, -2.0, 0.34),
+            UpperArmBack | ForearmBack | HandBack => (-10.0, 2.0, 0.2),
+            ThighFront | ShinFront | FootFront => (5.0, -1.0, -0.18),
+            ThighBack | ShinBack | FootBack => (-7.0, 1.0, 0.16),
+        },
+        CutoutPose::HitReaction => match kind {
+            Torso => (-8.0, -2.0, 0.18),
+            Head | Hair => (-13.0, -4.0, 0.26),
+            UpperArmFront | ForearmFront | HandFront => (-11.0, 4.0, 0.5),
+            UpperArmBack | ForearmBack | HandBack => (-8.0, 2.0, -0.34),
+            ThighFront | ShinFront | FootFront => (-3.0, -1.0, -0.06),
+            ThighBack | ShinBack | FootBack => (2.0, 0.0, 0.08),
+        },
+        CutoutPose::Knockdown => match kind {
+            Torso => (-24.0, -60.0, 1.22),
+            Head => (-49.0, -57.0, 1.1),
+            Hair => (-52.0, -56.0, 1.1),
+            UpperArmFront => (-20.0, -52.0, 1.45),
+            ForearmFront => (-36.0, -51.0, 1.7),
+            HandFront => (-48.0, -49.0, 1.72),
+            UpperArmBack => (-7.0, -60.0, 0.86),
+            ForearmBack => (-16.0, -72.0, 1.08),
+            HandBack => (-26.0, -80.0, 1.08),
+            ThighFront => (19.0, -44.0, 1.0),
+            ShinFront => (35.0, -42.0, 1.16),
+            FootFront => (49.0, -38.0, 1.08),
+            ThighBack => (-7.0, -49.0, 0.74),
+            ShinBack => (4.0, -54.0, 0.64),
+            FootBack => (15.0, -55.0, 0.54),
+        },
+        CutoutPose::StepForward => match kind {
+            UpperArmFront | ForearmFront | HandFront => (-4.0, 0.0, 0.22),
+            UpperArmBack | ForearmBack | HandBack => (5.0, 0.0, -0.22),
+            ThighFront => (7.0, 0.0, -0.26),
+            ShinFront => (12.0, -1.0, -0.2),
+            FootFront => (15.0, -1.0, 0.08),
+            ThighBack => (-5.0, 1.0, 0.2),
+            ShinBack => (-8.0, 1.0, 0.18),
+            FootBack => (-10.0, 0.0, -0.06),
+            Torso | Head | Hair => (2.0, 0.0, -0.03),
+        },
+        CutoutPose::StepBack => match kind {
+            UpperArmFront | ForearmFront | HandFront => (5.0, 0.0, -0.22),
+            UpperArmBack | ForearmBack | HandBack => (-4.0, 0.0, 0.22),
+            ThighFront => (-6.0, 1.0, 0.22),
+            ShinFront => (-10.0, 0.0, 0.18),
+            FootFront => (-12.0, 0.0, -0.08),
+            ThighBack => (7.0, 0.0, -0.24),
+            ShinBack => (11.0, -1.0, -0.2),
+            FootBack => (14.0, -1.0, 0.08),
+            Torso | Head | Hair => (-2.0, 0.0, 0.04),
+        },
+    };
+    JointedPartDelta {
+        offset: Vec2::new(x, y),
+        rotation,
     }
 }
 
@@ -519,6 +766,8 @@ impl Plugin for AnimationPlugin {
                 animate_combat_events,
                 advance_animations,
                 return_to_idle,
+                tick_cutout_pose_timers,
+                apply_cutout_poses,
                 apply_lunges,
                 apply_footwork,
             )
@@ -536,6 +785,7 @@ mod tests {
     use crate::character::{Attributes, Fighter};
     use crate::core::{CorePlugin, GameState};
     use crate::creation::PlayerCharacter;
+    use crate::cutout::{CutoutPartKind, CutoutPartMarker, CutoutPose};
     use bevy::state::app::StatesPlugin;
 
     fn ms(millis: u64) -> Duration {
@@ -632,9 +882,18 @@ mod tests {
     }
 
     fn write_event(app: &mut App, actor: CombatSide, event: CombatEvent) {
+        write_event_with_action(app, actor, crate::combat::CombatAction::QuickStrike, event);
+    }
+
+    fn write_event_with_action(
+        app: &mut App,
+        actor: CombatSide,
+        action: crate::combat::CombatAction,
+        event: CombatEvent,
+    ) {
         app.world_mut().write_message(CombatLogEvent {
             actor,
-            action: crate::combat::CombatAction::QuickStrike,
+            action,
             event,
         });
         app.update();
@@ -649,11 +908,35 @@ mod tests {
         (*clip, anim.current_frame())
     }
 
+    fn rig_pose<M: Component>(app: &mut App) -> CutoutPose {
+        *app.world_mut()
+            .query_filtered::<&CutoutPose, With<M>>()
+            .single(app.world())
+            .expect("fighter has a cutout pose")
+    }
+
+    fn part_transform<M: Component>(app: &mut App, kind: CutoutPartKind) -> Transform {
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<(&CutoutPartMarker, &ChildOf, &Transform), ()>();
+        query
+            .iter(world)
+            .find_map(|(marker, child_of, transform)| {
+                let parent = child_of.parent();
+                world
+                    .get::<M>(parent)
+                    .filter(|_| marker.kind == kind)
+                    .map(|_| *transform)
+            })
+            .expect("part exists")
+    }
+
     #[test]
     fn fighters_spawn_on_the_idle_clip() {
         let mut app = test_app();
         assert_eq!(side_state::<PlayerFighter>(&mut app).0, FighterClip::Idle);
         assert_eq!(side_state::<EnemyFighter>(&mut app), (FighterClip::Idle, 0));
+        assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::Idle);
+        assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::Idle);
     }
 
     #[test]
@@ -674,6 +957,81 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(lunges, 1, "the attacker lunges");
+    }
+
+    #[test]
+    fn combat_events_map_to_jointed_rig_pose_states() {
+        let mut app = test_app();
+        write_event(&mut app, CombatSide::Player, CombatEvent::Hit { dmg: 4 });
+        assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::Attack);
+        assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::HitReaction);
+
+        let mut app = test_app();
+        write_event(&mut app, CombatSide::Enemy, CombatEvent::Hit { dmg: 4 });
+        assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::Attack);
+        assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::HitReaction);
+
+        let mut app = test_app();
+        write_event(&mut app, CombatSide::Player, CombatEvent::Guarded);
+        assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::Block);
+        assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::Idle);
+
+        let mut app = test_app();
+        write_event(&mut app, CombatSide::Enemy, CombatEvent::Guarded);
+        assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::Block);
+        assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::Idle);
+
+        let mut app = test_app();
+        write_event(&mut app, CombatSide::Enemy, CombatEvent::Missed);
+        assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::Attack);
+        assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::Dodge);
+
+        let mut app = test_app();
+        write_event(&mut app, CombatSide::Player, CombatEvent::Missed);
+        assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::Attack);
+        assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::Dodge);
+
+        let mut app = test_app();
+        write_event(&mut app, CombatSide::Enemy, CombatEvent::Defeated);
+        assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::Knockdown);
+
+        let mut app = test_app();
+        write_event(&mut app, CombatSide::Player, CombatEvent::Defeated);
+        assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::Knockdown);
+
+        let mut app = test_app();
+        write_event_with_action(
+            &mut app,
+            CombatSide::Enemy,
+            crate::combat::CombatAction::StepBack,
+            CombatEvent::Moved {
+                from: crate::combat::DuelDistance::CLOSE,
+                to: crate::combat::DuelDistance::NEAR,
+            },
+        );
+        assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::StepBack);
+    }
+
+    #[test]
+    fn jointed_attack_pose_rotates_cutout_arm_parts_from_neutral() {
+        let mut app = test_app();
+        let neutral_hand = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::HandFront);
+        let neutral_forearm =
+            part_transform::<PlayerFighter>(&mut app, CutoutPartKind::ForearmFront);
+
+        write_event(&mut app, CombatSide::Player, CombatEvent::Missed);
+
+        let attacking_hand = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::HandFront);
+        let attacking_forearm =
+            part_transform::<PlayerFighter>(&mut app, CutoutPartKind::ForearmFront);
+        assert_ne!(
+            attacking_hand.translation, neutral_hand.translation,
+            "hand pivots into the attack pose"
+        );
+        assert_ne!(
+            attacking_forearm.rotation, neutral_forearm.rotation,
+            "forearm rotates into the attack pose"
+        );
     }
 
     #[test]

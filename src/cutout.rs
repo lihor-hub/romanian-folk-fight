@@ -80,6 +80,27 @@ pub struct CutoutPartMarker {
     pub kind: CutoutPartKind,
 }
 
+/// Current jointed pose applied to a cutout rig root by arena presentation.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CutoutPose {
+    Idle,
+    Attack,
+    Block,
+    Dodge,
+    HitReaction,
+    Knockdown,
+    StepForward,
+    StepBack,
+}
+
+/// Neutral transform data for a body part. Pose systems always rebuild from
+/// this rest pose, so repeated combat events cannot accumulate drift.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct CutoutPartRestPose {
+    pub transform: Transform,
+    pub size: Vec2,
+}
+
 /// One visible equipment layer attached to a cutout body part.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct GearVisualLayer {
@@ -141,12 +162,18 @@ pub fn spawn_cutout_rig(
         template: template.template,
         flip_x,
     });
+    commands.entity(root).insert(CutoutPose::Idle);
     commands.entity(root).with_children(|body| {
         for part in template.parts {
+            let transform = part_transform(&part, flip_x);
             body.spawn((
                 CutoutPartMarker { kind: part.kind },
+                CutoutPartRestPose {
+                    transform,
+                    size: part.size,
+                },
                 part_sprite(&part, asset_server),
-                part_transform(&part, flip_x),
+                transform,
             ));
         }
     });
@@ -165,12 +192,18 @@ pub fn spawn_cutout_rig_with_gear(
         template: template.template,
         flip_x,
     });
+    commands.entity(root).insert(CutoutPose::Idle);
     commands.entity(root).with_children(|body| {
         for part in template.parts {
+            let transform = part_transform(&part, flip_x);
             body.spawn((
                 CutoutPartMarker { kind: part.kind },
+                CutoutPartRestPose {
+                    transform,
+                    size: part.size,
+                },
                 part_sprite(&part, asset_server),
-                part_transform(&part, flip_x),
+                transform,
             ))
             .with_children(|part_children| {
                 spawn_gear_children_for_part(
