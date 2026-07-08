@@ -2,6 +2,8 @@
 //! [`crate::items::Equipment`]'s aggregated stat totals; this table tells the
 //! arena which optional overlay art to attach for visible gear.
 
+use crate::cutout::CutoutPartKind;
+
 use super::{ItemId, Slot};
 
 /// Which part of the fighter an equipment visual should follow.
@@ -19,6 +21,18 @@ pub enum GearMotion {
     Feet,
 }
 
+/// Body-part attachment point for one visible equipment layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GearAttachment {
+    pub parts: &'static [CutoutPartKind],
+}
+
+impl GearAttachment {
+    pub const fn new(parts: &'static [CutoutPartKind]) -> Self {
+        Self { parts }
+    }
+}
+
 /// Static visual layer data for one catalog item.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ItemVisual {
@@ -31,6 +45,8 @@ pub struct ItemVisual {
     /// Optional animated replacement sheet. Missing art falls back to
     /// [`Self::asset_path`].
     pub animated_asset_path: Option<&'static str>,
+    /// Rig body part this visual should be parented under.
+    pub attachment: GearAttachment,
     /// Motion profile used by the arena attachment synchronizer.
     pub motion: GearMotion,
     /// Child z offset relative to the fighter body.
@@ -57,8 +73,25 @@ const fn visual(
         slot,
         asset_path,
         animated_asset_path: None,
+        attachment: attachment_for_slot(slot),
         motion,
         z_offset,
+    }
+}
+
+const WEAPON_ATTACHMENT: [CutoutPartKind; 1] = [CutoutPartKind::HandFront];
+const SHIELD_ATTACHMENT: [CutoutPartKind; 1] = [CutoutPartKind::ForearmBack];
+const TORSO_ATTACHMENT: [CutoutPartKind; 1] = [CutoutPartKind::Torso];
+const HEAD_ATTACHMENT: [CutoutPartKind; 1] = [CutoutPartKind::Head];
+const FEET_ATTACHMENT: [CutoutPartKind; 2] = [CutoutPartKind::FootBack, CutoutPartKind::FootFront];
+
+pub const fn attachment_for_slot(slot: Slot) -> GearAttachment {
+    match slot {
+        Slot::Weapon => GearAttachment::new(&WEAPON_ATTACHMENT),
+        Slot::Shield => GearAttachment::new(&SHIELD_ATTACHMENT),
+        Slot::Torso => GearAttachment::new(&TORSO_ATTACHMENT),
+        Slot::Head => GearAttachment::new(&HEAD_ATTACHMENT),
+        Slot::Feet => GearAttachment::new(&FEET_ATTACHMENT),
     }
 }
 
@@ -183,6 +216,14 @@ mod tests {
                 Slot::Feet => GearMotion::Feet,
             };
             assert_eq!(visual.motion, expected_motion);
+            let expected_attachment: &[CutoutPartKind] = match id.item().slot {
+                Slot::Weapon => &[CutoutPartKind::HandFront],
+                Slot::Shield => &[CutoutPartKind::ForearmBack],
+                Slot::Torso => &[CutoutPartKind::Torso],
+                Slot::Head => &[CutoutPartKind::Head],
+                Slot::Feet => &[CutoutPartKind::FootBack, CutoutPartKind::FootFront],
+            };
+            assert_eq!(visual.attachment.parts, expected_attachment);
         }
     }
 

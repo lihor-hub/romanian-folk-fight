@@ -16,10 +16,11 @@ use crate::combat::AiProfile;
 use crate::core::{GameState, UiFont, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::cutout::{
-    CutoutRig, CutoutRigTemplate, CutoutTemplate, boss_template, enemy_template, human_template,
-    human_template_for, spawn_cutout_rig,
+    CutoutPartMarker, CutoutRig, CutoutRigTemplate, CutoutTemplate, GearVisualLayer, boss_template,
+    enemy_template, human_template, human_template_for, spawn_cutout_rig,
+    spawn_gear_attachment_layers,
 };
-use crate::items::{Equipment, GearMotion, ItemId, Slot, item_visual};
+use crate::items::{Equipment, GearMotion};
 use crate::roster::{Boss, LadderProgress, Opponent};
 use crate::theme::{BOSS_LABEL_COLOR, CREAM, GROUND_COLOR};
 use animation::{AnimationSet, FighterClip, FighterSpriteSheets};
@@ -49,6 +50,11 @@ pub const ENEMY_ANCHOR: Transform = Transform::from_xyz(220.0, FIGHTER_Y, 0.0);
 /// Vertical offset of the name label above a fighter's body center.
 const LABEL_OFFSET_Y: f32 = FIGHTER_SIZE.y / 2.0 + 24.0;
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ArenaSet {
+    GearRefresh,
+}
+
 /// Marker for every arena entity; all of them despawn on
 /// `OnExit(GameState::Fight)` via [`despawn_screen`].
 #[derive(Component)]
@@ -64,7 +70,7 @@ impl Plugin for ArenaPlugin {
                 Update,
                 (
                     spawn_arena_when_ready,
-                    spawn_equipped_gear_layers,
+                    spawn_equipped_gear_layers.in_set(ArenaSet::GearRefresh),
                     sync_gear_visual_layers,
                 )
                     .chain()
@@ -261,19 +267,6 @@ fn opponent_template(opponent: &Opponent) -> CutoutRigTemplate {
     }
 }
 
-/// One visible equipment overlay attached to a fighter.
-#[derive(Component, Debug, Clone, Copy, PartialEq)]
-pub(crate) struct GearVisualLayer {
-    /// Catalog item shown by this layer.
-    pub item: ItemId,
-    /// Equipment slot this layer occupies.
-    pub slot: Slot,
-    /// Motion profile used to follow the owning fighter's pose.
-    pub motion: GearMotion,
-    /// Stable draw order relative to the fighter body.
-    pub z_offset: f32,
-}
-
 /// Last clip/frame copied from the owning fighter into a gear visual layer.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GearAnimationState {
@@ -297,56 +290,37 @@ fn spawn_equipped_gear_layers(
     mut commands: Commands,
     asset_server: Option<Res<AssetServer>>,
     fighters: ChangedFighterEquipment,
+    parts: Query<(Entity, &CutoutPartMarker, &ChildOf)>,
     existing_layers: Query<(Entity, &ChildOf), With<GearVisualLayer>>,
 ) {
     for (fighter, equipment) in &fighters {
         for (layer, child_of) in &existing_layers {
-            if child_of.parent() == fighter {
+            if parts
+                .get(child_of.parent())
+                .map(|(_, _, part_parent)| part_parent.parent() == fighter)
+                .unwrap_or(false)
+            {
                 commands.entity(layer).despawn();
             }
         }
 
-        for slot in Slot::ALL {
-            let Some(item) = equipment.equipped(slot) else {
-                continue;
-            };
-            let Some(visual) = item_visual(item) else {
-                continue;
-            };
-            commands.entity(fighter).with_children(|body| {
-                body.spawn((
-                    GearVisualLayer {
-                        item,
-                        slot,
-                        motion: visual.motion,
-                        z_offset: visual.z_offset,
-                    },
-                    GearAnimationState {
-                        clip: FighterClip::Idle,
-                        frame: FighterClip::Idle.animation().first,
-                    },
-                    gear_sprite(visual.fallback_asset_path(), asset_server.as_deref()),
-                    gear_local_transform(
-                        visual.motion,
-                        FighterClip::Idle,
-                        FighterClip::Idle.animation().first,
-                        visual.z_offset,
-                        false,
-                    ),
-                ));
-            });
-        }
-    }
-}
-
-/// Runtime uses the generated transparent PNG; headless tests without an
-/// [`AssetServer`] still spawn a harmless placeholder sprite so ECS behavior
-/// remains testable.
-fn gear_sprite(asset_path: &'static str, asset_server: Option<&AssetServer>) -> Sprite {
-    if let Some(asset_server) = asset_server {
-        Sprite::from_image(asset_server.load(asset_path))
-    } else {
-        Sprite::from_color(Color::srgba(1.0, 1.0, 1.0, 0.35), FIGHTER_SIZE)
+        spawn_gear_attachment_layers(
+            &mut commands,
+            equipment,
+            asset_server.as_deref(),
+            |wanted| {
+                parts
+                    .iter()
+                    .find(|(_, marker, part_parent)| {
+                        part_parent.parent() == fighter && marker.kind == wanted
+                    })
+                    .map(|(part, _, _)| part)
+            },
+            |_| GearAnimationState {
+                clip: FighterClip::Idle,
+                frame: FighterClip::Idle.animation().first,
+            },
+        );
     }
 }
 
@@ -360,6 +334,7 @@ fn sync_gear_visual_layers(
         Option<&Sprite>,
         Option<&CutoutRig>,
     )>,
+    parts: Query<&ChildOf, With<CutoutPartMarker>>,
     mut layers: Query<(
         &GearVisualLayer,
         &ChildOf,
@@ -368,7 +343,10 @@ fn sync_gear_visual_layers(
     )>,
 ) {
     for (layer, child_of, mut state, mut transform) in &mut layers {
-        let Ok((clip, anim, sprite, rig)) = fighters.get(child_of.parent()) else {
+        let Ok(part_parent) = parts.get(child_of.parent()) else {
+            continue;
+        };
+        let Ok((clip, anim, sprite, rig)) = fighters.get(part_parent.parent()) else {
             continue;
         };
         let frame = sprite
@@ -486,9 +464,10 @@ mod tests {
     };
     use crate::core::CorePlugin;
     use crate::cutout::{
-        CutoutPartMarker, CutoutRig, CutoutTemplate, boss_template, enemy_template, human_template,
+        CutoutPartKind, CutoutPartMarker, CutoutRig, CutoutTemplate, boss_template, enemy_template,
+        gear_sprite, human_template,
     };
-    use crate::items::{ItemId, Slot};
+    use crate::items::{ItemId, Slot, item_visual};
     use crate::roster::LADDER;
     use bevy::state::app::StatesPlugin;
 
@@ -872,12 +851,23 @@ mod tests {
             .query_filtered::<Entity, With<EnemyFighter>>()
             .single(app.world())
             .expect("enemy fighter exists");
+        let part_owners: Vec<(Entity, Entity)> = app
+            .world_mut()
+            .query::<(Entity, &CutoutPartMarker, &ChildOf)>()
+            .iter(app.world())
+            .map(|(part, _, child_of)| (part, child_of.parent()))
+            .collect();
         let mut layers: Vec<(ItemId, Slot, GearMotion, Entity)> = app
             .world_mut()
             .query::<(&GearVisualLayer, &ChildOf)>()
             .iter(app.world())
-            .filter(|(_, child_of)| child_of.parent() == enemy)
-            .map(|(layer, child_of)| (layer.item, layer.slot, layer.motion, child_of.parent()))
+            .filter_map(|(layer, child_of)| {
+                let owner = part_owners
+                    .iter()
+                    .find(|(part, _)| *part == child_of.parent())?
+                    .1;
+                (owner == enemy).then_some((layer.item, layer.slot, layer.motion, owner))
+            })
             .collect();
         layers.sort_by_key(|(id, _, _, _)| *id as usize);
         assert_eq!(
@@ -990,12 +980,23 @@ mod tests {
             .query_filtered::<Entity, With<PlayerFighter>>()
             .single(app.world())
             .expect("player fighter exists");
+        let part_owners: Vec<(Entity, Entity)> = app
+            .world_mut()
+            .query::<(Entity, &CutoutPartMarker, &ChildOf)>()
+            .iter(app.world())
+            .map(|(part, _, child_of)| (part, child_of.parent()))
+            .collect();
         let mut layers: Vec<(ItemId, Slot, Entity)> = app
             .world_mut()
             .query::<(&GearVisualLayer, &ChildOf)>()
             .iter(app.world())
-            .filter(|(_, child_of)| child_of.parent() == player)
-            .map(|(layer, child_of)| (layer.item, layer.slot, child_of.parent()))
+            .filter_map(|(layer, child_of)| {
+                let owner = part_owners
+                    .iter()
+                    .find(|(part, _)| *part == child_of.parent())?
+                    .1;
+                (owner == player).then_some((layer.item, layer.slot, owner))
+            })
             .collect();
         layers.sort_by_key(|(id, _, _)| *id as usize);
         assert_eq!(
@@ -1003,6 +1004,50 @@ mod tests {
             vec![
                 (ItemId::Palos, Slot::Weapon, player),
                 (ItemId::CojocGros, Slot::Torso, player),
+            ]
+        );
+    }
+
+    #[test]
+    fn equipped_player_gear_layers_attach_to_matching_cutout_parts() {
+        let mut loadout = Equipment::default();
+        loadout.equip(ItemId::Palos);
+        loadout.equip(ItemId::ScutFerecat);
+        loadout.equip(ItemId::CaciulaDeOaie);
+        loadout.equip(ItemId::CizmeDeVoinic);
+
+        let mut app = player_with_loadout(loadout);
+        app.update();
+
+        let part_kinds: Vec<(Entity, CutoutPartKind)> = app
+            .world_mut()
+            .query::<(Entity, &CutoutPartMarker)>()
+            .iter(app.world())
+            .map(|(part, marker)| (part, marker.kind))
+            .collect();
+        let mut attachments: Vec<(Slot, CutoutPartKind)> = app
+            .world_mut()
+            .query::<(&GearVisualLayer, &ChildOf)>()
+            .iter(app.world())
+            .map(|(layer, child_of)| {
+                let kind = part_kinds
+                    .iter()
+                    .find(|(part, _)| *part == child_of.parent())
+                    .map(|(_, kind)| *kind)
+                    .expect("gear layer parent is a cutout body part");
+                (layer.slot, kind)
+            })
+            .collect();
+        attachments.sort_by_key(|(slot, _)| *slot as usize);
+
+        assert_eq!(
+            attachments,
+            vec![
+                (Slot::Weapon, CutoutPartKind::HandFront),
+                (Slot::Shield, CutoutPartKind::ForearmBack),
+                (Slot::Head, CutoutPartKind::Head),
+                (Slot::Feet, CutoutPartKind::FootBack),
+                (Slot::Feet, CutoutPartKind::FootFront),
             ]
         );
     }
