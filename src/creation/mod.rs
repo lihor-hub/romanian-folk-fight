@@ -16,6 +16,7 @@ use crate::core::{GameState, UiFont, despawn_screen};
 use crate::cutout::{CutoutRig, human_template_for, spawn_cutout_rig};
 use crate::items::Equipment;
 use crate::menu::DisabledButton;
+use crate::save::SaveRequested;
 use crate::shop::{OwnedItems, PlayerEquipment};
 use crate::theme::{
     BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK,
@@ -94,7 +95,8 @@ pub struct CreationPlugin;
 
 impl Plugin for CreationPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CharacterDraft>()
+        app.add_message::<SaveRequested>()
+            .init_resource::<CharacterDraft>()
             .add_plugins(crate::ui_widgets::ScrollInputPlugin)
             .add_systems(OnEnter(GameState::CharacterCreation), spawn_creation_screen)
             .add_systems(
@@ -390,6 +392,7 @@ fn handle_creation_actions(
     interactions: Query<(&Interaction, &CreationAction), ChangedEnabledButton>,
     mut draft: ResMut<CharacterDraft>,
     mut next_state: ResMut<NextState<GameState>>,
+    mut save_requests: MessageWriter<SaveRequested>,
 ) {
     for (interaction, action) in &interactions {
         if *interaction != Interaction::Pressed {
@@ -432,6 +435,7 @@ fn handle_creation_actions(
                         draft.starter_items().iter().copied().collect(),
                     ));
                     commands.insert_resource(PlayerEquipment(equipment));
+                    save_requests.write(SaveRequested);
                     draft.reset();
                     next_state.set(GameState::Fight);
                 }
@@ -571,6 +575,7 @@ mod tests {
     use crate::core::CorePlugin;
     use crate::cutout::{CutoutPartMarker, human_template};
     use crate::items::ItemId;
+    use crate::save::{SaveGame, SavePlugin, SaveStore};
     use bevy::state::app::StatesPlugin;
 
     fn test_app() -> App {
@@ -583,6 +588,31 @@ mod tests {
         app.update();
         app.update();
         app
+    }
+
+    fn test_app_with_save() -> (App, std::sync::Arc<std::sync::Mutex<Option<String>>>) {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            CreationPlugin,
+            SavePlugin,
+        ));
+        let (store, cell) = SaveStore::in_memory();
+        app.insert_resource(store);
+        app.insert_resource(crate::progression::Level::default());
+        app.insert_resource(crate::progression::Wallet::default());
+        app.insert_resource(crate::roster::LadderProgress::default());
+        app.insert_resource(OwnedItems::default());
+        app.insert_resource(PlayerEquipment::default());
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::CharacterCreation);
+        app.update();
+        app.update();
+        (app, cell)
     }
 
     fn find_button(app: &mut App, action: CreationAction) -> Entity {
@@ -813,6 +843,35 @@ mod tests {
             GameState::Fight
         );
         assert_eq!(*draft(&app), CharacterDraft::default());
+    }
+
+    #[test]
+    fn confirming_a_new_hero_autosaves_that_run_immediately() {
+        let (mut app, cell) = test_app_with_save();
+        let old_save = r#"{"version":1,"name":"Old Hero","attrs":{"putere":9,"agilitate":1,"vitalitate":1,"noroc":1},"level":3,"xp":99,"unspent_points":0,"wallet":444,"owned_items":[],"equipped":[],"ladder_progress":4,"lap":1}"#;
+        *cell.lock().expect("test store lock") = Some(old_save.to_string());
+
+        press(
+            &mut app,
+            CreationAction::SelectChoice(HeroChoice::Preset(HeroPreset::Ciobanul)),
+        );
+        press(&mut app, CreationAction::Confirm);
+        app.update();
+
+        let json = cell
+            .lock()
+            .expect("test store lock")
+            .clone()
+            .expect("confirm writes a save");
+        let save = SaveGame::from_json(&json).expect("new hero save is valid");
+        assert_eq!(save.name, "Ciobanul");
+        assert_eq!(save.attrs, HeroPreset::Ciobanul.attributes().into());
+        assert_eq!(save.appearance, HeroPreset::Ciobanul.appearance());
+        assert_eq!(save.ladder_progress, 0, "new run starts at first fight");
+        assert!(
+            save.equipped.contains(&"BataCiobaneasca".to_string()),
+            "preset starter loadout is captured"
+        );
     }
 
     #[test]
