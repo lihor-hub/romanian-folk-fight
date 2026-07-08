@@ -168,10 +168,41 @@ pub(super) fn spawn_hud(mut commands: Commands) {
         children![
             fighter_panel(CombatSide::Player),
             fighter_panel(CombatSide::Enemy),
+            pause_button(),
             log_panel(),
             action_bar(),
         ],
     ));
+}
+
+/// The small, touch-friendly ⏸ button top-center of the HUD; clicking it
+/// opens the pause overlay (see [`super::pause`]).
+fn pause_button() -> impl Bundle {
+    (
+        Button,
+        super::pause::PauseButton,
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(12.0),
+            left: Val::Percent(50.0),
+            // Center the fixed-width button on the 50% anchor.
+            margin: UiRect::left(Val::Px(-24.0)),
+            width: Val::Px(48.0),
+            height: Val::Px(48.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(BUTTON_NORMAL),
+        children![(
+            Text::new("⏸"),
+            TextFont {
+                font_size: FontSize::Px(24.0),
+                ..default()
+            },
+            TextColor(CREAM),
+        )],
+    )
 }
 
 /// Drops the combat log on leaving the fight; the HUD entities are removed by

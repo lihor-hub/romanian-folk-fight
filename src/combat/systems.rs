@@ -14,6 +14,7 @@ use crate::items::Equipment;
 use super::ai::{self, AiProfile};
 use super::engine::{self, CombatAction, CombatEvent};
 use super::hud;
+use super::pause::{self, PauseState};
 
 /// The two sides of a duel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,7 +79,8 @@ pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<PlayerActionEvent>()
+        app.add_plugins(pause::PausePlugin)
+            .add_message::<PlayerActionEvent>()
             .add_message::<CombatLogEvent>()
             .add_systems(OnEnter(GameState::Fight), (setup_combat, hud::spawn_hud))
             .add_systems(
@@ -93,9 +95,16 @@ impl Plugin for CombatPlugin {
                 Update,
                 (
                     init_turn,
-                    hud::handle_action_buttons,
-                    resolve_player_action,
-                    enemy_turn,
+                    // Combat input and the enemy reply freeze while paused
+                    // (run condition, not per-system ifs); the HUD display
+                    // systems below keep running under the overlay.
+                    (
+                        hud::handle_action_buttons,
+                        resolve_player_action,
+                        enemy_turn,
+                    )
+                        .chain()
+                        .run_if(in_state(PauseState::Running)),
                     hud::collect_log_lines,
                     hud::update_button_backgrounds,
                     hud::update_action_buttons,
@@ -116,7 +125,8 @@ impl Plugin for CombatPlugin {
             player_input
                 .after(init_turn)
                 .before(resolve_player_action)
-                .run_if(in_state(GameState::Fight)),
+                .run_if(in_state(GameState::Fight))
+                .run_if(in_state(PauseState::Running)),
         );
     }
 }
