@@ -17,6 +17,87 @@ generated art and may be replaced by cleaned artist-authored parts.
 | `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Strigoi enemy pixel-art cutout body-part source sheet | OpenAI-generated for this project | Same as project assets unless superseded |
 | `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Zmeu boss pixel-art cutout body-part source sheet | OpenAI-generated for this project | Same as project assets unless superseded |
 
+## Fighter runtime parts (`assets/fighters/*/runtime/`)
+
+The runtime PNG parts below are direct crops derived from the credited source
+sheets above so the Bevy cutout rig can show production-intent art in creator,
+shop, and arena flows without introducing a new production generator pipeline.
+
+### Human runtime parts
+
+| File | Depicts | Source | License |
+| --- | --- | --- | --- |
+| `fighters/human/runtime/foot_back.png` | Derived runtime human cutout part (foot back) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/foot_front.png` | Derived runtime human cutout part (foot front) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/forearm_back.png` | Derived runtime human cutout part (forearm back) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/forearm_front.png` | Derived runtime human cutout part (forearm front) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/hair.png` | Derived runtime human cutout part (hair) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/hand_back.png` | Derived runtime human cutout part (hand back) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/hand_front.png` | Derived runtime human cutout part (hand front) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/head.png` | Derived runtime human cutout part (head) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/shin_back.png` | Derived runtime human cutout part (shin back) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/shin_front.png` | Derived runtime human cutout part (shin front) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/thigh_back.png` | Derived runtime human cutout part (thigh back) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/thigh_front.png` | Derived runtime human cutout part (thigh front) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/torso.png` | Derived runtime human cutout part (torso) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/upper_arm_back.png` | Derived runtime human cutout part (upper arm back) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/upper_arm_front.png` | Derived runtime human cutout part (upper arm front) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+
+### Strigoi runtime parts
+
+| File | Depicts | Source | License |
+| --- | --- | --- | --- |
+| `fighters/strigoi/runtime/foot_back.png` | Derived runtime strigoi cutout part (foot back) | Cropped from `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/strigoi/runtime/foot_front.png` | Derived runtime strigoi cutout part (foot front) | Cropped from `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/strigoi/runtime/forearm_back.png` | Derived runtime strigoi cutout part (forearm back) | Cropped from `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/strigoi/runtime/forearm_front.png` | Derived runtime strigoi cutout part (forearm front) | Cropped from `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/strigoi/runtime/hand_back.png` | Derived runtime strigoi cutout part (hand back) | Cropped from `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/strigoi/runtime/hand_front.png` | Derived runtime strigoi cutout part (hand front) | Cropped from `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/strigoi/runtime/head.png` | Derived runtime strigoi cutout part (head) | Cropped from `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/strigoi/runtime/shin_back.png` | Derived runtime strigoi cutout part (shin back) | Cropped from `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/strigoi/runtime/shin_front.png` | Derived runtime strigoi cutout part (shin front) | Cropped from `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/strigoi/runtime/thigh_back.png` | Derived runtime strigoi cutout part (thigh back) | Cropped from `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/strigoi/runtime/thigh_front.png` | Derived runtime strigoi cutout part (thigh front) | Cropped from `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/strigoi/runtime/torso.png` | Derived runtime strigoi cutout part (torso) | Cropped from `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/strigoi/runtime/upper_arm_back.png` | Derived runtime strigoi cutout part (upper arm back) | Cropped from `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/strigoi/runtime/upper_arm_front.png` | Derived runtime strigoi cutout part (upper arm front) | Cropped from `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Same as project assets unless superseded |
+
+### Zmeu runtime parts
+
+| File | Depicts | Source | License |
+| --- | --- | --- | --- |
+| `fighters/zmeu/runtime/foot_back.png` | Derived runtime zmeu cutout part (foot back) | Cropped from `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/zmeu/runtime/foot_front.png` | Derived runtime zmeu cutout part (foot front) | Cropped from `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/zmeu/runtime/forearm_back.png` | Derived runtime zmeu cutout part (forearm back) | Cropped from `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/zmeu/runtime/forearm_front.png` | Derived runtime zmeu cutout part (forearm front) | Cropped from `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/zmeu/runtime/hand_back.png` | Derived runtime zmeu cutout part (hand back) | Cropped from `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/zmeu/runtime/hand_front.png` | Derived runtime zmeu cutout part (hand front) | Cropped from `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/zmeu/runtime/head.png` | Derived runtime zmeu cutout part (head) | Cropped from `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/zmeu/runtime/shin_back.png` | Derived runtime zmeu cutout part (shin back) | Cropped from `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/zmeu/runtime/shin_front.png` | Derived runtime zmeu cutout part (shin front) | Cropped from `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/zmeu/runtime/thigh_back.png` | Derived runtime zmeu cutout part (thigh back) | Cropped from `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/zmeu/runtime/thigh_front.png` | Derived runtime zmeu cutout part (thigh front) | Cropped from `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/zmeu/runtime/torso.png` | Derived runtime zmeu cutout part (torso) | Cropped from `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/zmeu/runtime/upper_arm_back.png` | Derived runtime zmeu cutout part (upper arm back) | Cropped from `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/zmeu/runtime/upper_arm_front.png` | Derived runtime zmeu cutout part (upper arm front) | Cropped from `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Same as project assets unless superseded |
+
+### Gear runtime parts
+
+| File | Depicts | Source | License |
+| --- | --- | --- | --- |
+| `fighters/gear/runtime/bata_ciobaneasca.png` | Derived runtime starter gear asset (bata ciobaneasca) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/caciula_de_oaie.png` | Derived runtime starter gear asset (caciula de oaie) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/camasa_de_zale.png` | Derived runtime starter gear asset (camasa de zale) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/cizme_de_voinic.png` | Derived runtime starter gear asset (cizme de voinic) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/coif_de_ostean.png` | Derived runtime starter gear asset (coif de ostean) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/cojoc_gros.png` | Derived runtime starter gear asset (cojoc gros) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/ie_descantata.png` | Derived runtime starter gear asset (ie descantata) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/opinci_iuti.png` | Derived runtime starter gear asset (opinci iuti) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/palos.png` | Derived runtime starter gear asset (palos) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/scut_de_lemn.png` | Derived runtime starter gear asset (scut de lemn) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/scut_ferecat.png` | Derived runtime starter gear asset (scut ferecat) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/topor_de_padurar.png` | Derived runtime starter gear asset (topor de padurar) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+
 ## UI presentation source sheets (`assets/ui/source/`)
 
 The UI presentation source sheet below was generated for this project with

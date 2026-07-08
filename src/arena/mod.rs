@@ -1175,8 +1175,8 @@ mod tests {
         let visual = item_visual(ItemId::Palos).expect("visual metadata");
         assert_eq!(visual.animated_asset_path, None);
         assert_eq!(visual.fallback_asset_path(), visual.asset_path);
-        let sprite = gear_sprite(visual.fallback_asset_path(), None);
-        assert_eq!(sprite.custom_size, Some(FIGHTER_SIZE));
+        let sprite = gear_sprite(visual, None);
+        assert_eq!(sprite.custom_size, Some(Vec2::new(28.0, 92.0)));
     }
 
     #[test]
