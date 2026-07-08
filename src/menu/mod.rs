@@ -5,6 +5,7 @@ use bevy::prelude::*;
 
 use crate::core::{GameState, despawn_screen};
 use crate::save::{SaveStore, load_save};
+use crate::settings::SettingsOpen;
 
 // Placeholder folk palette (deep red / cream / black); real art comes in
 // Phase 4. Public so later screens (e.g. character creation) share the exact
@@ -34,6 +35,8 @@ pub enum MenuAction {
     /// Resume the saved run: restore every run resource from the save and
     /// enter [`GameState::Fight`]. Only spawned when a valid save loads.
     Continue,
+    /// Open the settings overlay (#30) on top of the menu.
+    Settings,
     /// Quit the app; native builds only.
     #[cfg(not(target_arch = "wasm32"))]
     Quit,
@@ -108,6 +111,10 @@ fn spawn_main_menu(mut commands: Commands, store: Option<Res<SaveStore>>) {
                     DisabledButton,
                 ));
             }
+            parent.spawn((
+                menu_button("Setări", CREAM, BUTTON_NORMAL),
+                MenuAction::Settings,
+            ));
             #[cfg(not(target_arch = "wasm32"))]
             parent.spawn((menu_button("Ieși", CREAM, BUTTON_NORMAL), MenuAction::Quit));
         });
@@ -169,6 +176,7 @@ fn handle_menu_actions(
                     None => warn!("Continuă pressed but no valid save loads; staying on the menu"),
                 }
             }
+            MenuAction::Settings => commands.insert_resource(SettingsOpen),
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::Quit => {
                 app_exit.write(AppExit::Success);
@@ -228,7 +236,7 @@ mod tests {
         let mut app = test_app();
         app.update();
         assert_eq!(count::<MainMenuScreen>(&mut app), 1, "menu root spawned");
-        let expected_buttons = if cfg!(target_arch = "wasm32") { 2 } else { 3 };
+        let expected_buttons = if cfg!(target_arch = "wasm32") { 3 } else { 4 };
         assert_eq!(count::<Button>(&mut app), expected_buttons);
 
         let new_game = app
@@ -248,6 +256,24 @@ mod tests {
         assert_eq!(count::<MainMenuScreen>(&mut app), 0, "root despawned");
         assert_eq!(count::<Button>(&mut app), 0, "buttons despawned");
         assert_eq!(count::<Text>(&mut app), 0, "labels and title despawned");
+    }
+
+    #[test]
+    fn pressing_setari_inserts_the_settings_open_marker() {
+        let mut app = test_app();
+        app.update();
+        app.world_mut()
+            .spawn((Button, Interaction::Pressed, MenuAction::Settings));
+        app.update();
+        assert!(
+            app.world().get_resource::<SettingsOpen>().is_some(),
+            "Setări opens the settings overlay without leaving the menu"
+        );
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::MainMenu,
+            "settings is an overlay, not a state change"
+        );
     }
 
     #[test]

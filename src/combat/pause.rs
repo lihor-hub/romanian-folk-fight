@@ -10,10 +10,8 @@
 use bevy::prelude::*;
 
 use crate::core::{GameState, despawn_screen};
-use crate::menu::{
-    BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, DisabledButton,
-    TEXT_DISABLED,
-};
+use crate::menu::{BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, DisabledButton};
+use crate::settings::SettingsOpen;
 
 /// Whether the running fight is paused. Exists only inside
 /// `GameState::Fight`; leaving the fight drops it (and the overlay with it).
@@ -39,6 +37,9 @@ pub(super) struct PauseButton;
 pub(super) enum PauseAction {
     /// «Continuă lupta» — unpause and resume the same turn.
     Resume,
+    /// «Setări» — open the settings overlay on top of the pause panel;
+    /// closing it returns here, still paused.
+    Settings,
     /// «Abandonează» — back to the main menu; the run keeps its last
     /// autosave, and the fight restarts fresh on return.
     Abandon,
@@ -57,7 +58,7 @@ impl Plugin for PausePlugin {
             .add_systems(
                 Update,
                 (
-                    toggle_on_esc,
+                    toggle_on_esc.run_if(not(resource_exists::<SettingsOpen>)),
                     handle_pause_button,
                     handle_overlay_buttons,
                     update_button_backgrounds,
@@ -67,7 +68,9 @@ impl Plugin for PausePlugin {
     }
 }
 
-/// Esc toggles the pause overlay while fighting.
+/// Esc toggles the pause overlay while fighting. Gated off while the
+/// settings overlay sits on top (see the plugin's run condition): Esc must
+/// not silently unpause the fight under it.
 fn toggle_on_esc(
     keys: Res<ButtonInput<KeyCode>>,
     state: Res<State<PauseState>>,
@@ -109,6 +112,7 @@ type ChangedEnabledPauseButton = (
 /// main menu. Abandoning is not a defeat and never touches the save — the
 /// run keeps its last autosave and the fight restarts on return.
 fn handle_overlay_buttons(
+    mut commands: Commands,
     interactions: Query<(&Interaction, &PauseAction), ChangedEnabledOverlayButton>,
     mut next_pause: ResMut<NextState<PauseState>>,
     mut next_game: ResMut<NextState<GameState>>,
@@ -119,6 +123,7 @@ fn handle_overlay_buttons(
         }
         match action {
             PauseAction::Resume => next_pause.set(PauseState::Running),
+            PauseAction::Settings => commands.insert_resource(SettingsOpen),
             PauseAction::Abandon => next_game.set(GameState::MainMenu),
         }
     }
@@ -172,8 +177,7 @@ fn spawn_overlay(mut commands: Commands) {
                     TextColor(CREAM),
                 ),
                 overlay_button("Continuă lupta", PauseAction::Resume),
-                // Disabled until the settings-screen issue lands.
-                disabled_overlay_button("Setări", PauseAction::Resume),
+                overlay_button("Setări", PauseAction::Settings),
                 overlay_button("Abandonează", PauseAction::Abandon),
             ],
         )],
@@ -183,15 +187,6 @@ fn spawn_overlay(mut commands: Commands) {
 /// One wide, enabled overlay button in the main-menu style.
 fn overlay_button(label: &str, action: PauseAction) -> impl Bundle {
     button_parts(label, action, BUTTON_NORMAL, CREAM)
-}
-
-/// A greyed-out overlay button; [`DisabledButton`] keeps every handler and
-/// the hover feedback away from it.
-fn disabled_overlay_button(label: &str, action: PauseAction) -> impl Bundle {
-    (
-        button_parts(label, action, BUTTON_DISABLED, TEXT_DISABLED),
-        DisabledButton,
-    )
 }
 
 /// The shared shape of an overlay button: wide, centered label.
@@ -415,17 +410,36 @@ mod tests {
     }
 
     #[test]
-    fn setari_is_disabled_and_inert_until_the_settings_issue_lands() {
+    fn setari_opens_the_settings_overlay_and_stays_paused() {
         let mut app = test_app();
         press_esc(&mut app);
         let button = find_overlay_button(&mut app, "Setări");
         assert!(
-            app.world().entity(button).contains::<DisabledButton>(),
-            "Setări is greyed out"
+            !app.world().entity(button).contains::<DisabledButton>(),
+            "Setări is enabled now that the settings overlay exists"
         );
         click(&mut app, button);
-        assert_eq!(pause_state(&app), PauseState::Paused, "click is inert");
+        assert!(
+            app.world().get_resource::<SettingsOpen>().is_some(),
+            "Setări opens the settings overlay"
+        );
+        assert_eq!(pause_state(&app), PauseState::Paused, "still paused");
         assert_eq!(game_state(&app), GameState::Fight);
+    }
+
+    #[test]
+    fn esc_is_inert_while_the_settings_overlay_is_open() {
+        let mut app = test_app();
+        press_esc(&mut app);
+        assert_eq!(pause_state(&app), PauseState::Paused);
+        app.insert_resource(SettingsOpen);
+        app.update();
+        press_esc(&mut app);
+        assert_eq!(
+            pause_state(&app),
+            PauseState::Paused,
+            "Esc must not unpause the fight under the settings overlay"
+        );
     }
 
     #[test]
