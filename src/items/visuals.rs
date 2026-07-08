@@ -42,6 +42,10 @@ pub struct ItemVisual {
     pub slot: Slot,
     /// Path under `assets/` for the transparent overlay image.
     pub asset_path: &'static str,
+    /// Runtime display size in world units for the trimmed gear art.
+    pub size: (f32, f32),
+    /// Local translation from the owning cutout part origin.
+    pub offset: (f32, f32),
     /// Optional animated replacement sheet. Missing art falls back to
     /// [`Self::asset_path`].
     pub animated_asset_path: Option<&'static str>,
@@ -65,6 +69,8 @@ const fn visual(
     id: ItemId,
     slot: Slot,
     asset_path: &'static str,
+    size: (f32, f32),
+    offset: (f32, f32),
     motion: GearMotion,
     z_offset: f32,
 ) -> ItemVisual {
@@ -72,6 +78,8 @@ const fn visual(
         id,
         slot,
         asset_path,
+        size,
+        offset,
         animated_asset_path: None,
         attachment: attachment_for_slot(slot),
         motion,
@@ -101,21 +109,27 @@ pub static ITEM_VISUALS: [ItemVisual; 13] = [
     visual(
         ItemId::BataCiobaneasca,
         Slot::Weapon,
-        "gear/bata_ciobaneasca.png",
+        "fighters/gear/runtime/bata_ciobaneasca.png",
+        (18.0, 136.0),
+        (-2.0, 42.0),
         GearMotion::WeaponHand,
         0.06,
     ),
     visual(
         ItemId::ToporDePadurar,
         Slot::Weapon,
-        "gear/topor_de_padurar.png",
+        "fighters/gear/runtime/topor_de_padurar.png",
+        (42.0, 82.0),
+        (8.0, 20.0),
         GearMotion::WeaponHand,
         0.06,
     ),
     visual(
         ItemId::Palos,
         Slot::Weapon,
-        "gear/palos.png",
+        "fighters/gear/runtime/palos.png",
+        (28.0, 92.0),
+        (8.0, 20.0),
         GearMotion::WeaponHand,
         0.06,
     ),
@@ -123,69 +137,89 @@ pub static ITEM_VISUALS: [ItemVisual; 13] = [
         ItemId::BuzduganCuTreiPeceti,
         Slot::Weapon,
         "gear/buzdugan_cu_trei_peceti.png",
+        (40.0, 88.0),
+        (8.0, 18.0),
         GearMotion::WeaponHand,
         0.06,
     ),
     visual(
         ItemId::ScutDeLemn,
         Slot::Shield,
-        "gear/scut_de_lemn.png",
+        "fighters/gear/runtime/scut_de_lemn.png",
+        (54.0, 54.0),
+        (-4.0, 4.0),
         GearMotion::ShieldArm,
         0.04,
     ),
     visual(
         ItemId::ScutFerecat,
         Slot::Shield,
-        "gear/scut_ferecat.png",
+        "fighters/gear/runtime/scut_ferecat.png",
+        (54.0, 54.0),
+        (-4.0, 4.0),
         GearMotion::ShieldArm,
         0.04,
     ),
     visual(
         ItemId::IeDescantata,
         Slot::Torso,
-        "gear/ie_descantata.png",
+        "fighters/gear/runtime/ie_descantata.png",
+        (56.0, 76.0),
+        (0.0, 2.0),
         GearMotion::Body,
         0.02,
     ),
     visual(
         ItemId::CojocGros,
         Slot::Torso,
-        "gear/cojoc_gros.png",
+        "fighters/gear/runtime/cojoc_gros.png",
+        (54.0, 72.0),
+        (0.0, 2.0),
         GearMotion::Body,
         0.02,
     ),
     visual(
         ItemId::CamasaDeZale,
         Slot::Torso,
-        "gear/camasa_de_zale.png",
+        "fighters/gear/runtime/camasa_de_zale.png",
+        (56.0, 74.0),
+        (0.0, 2.0),
         GearMotion::Body,
         0.02,
     ),
     visual(
         ItemId::CaciulaDeOaie,
         Slot::Head,
-        "gear/caciula_de_oaie.png",
+        "fighters/gear/runtime/caciula_de_oaie.png",
+        (40.0, 30.0),
+        (0.0, 18.0),
         GearMotion::Head,
         0.05,
     ),
     visual(
         ItemId::CoifDeOstean,
         Slot::Head,
-        "gear/coif_de_ostean.png",
+        "fighters/gear/runtime/coif_de_ostean.png",
+        (38.0, 34.0),
+        (0.0, 14.0),
         GearMotion::Head,
         0.05,
     ),
     visual(
         ItemId::OpinciIuti,
         Slot::Feet,
-        "gear/opinci_iuti.png",
+        "fighters/gear/runtime/opinci_iuti.png",
+        (30.0, 18.0),
+        (0.0, -2.0),
         GearMotion::Feet,
         0.03,
     ),
     visual(
         ItemId::CizmeDeVoinic,
         Slot::Feet,
-        "gear/cizme_de_voinic.png",
+        "fighters/gear/runtime/cizme_de_voinic.png",
+        (28.0, 24.0),
+        (0.0, -1.0),
         GearMotion::Feet,
         0.03,
     ),
@@ -201,6 +235,7 @@ pub fn item_visual(id: ItemId) -> Option<&'static ItemVisual> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn visual_metadata_matches_catalog_slots_and_motion() {
@@ -234,5 +269,61 @@ mod tests {
             assert_eq!(visual.animated_asset_path, None);
             assert_eq!(visual.fallback_asset_path(), visual.asset_path);
         }
+    }
+
+    #[test]
+    fn production_runtime_gear_assets_are_used_where_source_art_exists() {
+        let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        let expected_runtime_paths = [
+            (
+                ItemId::BataCiobaneasca,
+                "fighters/gear/runtime/bata_ciobaneasca.png",
+            ),
+            (
+                ItemId::ToporDePadurar,
+                "fighters/gear/runtime/topor_de_padurar.png",
+            ),
+            (ItemId::Palos, "fighters/gear/runtime/palos.png"),
+            (ItemId::ScutDeLemn, "fighters/gear/runtime/scut_de_lemn.png"),
+            (
+                ItemId::ScutFerecat,
+                "fighters/gear/runtime/scut_ferecat.png",
+            ),
+            (
+                ItemId::IeDescantata,
+                "fighters/gear/runtime/ie_descantata.png",
+            ),
+            (ItemId::CojocGros, "fighters/gear/runtime/cojoc_gros.png"),
+            (
+                ItemId::CamasaDeZale,
+                "fighters/gear/runtime/camasa_de_zale.png",
+            ),
+            (
+                ItemId::CaciulaDeOaie,
+                "fighters/gear/runtime/caciula_de_oaie.png",
+            ),
+            (
+                ItemId::CoifDeOstean,
+                "fighters/gear/runtime/coif_de_ostean.png",
+            ),
+            (ItemId::OpinciIuti, "fighters/gear/runtime/opinci_iuti.png"),
+            (
+                ItemId::CizmeDeVoinic,
+                "fighters/gear/runtime/cizme_de_voinic.png",
+            ),
+        ];
+
+        for (id, expected_path) in expected_runtime_paths {
+            let visual = item_visual(id).expect("visual metadata exists");
+            assert_eq!(visual.asset_path, expected_path, "{id:?}");
+            assert!(
+                assets.join(expected_path).is_file(),
+                "{id:?} asset missing at {}",
+                assets.join(expected_path).display()
+            );
+        }
+
+        let buzdugan = item_visual(ItemId::BuzduganCuTreiPeceti).expect("visual metadata exists");
+        assert_eq!(buzdugan.asset_path, "gear/buzdugan_cu_trei_peceti.png");
     }
 }

@@ -1,14 +1,12 @@
 //! Runtime cutout-rig rendering: small, explicit body-part templates that can
-//! be attached to creator previews and arena fighter roots. The first slice
-//! uses placeholder sprites so ECS wiring is testable before production source
-//! sheets are sliced into final transparent PNG parts.
+//! be attached to creator previews and arena fighter roots. This slice wires
+//! the first production-intent pixel-art body parts and starter gear into the
+//! runtime while keeping the ECS surface compact.
 
 use bevy::prelude::*;
 
 use crate::character::{AccentColor, BodyBuild, HairStyle, PlayerAppearance, SkinTone};
 use crate::items::{Equipment, GearAttachment, GearMotion, ItemId, ItemVisual, Slot, item_visual};
-
-const GEAR_LAYER_SIZE: Vec2 = Vec2::new(128.0, 128.0);
 
 /// Registers cutout-rig support. The first implementation is spawn-helper
 /// driven, so the plugin currently documents ownership without scheduling
@@ -284,24 +282,28 @@ fn gear_layer_bundle(
             motion: visual.motion,
             z_offset: visual.z_offset,
         },
-        gear_sprite(visual.fallback_asset_path(), asset_server),
-        gear_attachment_transform(visual.z_offset),
+        gear_sprite(visual, asset_server),
+        gear_attachment_transform(visual.offset, visual.z_offset),
     )
 }
 
 /// Runtime uses generated transparent PNGs; headless tests without an
 /// [`AssetServer`] spawn a harmless placeholder sprite so ECS behavior stays
 /// testable.
-pub fn gear_sprite(asset_path: &'static str, asset_server: Option<&AssetServer>) -> Sprite {
+pub fn gear_sprite(visual: &ItemVisual, asset_server: Option<&AssetServer>) -> Sprite {
+    let size = Vec2::new(visual.size.0, visual.size.1);
     if let Some(asset_server) = asset_server {
-        Sprite::from_image(asset_server.load(asset_path))
+        Sprite {
+            custom_size: Some(size),
+            ..Sprite::from_image(asset_server.load(visual.fallback_asset_path()))
+        }
     } else {
-        Sprite::from_color(Color::srgba(1.0, 1.0, 1.0, 0.35), GEAR_LAYER_SIZE)
+        Sprite::from_color(Color::srgba(1.0, 1.0, 1.0, 0.35), size)
     }
 }
 
-pub fn gear_attachment_transform(z_offset: f32) -> Transform {
-    Transform::from_xyz(0.0, 0.0, z_offset)
+pub fn gear_attachment_transform(offset: (f32, f32), z_offset: f32) -> Transform {
+    Transform::from_xyz(offset.0, offset.1, z_offset)
 }
 
 fn part_sprite(part: &CutoutPart, asset_server: Option<&AssetServer>) -> Sprite {
@@ -447,6 +449,7 @@ fn human_parts(scale: f32) -> Vec<CutoutPart> {
     .map(|mut part| {
         part.offset *= scale;
         part.size *= scale;
+        part.asset_path = human_asset_path(part.kind);
         part
     })
     .collect()
@@ -454,8 +457,11 @@ fn human_parts(scale: f32) -> Vec<CutoutPart> {
 
 fn strigoi_part(mut part: CutoutPart) -> CutoutPart {
     part.color = enemy_color(part.kind);
+    part.asset_path = strigoi_asset_path(part.kind);
     match part.kind {
         CutoutPartKind::Hair => {
+            part.color = Color::NONE;
+            part.asset_path = None;
             part.offset.x -= 3.0;
             part.offset.y += 13.0;
             part.size.x *= 1.06;
@@ -514,8 +520,11 @@ fn strigoi_part(mut part: CutoutPart) -> CutoutPart {
 
 fn zmeu_part(mut part: CutoutPart) -> CutoutPart {
     part.color = boss_color(part.kind);
+    part.asset_path = zmeu_asset_path(part.kind);
     match part.kind {
         CutoutPartKind::Hair => {
+            part.color = Color::NONE;
+            part.asset_path = None;
             part.offset.x += 2.0;
             part.offset.y += 21.0;
             part.size.x *= 1.16;
@@ -589,6 +598,66 @@ fn part(
         color: human_color(kind),
         asset_path: None,
     }
+}
+
+fn human_asset_path(kind: CutoutPartKind) -> Option<&'static str> {
+    Some(match kind {
+        CutoutPartKind::Hair => "fighters/human/runtime/hair.png",
+        CutoutPartKind::UpperArmBack => "fighters/human/runtime/upper_arm_back.png",
+        CutoutPartKind::ForearmBack => "fighters/human/runtime/forearm_back.png",
+        CutoutPartKind::HandBack => "fighters/human/runtime/hand_back.png",
+        CutoutPartKind::ThighBack => "fighters/human/runtime/thigh_back.png",
+        CutoutPartKind::ShinBack => "fighters/human/runtime/shin_back.png",
+        CutoutPartKind::FootBack => "fighters/human/runtime/foot_back.png",
+        CutoutPartKind::Torso => "fighters/human/runtime/torso.png",
+        CutoutPartKind::Head => "fighters/human/runtime/head.png",
+        CutoutPartKind::UpperArmFront => "fighters/human/runtime/upper_arm_front.png",
+        CutoutPartKind::ForearmFront => "fighters/human/runtime/forearm_front.png",
+        CutoutPartKind::HandFront => "fighters/human/runtime/hand_front.png",
+        CutoutPartKind::ThighFront => "fighters/human/runtime/thigh_front.png",
+        CutoutPartKind::ShinFront => "fighters/human/runtime/shin_front.png",
+        CutoutPartKind::FootFront => "fighters/human/runtime/foot_front.png",
+    })
+}
+
+fn strigoi_asset_path(kind: CutoutPartKind) -> Option<&'static str> {
+    Some(match kind {
+        CutoutPartKind::Hair => return None,
+        CutoutPartKind::UpperArmBack => "fighters/strigoi/runtime/upper_arm_back.png",
+        CutoutPartKind::ForearmBack => "fighters/strigoi/runtime/forearm_back.png",
+        CutoutPartKind::HandBack => "fighters/strigoi/runtime/hand_back.png",
+        CutoutPartKind::ThighBack => "fighters/strigoi/runtime/thigh_back.png",
+        CutoutPartKind::ShinBack => "fighters/strigoi/runtime/shin_back.png",
+        CutoutPartKind::FootBack => "fighters/strigoi/runtime/foot_back.png",
+        CutoutPartKind::Torso => "fighters/strigoi/runtime/torso.png",
+        CutoutPartKind::Head => "fighters/strigoi/runtime/head.png",
+        CutoutPartKind::UpperArmFront => "fighters/strigoi/runtime/upper_arm_front.png",
+        CutoutPartKind::ForearmFront => "fighters/strigoi/runtime/forearm_front.png",
+        CutoutPartKind::HandFront => "fighters/strigoi/runtime/hand_front.png",
+        CutoutPartKind::ThighFront => "fighters/strigoi/runtime/thigh_front.png",
+        CutoutPartKind::ShinFront => "fighters/strigoi/runtime/shin_front.png",
+        CutoutPartKind::FootFront => "fighters/strigoi/runtime/foot_front.png",
+    })
+}
+
+fn zmeu_asset_path(kind: CutoutPartKind) -> Option<&'static str> {
+    Some(match kind {
+        CutoutPartKind::Hair => return None,
+        CutoutPartKind::UpperArmBack => "fighters/zmeu/runtime/upper_arm_back.png",
+        CutoutPartKind::ForearmBack => "fighters/zmeu/runtime/forearm_back.png",
+        CutoutPartKind::HandBack => "fighters/zmeu/runtime/hand_back.png",
+        CutoutPartKind::ThighBack => "fighters/zmeu/runtime/thigh_back.png",
+        CutoutPartKind::ShinBack => "fighters/zmeu/runtime/shin_back.png",
+        CutoutPartKind::FootBack => "fighters/zmeu/runtime/foot_back.png",
+        CutoutPartKind::Torso => "fighters/zmeu/runtime/torso.png",
+        CutoutPartKind::Head => "fighters/zmeu/runtime/head.png",
+        CutoutPartKind::UpperArmFront => "fighters/zmeu/runtime/upper_arm_front.png",
+        CutoutPartKind::ForearmFront => "fighters/zmeu/runtime/forearm_front.png",
+        CutoutPartKind::HandFront => "fighters/zmeu/runtime/hand_front.png",
+        CutoutPartKind::ThighFront => "fighters/zmeu/runtime/thigh_front.png",
+        CutoutPartKind::ShinFront => "fighters/zmeu/runtime/shin_front.png",
+        CutoutPartKind::FootFront => "fighters/zmeu/runtime/foot_front.png",
+    })
 }
 
 fn apply_player_appearance(parts: &mut [CutoutPart], appearance: PlayerAppearance) {
@@ -793,6 +862,7 @@ fn boss_color(kind: CutoutPartKind) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn count_children_with_parts(world: &mut World, root: Entity) -> usize {
         let children = world
@@ -933,6 +1003,198 @@ mod tests {
             assert_eq!(left_transform.translation.x, -right_transform.translation.x);
             assert_eq!(left_transform.translation.y, right_transform.translation.y);
             assert_eq!(left_transform.translation.z, right_transform.translation.z);
+        }
+    }
+
+    #[test]
+    fn playable_cutout_templates_use_runtime_body_part_assets() {
+        let cases = [
+            (
+                "human",
+                human_template(),
+                &[
+                    (CutoutPartKind::Hair, "fighters/human/runtime/hair.png"),
+                    (CutoutPartKind::Head, "fighters/human/runtime/head.png"),
+                    (CutoutPartKind::Torso, "fighters/human/runtime/torso.png"),
+                    (
+                        CutoutPartKind::UpperArmBack,
+                        "fighters/human/runtime/upper_arm_back.png",
+                    ),
+                    (
+                        CutoutPartKind::UpperArmFront,
+                        "fighters/human/runtime/upper_arm_front.png",
+                    ),
+                    (
+                        CutoutPartKind::ForearmBack,
+                        "fighters/human/runtime/forearm_back.png",
+                    ),
+                    (
+                        CutoutPartKind::ForearmFront,
+                        "fighters/human/runtime/forearm_front.png",
+                    ),
+                    (
+                        CutoutPartKind::HandBack,
+                        "fighters/human/runtime/hand_back.png",
+                    ),
+                    (
+                        CutoutPartKind::HandFront,
+                        "fighters/human/runtime/hand_front.png",
+                    ),
+                    (
+                        CutoutPartKind::ThighBack,
+                        "fighters/human/runtime/thigh_back.png",
+                    ),
+                    (
+                        CutoutPartKind::ThighFront,
+                        "fighters/human/runtime/thigh_front.png",
+                    ),
+                    (
+                        CutoutPartKind::ShinBack,
+                        "fighters/human/runtime/shin_back.png",
+                    ),
+                    (
+                        CutoutPartKind::ShinFront,
+                        "fighters/human/runtime/shin_front.png",
+                    ),
+                    (
+                        CutoutPartKind::FootBack,
+                        "fighters/human/runtime/foot_back.png",
+                    ),
+                    (
+                        CutoutPartKind::FootFront,
+                        "fighters/human/runtime/foot_front.png",
+                    ),
+                ][..],
+            ),
+            (
+                "strigoi",
+                enemy_template(),
+                &[
+                    (CutoutPartKind::Head, "fighters/strigoi/runtime/head.png"),
+                    (CutoutPartKind::Torso, "fighters/strigoi/runtime/torso.png"),
+                    (
+                        CutoutPartKind::UpperArmBack,
+                        "fighters/strigoi/runtime/upper_arm_back.png",
+                    ),
+                    (
+                        CutoutPartKind::UpperArmFront,
+                        "fighters/strigoi/runtime/upper_arm_front.png",
+                    ),
+                    (
+                        CutoutPartKind::ForearmBack,
+                        "fighters/strigoi/runtime/forearm_back.png",
+                    ),
+                    (
+                        CutoutPartKind::ForearmFront,
+                        "fighters/strigoi/runtime/forearm_front.png",
+                    ),
+                    (
+                        CutoutPartKind::HandBack,
+                        "fighters/strigoi/runtime/hand_back.png",
+                    ),
+                    (
+                        CutoutPartKind::HandFront,
+                        "fighters/strigoi/runtime/hand_front.png",
+                    ),
+                    (
+                        CutoutPartKind::ThighBack,
+                        "fighters/strigoi/runtime/thigh_back.png",
+                    ),
+                    (
+                        CutoutPartKind::ThighFront,
+                        "fighters/strigoi/runtime/thigh_front.png",
+                    ),
+                    (
+                        CutoutPartKind::ShinBack,
+                        "fighters/strigoi/runtime/shin_back.png",
+                    ),
+                    (
+                        CutoutPartKind::ShinFront,
+                        "fighters/strigoi/runtime/shin_front.png",
+                    ),
+                    (
+                        CutoutPartKind::FootBack,
+                        "fighters/strigoi/runtime/foot_back.png",
+                    ),
+                    (
+                        CutoutPartKind::FootFront,
+                        "fighters/strigoi/runtime/foot_front.png",
+                    ),
+                ][..],
+            ),
+            (
+                "zmeu",
+                boss_template(),
+                &[
+                    (CutoutPartKind::Head, "fighters/zmeu/runtime/head.png"),
+                    (CutoutPartKind::Torso, "fighters/zmeu/runtime/torso.png"),
+                    (
+                        CutoutPartKind::UpperArmBack,
+                        "fighters/zmeu/runtime/upper_arm_back.png",
+                    ),
+                    (
+                        CutoutPartKind::UpperArmFront,
+                        "fighters/zmeu/runtime/upper_arm_front.png",
+                    ),
+                    (
+                        CutoutPartKind::ForearmBack,
+                        "fighters/zmeu/runtime/forearm_back.png",
+                    ),
+                    (
+                        CutoutPartKind::ForearmFront,
+                        "fighters/zmeu/runtime/forearm_front.png",
+                    ),
+                    (
+                        CutoutPartKind::HandBack,
+                        "fighters/zmeu/runtime/hand_back.png",
+                    ),
+                    (
+                        CutoutPartKind::HandFront,
+                        "fighters/zmeu/runtime/hand_front.png",
+                    ),
+                    (
+                        CutoutPartKind::ThighBack,
+                        "fighters/zmeu/runtime/thigh_back.png",
+                    ),
+                    (
+                        CutoutPartKind::ThighFront,
+                        "fighters/zmeu/runtime/thigh_front.png",
+                    ),
+                    (
+                        CutoutPartKind::ShinBack,
+                        "fighters/zmeu/runtime/shin_back.png",
+                    ),
+                    (
+                        CutoutPartKind::ShinFront,
+                        "fighters/zmeu/runtime/shin_front.png",
+                    ),
+                    (
+                        CutoutPartKind::FootBack,
+                        "fighters/zmeu/runtime/foot_back.png",
+                    ),
+                    (
+                        CutoutPartKind::FootFront,
+                        "fighters/zmeu/runtime/foot_front.png",
+                    ),
+                ][..],
+            ),
+        ];
+        let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+
+        for (label, template, expected_paths) in cases {
+            for (kind, expected_path) in expected_paths {
+                let part = template
+                    .parts
+                    .iter()
+                    .find(|part| part.kind == *kind)
+                    .unwrap_or_else(|| panic!("{label} template missing {kind:?}"));
+                assert_eq!(part.asset_path, Some(*expected_path), "{label} {kind:?}");
+                assert!(
+                    assets.join(expected_path).is_file(),
+                    "{label} {kind:?} asset missing at {}",
+                    assets.join(expected_path).display()
+                );
+            }
         }
     }
 }
