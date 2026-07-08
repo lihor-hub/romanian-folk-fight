@@ -8,6 +8,7 @@ gold) plus one muted accent per tier. Each tier ships two layers consumed by
 
   <tier>_far.png   opaque backdrop (sky + distant silhouettes), slow parallax
   <tier>_near.png  transparent overlay (foreground props), faster parallax
+  <tier>_foreground.png transparent stage edge, stable foreground depth
 
 Tiers (matching the ladder tiers from #20):
   village    fights 1-4  — sat romanesc: village square, fences, haystacks
@@ -92,6 +93,31 @@ class Canvas:
                 if (x - cx) ** 2 + (y - cy) ** 2 <= r * r:
                     self.put(x, y, color)
 
+    def line(self, x0, y0, x1, y1, color, width=1):
+        dx = abs(x1 - x0)
+        dy = -abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx + dy
+        x, y = x0, y0
+        while True:
+            self.rect(
+                x - width // 2,
+                y - width // 2,
+                x + width // 2 + 1,
+                y + width // 2 + 1,
+                color,
+            )
+            if x == x1 and y == y1:
+                break
+            e2 = 2 * err
+            if e2 >= dy:
+                err += dy
+                x += sx
+            if e2 <= dx:
+                err += dx
+                y += sy
+
     def ridge(self, base_y, amp, freq, phase, color):
         """Fill below a rolling sine ridge down to the canvas bottom."""
         for x in range(LOGICAL_W):
@@ -171,6 +197,33 @@ def village_near():
     return c
 
 
+def village_foreground():
+    c = Canvas()
+    wood = (94, 66, 38, 255)
+    dark = (52, 32, 24, 255)
+    red = DEEP_RED
+    # Low painted plank stage edge, behind the fighter feet in world z.
+    c.rect(0, 178, LOGICAL_W, LOGICAL_H, dark)
+    c.rect(0, 174, LOGICAL_W, 181, wood)
+    for x in range(0, LOGICAL_W, 18):
+        c.rect(x + 2, 176, x + 6, 196, wood)
+        c.rect(x + 9, 184, x + 13, 198, (72, 48, 30, 255))
+    # Woven ii diamond trim along the lip.
+    for x in range(8, LOGICAL_W, 24):
+        c.triangle(x, 174, 180, 6, red)
+        c.triangle(x, 180, 186, 6, red)
+        c.rect(x - 1, 178, x + 1, 182, GOLD)
+    # Flanking posts/crowd silhouettes stay out of the duel center.
+    for x in (18, 270):
+        c.rect(x, 132, x + 8, 180, wood)
+        c.triangle(x + 4, 122, 132, 8, red)
+    for x in range(34, 82, 12):
+        c.disc(x, 168, 5, BLACK)
+    for x in range(220, 268, 12):
+        c.disc(x, 168, 5, BLACK)
+    return c
+
+
 # --- Forest: Padurea intunecata -------------------------------------------
 
 def forest_far():
@@ -208,6 +261,29 @@ def forest_near():
     # Undergrowth ferns.
     for x in range(0, LOGICAL_W, 22):
         c.triangle(x + 8, 168, 184, 8, fern)
+    return c
+
+
+def forest_foreground():
+    c = Canvas()
+    root = (38, 24, 20, 255)
+    root_hi = (70, 46, 30, 255)
+    moss = (38, 60, 42, 255)
+    stone = (72, 70, 64, 255)
+    # Root shelf and mossy stones along the front of the forest stage.
+    c.rect(0, 182, LOGICAL_W, LOGICAL_H, root)
+    for x in range(-10, LOGICAL_W, 34):
+        c.line(x, 190, x + 44, 170, root_hi, 3)
+        c.line(x + 6, 196, x + 40, 182, root, 3)
+    for x, y, r in ((26, 174, 7), (58, 184, 5), (242, 176, 8), (272, 186, 5)):
+        c.disc(x, y, r, stone)
+        c.disc(x - 2, y - 2, max(2, r // 2), (98, 96, 86, 255))
+    for x in range(0, LOGICAL_W, 16):
+        c.triangle(x + 6, 176, 190, 6, moss)
+    # Twisted roots frame the duel without crossing the center.
+    for x in (6, 282):
+        c.rect(x, 118, x + 10, 185, root)
+        c.line(x + 5, 150, x + (-18 if x > 150 else 28), 174, root_hi, 3)
     return c
 
 
@@ -259,13 +335,41 @@ def mountains_near():
     return c
 
 
+def mountains_foreground():
+    c = Canvas()
+    stone = (62, 58, 62, 255)
+    dark = (34, 30, 34, 255)
+    snow = (190, 194, 200, 255)
+    red = DEEP_RED
+    # Fortress-stone arena lip with carved textile diamonds.
+    c.rect(0, 176, LOGICAL_W, LOGICAL_H, dark)
+    c.rect(0, 166, LOGICAL_W, 184, stone)
+    for x in range(0, LOGICAL_W, 30):
+        c.rect(x, 166, x + 2, 184, dark)
+        c.rect(x + 15, 174, x + 17, 200, (44, 40, 44, 255))
+    for x in range(12, LOGICAL_W, 30):
+        c.triangle(x, 168, 176, 8, red)
+        c.triangle(x, 176, 184, 8, red)
+        c.rect(x - 1, 173, x + 1, 179, GOLD)
+    # Low snow banks and broken stones at the flanks.
+    for x, y, r in ((34, 160, 11), (60, 174, 7), (238, 164, 10), (266, 174, 8)):
+        c.disc(x, y, r, stone)
+        c.rect(x - r, y - 2, x + r, y + 2, snow)
+    c.rect(0, 160, 46, 166, snow)
+    c.rect(254, 158, LOGICAL_W, 166, snow)
+    return c
+
+
 LAYERS = {
     "village_far": village_far,
     "village_near": village_near,
+    "village_foreground": village_foreground,
     "forest_far": forest_far,
     "forest_near": forest_near,
+    "forest_foreground": forest_foreground,
     "mountains_far": mountains_far,
     "mountains_near": mountains_near,
+    "mountains_foreground": mountains_foreground,
 }
 
 
