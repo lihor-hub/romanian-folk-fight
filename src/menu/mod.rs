@@ -7,14 +7,25 @@ use crate::core::{GameState, UiFont, despawn_screen};
 use crate::save::{SaveStore, load_save};
 use crate::settings::SettingsOpen;
 use crate::theme::{
-    BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD, NIGHT_BLACK,
-    PanelTexture, TEXT_DISABLED, panel_bundle,
+    ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD,
+    PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
 };
+
+const MENU_ROOT_PADDING: f32 = 18.0;
+const MENU_TITLE_STAGE_WIDTH: f32 = 382.0;
+const MENU_BUTTON_PANEL_WIDTH: f32 = 318.0;
 
 /// Marker for the main-menu screen root; everything under it is despawned by
 /// [`despawn_screen`] on `OnExit(GameState::MainMenu)`.
 #[derive(Component)]
 struct MainMenuScreen;
+
+/// Stable anchors for the game-screen title layout.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+enum MainMenuLayoutRole {
+    TitleStage,
+    ButtonPanel,
+}
 
 /// What a menu button does when pressed. Attach it next to [`Button`] and the
 /// generic [`handle_menu_actions`] system takes care of the rest; no
@@ -41,10 +52,15 @@ pub struct MenuPlugin;
 
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(GameState::MainMenu), spawn_main_menu)
+        app.add_plugins(crate::ui_widgets::ScrollInputPlugin)
+            .add_systems(OnEnter(GameState::MainMenu), spawn_main_menu)
             .add_systems(
                 Update,
-                (handle_menu_actions, update_button_backgrounds)
+                (
+                    handle_menu_actions,
+                    update_button_backgrounds,
+                    crate::ui_widgets::scroll_with_wheel_and_touch,
+                )
                     .run_if(in_state(GameState::MainMenu)),
             )
             .add_systems(
@@ -70,37 +86,86 @@ fn spawn_main_menu(
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
+                flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
+                column_gap: Val::Px(24.0),
                 row_gap: Val::Px(16.0),
+                padding: UiRect::all(Val::Px(MENU_ROOT_PADDING)),
+                overflow: Overflow::scroll_y(),
                 ..default()
             },
-            BackgroundColor(NIGHT_BLACK),
+            BackgroundColor(ARENA_BROWN),
+            ScrollPosition::default(),
+            crate::ui_widgets::Scrollable,
         ))
         .with_children(|parent| {
-            parent.spawn(motif_divider(&ui_font));
-            parent.spawn((
-                Text::new("Romanian Folk Fight"),
-                ui_font.text_font_bold(56.0),
-                TextColor(CREAM),
-                Node {
-                    margin: UiRect::vertical(Val::Px(12.0)),
-                    ..default()
-                },
-            ));
-            parent.spawn(motif_divider(&ui_font));
             parent
-                .spawn(panel_bundle(
-                    &panel_texture,
-                    Node {
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::Center,
-                        row_gap: Val::Px(16.0),
-                        padding: UiRect::all(Val::Px(24.0)),
-                        margin: UiRect::top(Val::Px(20.0)),
-                        ..default()
-                    },
+                .spawn((
+                    panel_bundle(
+                        &panel_texture,
+                        Node {
+                            width: Val::Px(MENU_TITLE_STAGE_WIDTH),
+                            max_width: Val::Percent(100.0),
+                            min_height: Val::Px(430.0),
+                            flex_direction: FlexDirection::Column,
+                            justify_content: JustifyContent::SpaceBetween,
+                            padding: UiRect::all(Val::Px(28.0)),
+                            ..default()
+                        },
+                    ),
+                    BackgroundColor(PANEL_LINEN),
+                    MainMenuLayoutRole::TitleStage,
+                ))
+                .with_children(|stage| {
+                    stage.spawn(motif_divider(&ui_font));
+                    stage.spawn((
+                        Text::new("Romanian Folk Fight"),
+                        ui_font.text_font_bold(38.0),
+                        TextColor(CREAM),
+                    ));
+                    stage.spawn((
+                        Text::new("Basm. Port. Luptă."),
+                        ui_font.text_font(19.0),
+                        TextColor(CREAM),
+                    ));
+                    stage.spawn((
+                        Node {
+                            width: Val::Percent(100.0),
+                            height: Val::Px(190.0),
+                            border: UiRect::all(Val::Px(2.0)),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        BackgroundColor(WALNUT),
+                        BorderColor::all(GOLD),
+                        children![(
+                            Text::new("*  *  *"),
+                            ui_font.text_font_bold(42.0),
+                            TextColor(GOLD),
+                        )],
+                    ));
+                    stage.spawn(motif_divider(&ui_font));
+                });
+
+            parent
+                .spawn((
+                    panel_bundle(
+                        &panel_texture,
+                        Node {
+                            width: Val::Px(MENU_BUTTON_PANEL_WIDTH),
+                            max_width: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Column,
+                            align_items: AlignItems::Center,
+                            row_gap: Val::Px(14.0),
+                            padding: UiRect::all(Val::Px(24.0)),
+                            ..default()
+                        },
+                    ),
+                    BackgroundColor(PANEL_LINEN),
+                    MainMenuLayoutRole::ButtonPanel,
                 ))
                 .with_children(|panel| {
                     panel.spawn((
@@ -161,6 +226,13 @@ fn menu_button(label: &str, text_color: Color, background: Color, ui_font: &UiFo
             TextColor(text_color),
         )],
     )
+}
+
+#[cfg(test)]
+fn menu_panels_fit_width(viewport_width: f32) -> bool {
+    let usable_width = viewport_width - MENU_ROOT_PADDING * 2.0;
+    MENU_TITLE_STAGE_WIDTH.min(usable_width) <= usable_width
+        && MENU_BUTTON_PANEL_WIDTH.min(usable_width) <= usable_width
 }
 
 /// Query filter: buttons whose interaction changed this frame.
@@ -314,6 +386,29 @@ mod tests {
         assert_eq!(count::<MainMenuScreen>(&mut app), 0, "root despawned");
         assert_eq!(count::<Button>(&mut app), 0, "buttons despawned");
         assert_eq!(count::<Text>(&mut app), 0, "labels and title despawned");
+    }
+
+    #[test]
+    fn menu_uses_separate_title_stage_and_command_panel() {
+        let mut app = test_app();
+        app.update();
+
+        let roles: Vec<MainMenuLayoutRole> = app
+            .world_mut()
+            .query::<&MainMenuLayoutRole>()
+            .iter(app.world())
+            .copied()
+            .collect();
+        assert!(roles.contains(&MainMenuLayoutRole::TitleStage));
+        assert!(roles.contains(&MainMenuLayoutRole::ButtonPanel));
+        assert!(menu_panels_fit_width(375.0));
+
+        let scroll_roots = app
+            .world_mut()
+            .query_filtered::<(), (With<MainMenuScreen>, With<crate::ui_widgets::Scrollable>)>()
+            .iter(app.world())
+            .count();
+        assert_eq!(scroll_roots, 1, "narrow stacked menu can scroll");
     }
 
     #[test]

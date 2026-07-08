@@ -17,8 +17,8 @@ use crate::menu::DisabledButton;
 use crate::progression::Level;
 use crate::theme::{
     ACTION_BUTTON_TOUCH_TARGET, BAR_TRACK, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL,
-    BUTTON_PRESSED, CREAM, HP_FILL, MOBILE_LOG_LINES, PanelTexture, STAMINA_FILL, TEXT_DISABLED,
-    panel_bundle,
+    BUTTON_PRESSED, CREAM, GOLD, HP_FILL, MOBILE_LOG_LINES, PANEL_LINEN, PanelTexture,
+    STAMINA_FILL, TEXT_DISABLED, WALNUT, panel_bundle,
 };
 
 use super::engine::{CombatAction, CombatEvent, DuelDistance, REST_RESTORE};
@@ -31,6 +31,15 @@ pub const LOG_CAPACITY: usize = 8;
 
 const PANEL_WIDTH: f32 = 240.0;
 const BAR_HEIGHT: f32 = 16.0;
+#[cfg(test)]
+const HUD_TARGET_WIDTH: f32 = 800.0;
+#[cfg(test)]
+const ACTION_BUTTON_COUNT: f32 = 7.0;
+const ACTION_BUTTON_WIDTH: f32 = 100.0;
+const ACTION_BUTTON_HEIGHT: f32 = 64.0;
+const ACTION_BAR_DESKTOP_GAP: f32 = 6.0;
+const ACTION_BAR_PADDING: f32 = 8.0;
+const ACTION_BAR_DESKTOP_INSET: f32 = 10.0;
 
 /// Marker for the HUD root; everything under it despawns on
 /// `OnExit(GameState::Fight)`.
@@ -83,6 +92,11 @@ pub(super) struct LogPanelRoot;
 /// The combat action a HUD button submits when clicked.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ActionButton(CombatAction);
+
+/// Small glyph at the head of an action tile; stable so tests can confirm
+/// buttons are icon-led without depending on screenshots.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ActionGlyph(CombatAction);
 
 /// The last [`LOG_CAPACITY`] combat-log lines, oldest first. Lives only while
 /// the fight screen is up.
@@ -224,7 +238,7 @@ pub(super) fn spawn_hud(
             fighter_panel(CombatSide::Enemy, &ui_font, &panel_texture, is_mobile),
             pause_button(&ui_font),
             log_panel(&ui_font, &panel_texture, is_mobile),
-            action_bar(&ui_font, is_mobile),
+            action_bar(&ui_font, &panel_texture, is_mobile),
         ],
     ));
 }
@@ -390,7 +404,7 @@ fn log_panel(ui_font: &UiFont, panel_texture: &PanelTexture, is_mobile: bool) ->
 /// The bottom action bar with combat and movement buttons: a single
 /// (wrapping) row on desktop, a tighter wrap grid of ≥48px touch targets
 /// under the mobile breakpoint (#31).
-fn action_bar(ui_font: &UiFont, is_mobile: bool) -> impl Bundle {
+fn action_bar(ui_font: &UiFont, panel_texture: &PanelTexture, is_mobile: bool) -> impl Bundle {
     let node = if is_mobile {
         Node {
             position_type: PositionType::Absolute,
@@ -402,24 +416,27 @@ fn action_bar(ui_font: &UiFont, is_mobile: bool) -> impl Bundle {
             justify_content: JustifyContent::Center,
             column_gap: Val::Px(8.0),
             row_gap: Val::Px(8.0),
+            padding: UiRect::all(Val::Px(ACTION_BAR_PADDING)),
             ..default()
         }
     } else {
         Node {
             position_type: PositionType::Absolute,
-            bottom: Val::Px(16.0),
-            left: Val::Px(0.0),
-            right: Val::Px(0.0),
+            bottom: Val::Px(12.0),
+            left: Val::Px(ACTION_BAR_DESKTOP_INSET),
+            right: Val::Px(ACTION_BAR_DESKTOP_INSET),
             flex_direction: FlexDirection::Row,
-            flex_wrap: FlexWrap::Wrap,
+            flex_wrap: FlexWrap::NoWrap,
             justify_content: JustifyContent::Center,
-            row_gap: Val::Px(8.0),
-            column_gap: Val::Px(12.0),
+            row_gap: Val::Px(0.0),
+            column_gap: Val::Px(ACTION_BAR_DESKTOP_GAP),
+            padding: UiRect::all(Val::Px(ACTION_BAR_PADDING)),
             ..default()
         }
     };
     (
-        node,
+        panel_bundle(panel_texture, node),
+        BackgroundColor(PANEL_LINEN),
         ActionBarRoot,
         children![
             action_button(CombatAction::QuickStrike, ui_font, is_mobile),
@@ -450,8 +467,8 @@ fn action_button(action: CombatAction, ui_font: &UiFont, is_mobile: bool) -> imp
         }
     } else {
         Node {
-            width: Val::Px(150.0),
-            height: Val::Px(64.0),
+            width: Val::Px(ACTION_BUTTON_WIDTH),
+            height: Val::Px(ACTION_BUTTON_HEIGHT),
             flex_direction: FlexDirection::Column,
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
@@ -466,17 +483,58 @@ fn action_button(action: CombatAction, ui_font: &UiFont, is_mobile: bool) -> imp
         BackgroundColor(BUTTON_NORMAL),
         children![
             (
+                Node {
+                    width: Val::Px(34.0),
+                    height: Val::Px(20.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(WALNUT),
+                BorderColor::all(GOLD),
+                children![(
+                    Text::new(action_glyph(action)),
+                    ui_font.text_font_bold(14.0),
+                    TextColor(GOLD),
+                    ActionGlyph(action),
+                )],
+            ),
+            (
                 Text::new(action_label(action)),
-                ui_font.text_font(20.0),
+                ui_font.text_font(15.0),
                 TextColor(CREAM),
             ),
             (
                 Text::new(cost_label(action)),
-                ui_font.text_font(14.0),
+                ui_font.text_font(11.0),
                 TextColor(CREAM),
             ),
         ],
     )
+}
+
+fn action_glyph(action: CombatAction) -> &'static str {
+    match action {
+        CombatAction::QuickStrike => ">>",
+        CombatAction::HeavyStrike => "**",
+        CombatAction::Block => "[]",
+        CombatAction::Rest => "++",
+        CombatAction::StepForward => "->",
+        CombatAction::StepBack => "<-",
+        CombatAction::LeapForward => "^>",
+    }
+}
+
+#[cfg(test)]
+fn desktop_action_strip_occupied_width() -> f32 {
+    ACTION_BUTTON_WIDTH * ACTION_BUTTON_COUNT
+        + ACTION_BAR_DESKTOP_GAP * (ACTION_BUTTON_COUNT - 1.0)
+        + ACTION_BAR_PADDING * 2.0
+}
+
+#[cfg(test)]
+fn desktop_action_strip_available_width() -> f32 {
+    HUD_TARGET_WIDTH - ACTION_BAR_DESKTOP_INSET * 2.0
 }
 
 /// Query for the display data of one side's fighter.
@@ -744,7 +802,11 @@ pub(super) fn apply_responsive_hud_layout(
         };
         node.left = Val::Px(if is_mobile { 8.0 } else { 0.0 });
         node.right = Val::Px(if is_mobile { 8.0 } else { 0.0 });
-        node.column_gap = Val::Px(if is_mobile { 8.0 } else { 12.0 });
+        node.column_gap = Val::Px(if is_mobile {
+            8.0
+        } else {
+            ACTION_BAR_DESKTOP_GAP
+        });
         node.row_gap = Val::Px(if is_mobile { 8.0 } else { 0.0 });
     }
     for mut node in &mut buttons {
@@ -753,9 +815,9 @@ pub(super) fn apply_responsive_hud_layout(
             node.min_height = Val::Px(ACTION_BUTTON_TOUCH_TARGET);
             node.height = Val::Px(58.0);
         } else {
-            node.width = Val::Px(170.0);
+            node.width = Val::Px(ACTION_BUTTON_WIDTH);
             node.min_height = Val::Auto;
-            node.height = Val::Px(64.0);
+            node.height = Val::Px(ACTION_BUTTON_HEIGHT);
         }
     }
     for mut node in &mut logs {
@@ -1147,6 +1209,30 @@ mod tests {
             .count();
         assert_eq!(logs, 1, "one log text node");
         assert!(app.world().get_resource::<CombatLog>().is_some());
+    }
+
+    #[test]
+    fn action_tiles_are_icon_led_and_fit_the_desktop_strip() {
+        let mut app = test_app();
+
+        let glyphs = app
+            .world_mut()
+            .query::<&ActionGlyph>()
+            .iter(app.world())
+            .count();
+        assert_eq!(glyphs, 7, "every action button has a glyph marker");
+
+        let mut buttons = app
+            .world_mut()
+            .query_filtered::<&Node, With<ActionButton>>();
+        for node in buttons.iter(app.world()) {
+            assert_eq!(node.width, Val::Px(ACTION_BUTTON_WIDTH));
+            assert_eq!(node.height, Val::Px(ACTION_BUTTON_HEIGHT));
+        }
+        assert!(
+            desktop_action_strip_occupied_width() <= desktop_action_strip_available_width(),
+            "desktop action strip must fit the 800px target viewport"
+        );
     }
 
     #[test]

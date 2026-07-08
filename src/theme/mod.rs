@@ -21,13 +21,21 @@ pub const CREAM: Color = Color::srgb(0.96, 0.93, 0.84);
 pub const NIGHT_BLACK: Color = Color::srgb(0.07, 0.06, 0.06);
 /// Gold — trim, embroidery, boss accents.
 pub const GOLD: Color = Color::srgb(0.788, 0.635, 0.153);
+/// Warm arena backdrop — clay, torchlight, and carved wood instead of flat black.
+pub const ARENA_BROWN: Color = Color::srgb(0.18, 0.11, 0.07);
+/// Linen-washed panel surface used behind dense controls.
+pub const PANEL_LINEN: Color = Color::srgba(0.22, 0.13, 0.08, 0.86);
+/// Dark walnut strip for icon wells and body-slot rows.
+pub const WALNUT: Color = Color::srgb(0.24, 0.13, 0.08);
+/// Muted border/secondary text accent that stays inside the folk palette.
+pub const FOLK_BLUE: Color = Color::srgb(0.13, 0.31, 0.38);
 
 /// Button background at rest.
-pub const BUTTON_NORMAL: Color = DEEP_RED;
+pub const BUTTON_NORMAL: Color = Color::srgb(0.50, 0.09, 0.08);
 /// Button background under the cursor.
-pub const BUTTON_HOVERED: Color = Color::srgb(0.68, 0.16, 0.14);
+pub const BUTTON_HOVERED: Color = Color::srgb(0.64, 0.15, 0.11);
 /// Button background while pressed.
-pub const BUTTON_PRESSED: Color = Color::srgb(0.42, 0.06, 0.06);
+pub const BUTTON_PRESSED: Color = Color::srgb(0.36, 0.05, 0.04);
 /// Greyed-out button background.
 pub const BUTTON_DISABLED: Color = Color::srgb(0.35, 0.33, 0.31);
 /// Text color on a disabled button.
