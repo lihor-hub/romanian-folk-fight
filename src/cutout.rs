@@ -19,6 +19,7 @@ impl Plugin for CutoutRigPlugin {
 pub enum CutoutTemplate {
     Human,
     Enemy,
+    Boss,
 }
 
 /// Stable body-part identifiers. Front/back variants give the first rig a
@@ -86,17 +87,16 @@ pub fn human_template() -> CutoutRigTemplate {
 pub fn enemy_template() -> CutoutRigTemplate {
     CutoutRigTemplate {
         template: CutoutTemplate::Enemy,
-        parts: human_parts(1.08)
-            .into_iter()
-            .map(|mut part| {
-                part.offset.x *= 0.9;
-                part.offset.y *= 1.04;
-                part.size.x *= 0.82;
-                part.size.y *= 1.08;
-                part.color = enemy_color(part.kind);
-                part
-            })
-            .collect(),
+        parts: human_parts(1.0).into_iter().map(strigoi_part).collect(),
+    }
+}
+
+/// Larger boss-style neutral pose with broader proportions and a taller
+/// silhouette so major enemies read differently at a glance.
+pub fn boss_template() -> CutoutRigTemplate {
+    CutoutRigTemplate {
+        template: CutoutTemplate::Boss,
+        parts: human_parts(1.26).into_iter().map(zmeu_part).collect(),
     }
 }
 
@@ -271,6 +271,113 @@ fn human_parts(scale: f32) -> Vec<CutoutPart> {
     .collect()
 }
 
+fn strigoi_part(mut part: CutoutPart) -> CutoutPart {
+    part.color = enemy_color(part.kind);
+    match part.kind {
+        CutoutPartKind::Torso => {
+            part.offset.y += 6.0;
+            part.size.x *= 0.72;
+            part.size.y *= 0.94;
+        }
+        CutoutPartKind::Head => {
+            part.offset.x -= 4.0;
+            part.offset.y += 12.0;
+            part.size.x *= 1.18;
+            part.size.y *= 1.22;
+        }
+        CutoutPartKind::UpperArmBack | CutoutPartKind::UpperArmFront => {
+            part.offset.x *= 0.82;
+            part.offset.y += 8.0;
+            part.size.x *= 0.86;
+            part.size.y *= 1.18;
+        }
+        CutoutPartKind::ForearmBack | CutoutPartKind::ForearmFront => {
+            part.offset.x *= 0.8;
+            part.offset.y += 4.0;
+            part.size.x *= 0.84;
+            part.size.y *= 1.22;
+        }
+        CutoutPartKind::HandBack | CutoutPartKind::HandFront => {
+            part.offset.x *= 0.8;
+            part.offset.y += 2.0;
+            part.size.x *= 0.9;
+            part.size.y *= 1.08;
+        }
+        CutoutPartKind::ThighBack | CutoutPartKind::ThighFront => {
+            part.offset.x *= 0.92;
+            part.offset.y -= 2.0;
+            part.size.x *= 0.9;
+            part.size.y *= 1.08;
+        }
+        CutoutPartKind::ShinBack | CutoutPartKind::ShinFront => {
+            part.offset.x *= 0.9;
+            part.offset.y -= 6.0;
+            part.size.x *= 0.86;
+            part.size.y *= 1.16;
+        }
+        CutoutPartKind::FootBack | CutoutPartKind::FootFront => {
+            part.offset.x *= 0.82;
+            part.offset.y -= 8.0;
+            part.size.x *= 0.76;
+            part.size.y *= 0.9;
+        }
+    }
+    part
+}
+
+fn zmeu_part(mut part: CutoutPart) -> CutoutPart {
+    part.color = boss_color(part.kind);
+    match part.kind {
+        CutoutPartKind::Torso => {
+            part.offset.y += 10.0;
+            part.size.x *= 1.34;
+            part.size.y *= 1.2;
+        }
+        CutoutPartKind::Head => {
+            part.offset.x += 4.0;
+            part.offset.y += 18.0;
+            part.size.x *= 1.14;
+            part.size.y *= 1.18;
+        }
+        CutoutPartKind::UpperArmBack | CutoutPartKind::UpperArmFront => {
+            part.offset.x *= 1.16;
+            part.offset.y += 8.0;
+            part.size.x *= 1.42;
+            part.size.y *= 1.12;
+        }
+        CutoutPartKind::ForearmBack | CutoutPartKind::ForearmFront => {
+            part.offset.x *= 1.16;
+            part.offset.y += 4.0;
+            part.size.x *= 1.34;
+            part.size.y *= 1.14;
+        }
+        CutoutPartKind::HandBack | CutoutPartKind::HandFront => {
+            part.offset.x *= 1.18;
+            part.size.x *= 1.28;
+            part.size.y *= 1.2;
+        }
+        CutoutPartKind::ThighBack | CutoutPartKind::ThighFront => {
+            part.offset.x *= 1.08;
+            part.offset.y -= 4.0;
+            part.size.x *= 1.34;
+            part.size.y *= 1.12;
+        }
+        CutoutPartKind::ShinBack | CutoutPartKind::ShinFront => {
+            part.offset.x *= 1.08;
+            part.offset.y -= 10.0;
+            part.size.x *= 1.28;
+            part.size.y *= 1.1;
+        }
+        CutoutPartKind::FootBack | CutoutPartKind::FootFront => {
+            part.offset.x *= 1.12;
+            part.offset.y -= 12.0;
+            part.size.x *= 1.38;
+            part.size.y *= 1.22;
+        }
+    }
+    part
+}
+
 fn part(
     kind: CutoutPartKind,
     x: f32,
@@ -310,6 +417,17 @@ fn enemy_color(kind: CutoutPartKind) -> Color {
         }
         CutoutPartKind::FootBack | CutoutPartKind::FootFront => Color::srgb(0.08, 0.08, 0.09),
         _ => Color::srgb(0.46, 0.5, 0.54),
+    }
+}
+
+fn boss_color(kind: CutoutPartKind) -> Color {
+    match kind {
+        CutoutPartKind::Torso => Color::srgb(0.52, 0.18, 0.1),
+        CutoutPartKind::Head | CutoutPartKind::HandBack | CutoutPartKind::HandFront => {
+            Color::srgb(0.8, 0.6, 0.42)
+        }
+        CutoutPartKind::FootBack | CutoutPartKind::FootFront => Color::srgb(0.1, 0.07, 0.06),
+        _ => Color::srgb(0.62, 0.36, 0.2),
     }
 }
 
@@ -358,6 +476,63 @@ mod tests {
                 .windows(2)
                 .all(|pair| pair[0].z_offset <= pair[1].z_offset),
             "parts are authored in draw order"
+        );
+    }
+
+    #[test]
+    fn representative_templates_change_layout_and_scale_not_only_color() {
+        let human = human_template();
+        let enemy = enemy_template();
+        let boss = boss_template();
+        assert_eq!(enemy.template, CutoutTemplate::Enemy);
+        assert_eq!(boss.template, CutoutTemplate::Boss);
+
+        let human_torso = human
+            .parts
+            .iter()
+            .find(|part| part.kind == CutoutPartKind::Torso)
+            .expect("human torso exists");
+        let enemy_torso = enemy
+            .parts
+            .iter()
+            .find(|part| part.kind == CutoutPartKind::Torso)
+            .expect("enemy torso exists");
+        let boss_torso = boss
+            .parts
+            .iter()
+            .find(|part| part.kind == CutoutPartKind::Torso)
+            .expect("boss torso exists");
+        let human_head = human
+            .parts
+            .iter()
+            .find(|part| part.kind == CutoutPartKind::Head)
+            .expect("human head exists");
+        let enemy_head = enemy
+            .parts
+            .iter()
+            .find(|part| part.kind == CutoutPartKind::Head)
+            .expect("enemy head exists");
+        let boss_head = boss
+            .parts
+            .iter()
+            .find(|part| part.kind == CutoutPartKind::Head)
+            .expect("boss head exists");
+
+        assert!(
+            enemy_torso.size.x < human_torso.size.x,
+            "enemy torso should read leaner than the human"
+        );
+        assert!(
+            enemy_head.offset.y > human_head.offset.y,
+            "enemy head should sit higher for a different silhouette"
+        );
+        assert!(
+            boss_torso.size.x > human_torso.size.x,
+            "boss torso should be broader than the human"
+        );
+        assert!(
+            boss_head.size.y > human_head.size.y,
+            "boss head should scale up with the larger body"
         );
     }
 

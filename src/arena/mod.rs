@@ -16,10 +16,11 @@ use crate::combat::AiProfile;
 use crate::core::{GameState, UiFont, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::cutout::{
-    CutoutRig, CutoutRigTemplate, enemy_template, human_template, spawn_cutout_rig,
+    CutoutRig, CutoutRigTemplate, CutoutTemplate, boss_template, enemy_template, human_template,
+    spawn_cutout_rig,
 };
 use crate::items::{Equipment, GearMotion, ItemId, Slot, item_visual};
-use crate::roster::{Boss, LadderProgress};
+use crate::roster::{Boss, LadderProgress, Opponent};
 use crate::theme::{BOSS_LABEL_COLOR, CREAM, GROUND_COLOR};
 use animation::{AnimationSet, FighterClip, FighterSpriteSheets};
 use fx::{ArenaBackgrounds, background_tier, spawn_background};
@@ -176,7 +177,7 @@ fn spawn_scene(
             },
         ),
         ENEMY_ANCHOR,
-        enemy_template(),
+        opponent_template(opponent),
         true,
         if opponent.is_boss {
             BOSS_LABEL_COLOR
@@ -249,6 +250,14 @@ fn spawn_arena_fighter(
         });
     spawn_cutout_rig(commands, fighter, template, asset_server, flip_x);
     fighter
+}
+
+fn opponent_template(opponent: &Opponent) -> CutoutRigTemplate {
+    match opponent.cutout_template {
+        CutoutTemplate::Human => human_template(),
+        CutoutTemplate::Enemy => enemy_template(),
+        CutoutTemplate::Boss => boss_template(),
+    }
 }
 
 /// One visible equipment overlay attached to a fighter.
@@ -473,7 +482,7 @@ mod tests {
     use crate::character::{Fighter, FighterName, Health, Stamina, stats};
     use crate::core::CorePlugin;
     use crate::cutout::{
-        CutoutPartMarker, CutoutRig, CutoutTemplate, enemy_template, human_template,
+        CutoutPartMarker, CutoutRig, CutoutTemplate, boss_template, enemy_template, human_template,
     };
     use crate::items::{ItemId, Slot};
     use crate::roster::LADDER;
@@ -638,6 +647,14 @@ mod tests {
             .count()
     }
 
+    fn template_part_count(template: CutoutTemplate) -> usize {
+        match template {
+            CutoutTemplate::Human => human_template().parts.len(),
+            CutoutTemplate::Enemy => enemy_template().parts.len(),
+            CutoutTemplate::Boss => boss_template().parts.len(),
+        }
+    }
+
     #[test]
     fn arena_fighters_spawn_cutout_rigs_instead_of_root_body_sprites() {
         let mut app = test_app();
@@ -662,7 +679,8 @@ mod tests {
             .query_filtered::<(Entity, &CutoutRig, Has<Sprite>), With<EnemyFighter>>()
             .single(app.world())
             .expect("enemy fighter has a cutout rig");
-        assert_eq!(enemy_rig.template, CutoutTemplate::Enemy);
+        let enemy_template = enemy_rig.template;
+        assert_eq!(enemy_template, LADDER[0].cutout_template);
         assert!(
             enemy_rig.flip_x,
             "enemy source art is mirrored in the arena"
@@ -670,7 +688,7 @@ mod tests {
         assert!(!enemy_has_sprite);
         assert_eq!(
             cutout_child_count(&mut app, enemy),
-            enemy_template().parts.len()
+            template_part_count(enemy_template)
         );
     }
 
@@ -723,6 +741,11 @@ mod tests {
         // the first boss.
         let mut app = test_app_at(LadderProgress(4));
         let (name, attrs, _, boss, label_color) = enemy_snapshot(&mut app);
+        let rig = app
+            .world_mut()
+            .query_filtered::<&CutoutRig, With<EnemyFighter>>()
+            .single(app.world())
+            .expect("boss enemy has a cutout rig");
         assert_eq!(name, "Muma Pădurii");
         assert_eq!(attrs, LADDER[4].attrs);
         assert_eq!(
@@ -733,6 +756,52 @@ mod tests {
             "the boss flag rides on the fighter"
         );
         assert_eq!(label_color, BOSS_LABEL_COLOR, "boss label color");
+        assert_eq!(rig.template, CutoutTemplate::Boss, "boss template");
+    }
+
+    #[test]
+    fn a_non_human_ladder_enemy_uses_the_enemy_template() {
+        let mut app = test_app_at(LadderProgress(1));
+        let (_, rig) = app
+            .world_mut()
+            .query_filtered::<(&FighterName, &CutoutRig), With<EnemyFighter>>()
+            .single(app.world())
+            .expect("enemy fighter exists");
+        assert_eq!(rig.template, CutoutTemplate::Enemy);
+    }
+
+    #[test]
+    fn a_boss_ladder_enemy_uses_the_boss_template() {
+        let mut app = test_app_at(LadderProgress(4));
+        let enemy = app
+            .world_mut()
+            .query_filtered::<Entity, With<EnemyFighter>>()
+            .single(app.world())
+            .expect("enemy exists");
+        let (_, rig) = app
+            .world_mut()
+            .query_filtered::<(&FighterName, &CutoutRig), With<EnemyFighter>>()
+            .single(app.world())
+            .expect("enemy fighter exists");
+        assert_eq!(rig.template, CutoutTemplate::Boss);
+        assert_eq!(
+            cutout_child_count(&mut app, enemy),
+            boss_template().parts.len()
+        );
+    }
+
+    #[test]
+    fn a_large_non_boss_enemy_can_still_use_the_boss_template() {
+        let mut app = test_app_at(LadderProgress(8));
+        let (name, _, _, boss, _) = enemy_snapshot(&mut app);
+        let (_, rig) = app
+            .world_mut()
+            .query_filtered::<(&FighterName, &CutoutRig), With<EnemyFighter>>()
+            .single(app.world())
+            .expect("enemy fighter exists");
+        assert_eq!(name, "Zmeu");
+        assert_eq!(boss, None, "Zmeu is not a roster boss");
+        assert_eq!(rig.template, CutoutTemplate::Boss);
     }
 
     #[test]
