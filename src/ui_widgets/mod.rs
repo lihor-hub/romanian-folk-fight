@@ -1,13 +1,63 @@
 //! Shared UI building blocks used by more than one screen: the button
-//! bundles from the main-menu pattern and the attribute +/- allocation row
-//! shared by character creation and the level-up panel.
+//! bundles from the main-menu pattern, the attribute +/- allocation row
+//! shared by character creation and the level-up panel, and the
+//! wheel/touch-drag scroll behavior (#31) shared by the shop and creation
+//! screens.
 
 pub mod attribute_row;
 
+use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 
 use crate::core::UiFont;
 use crate::theme::{BUTTON_NORMAL, CREAM};
+
+/// Registers the input types [`scroll_with_wheel_and_touch`] reads
+/// (`MouseWheel` messages, the `Touches` resource) so screens that use
+/// [`Scrollable`] work in headless test apps that skip the full
+/// `InputPlugin`/`WindowPlugin` stack. Idempotent — safe to add from more
+/// than one screen plugin.
+pub struct ScrollInputPlugin;
+
+impl Plugin for ScrollInputPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_message::<MouseWheel>().init_resource::<Touches>();
+    }
+}
+
+/// Marker for a scrollable `Node` (must also carry `Overflow::scroll_y()`
+/// and a `ScrollPosition`). Lets the shop and creation screens (#31) scroll
+/// their content into view on short viewports via mouse wheel, trackpad, or
+/// a touch drag — Bevy UI clips and offsets children from `ScrollPosition`
+/// automatically; this system just drives that value from input.
+#[derive(Component)]
+pub struct Scrollable;
+
+/// Applies mouse-wheel and single-finger touch-drag deltas to every
+/// [`Scrollable`] node's [`ScrollPosition`]. Touch deltas are inverted (drag
+/// up to scroll down, matching native touch-scroll conventions); wheel
+/// deltas are used as-is. Clamping to content bounds is handled by Bevy UI's
+/// layout system, which snaps an out-of-range `ScrollPosition` back in range.
+pub fn scroll_with_wheel_and_touch(
+    mut wheel: MessageReader<MouseWheel>,
+    touches: Res<Touches>,
+    mut scrollables: Query<&mut ScrollPosition, With<Scrollable>>,
+) {
+    let mut delta_y = 0.0;
+    for event in wheel.read() {
+        delta_y += event.y;
+    }
+    for touch in touches.iter() {
+        delta_y -= touch.delta().y;
+    }
+    if delta_y == 0.0 {
+        return;
+    }
+    for mut scroll in &mut scrollables {
+        scroll.0.y -= delta_y;
+        scroll.0.y = scroll.0.y.max(0.0);
+    }
+}
 
 /// A small square button (name arrows, `-` / `+`).
 pub fn small_button(label: &str, ui_font: &UiFont) -> impl Bundle {

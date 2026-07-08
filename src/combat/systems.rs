@@ -149,10 +149,11 @@ impl Plugin for CombatPlugin {
                     hud::collect_log_lines,
                     hud::update_button_backgrounds,
                     hud::update_action_buttons,
+                    hud::apply_responsive_hud_layout,
                     (
                         hud::update_bar_fills,
                         hud::update_labels,
-                        hud::update_log_text.run_if(resource_exists_and_changed::<hud::CombatLog>),
+                        hud::update_log_text,
                     ),
                 )
                     .chain()

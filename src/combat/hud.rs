@@ -12,12 +12,13 @@ use std::collections::VecDeque;
 use bevy::prelude::*;
 
 use crate::character::{EnemyFighter, FighterName, Health, PlayerFighter, Stamina};
-use crate::core::UiFont;
+use crate::core::{UiFont, ViewportInfo};
 use crate::menu::DisabledButton;
 use crate::progression::Level;
 use crate::theme::{
-    BAR_TRACK, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, HP_FILL,
-    PanelTexture, STAMINA_FILL, TEXT_DISABLED, panel_bundle,
+    ACTION_BUTTON_TOUCH_TARGET, BAR_TRACK, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL,
+    BUTTON_PRESSED, CREAM, HP_FILL, MOBILE_LOG_LINES, PanelTexture, STAMINA_FILL, TEXT_DISABLED,
+    panel_bundle,
 };
 
 use super::engine::{CombatAction, CombatEvent, DuelDistance, REST_RESTORE};
@@ -64,6 +65,21 @@ pub(super) enum HudLabel {
 #[derive(Component)]
 pub(super) struct LogText;
 
+/// Marker for one side's status panel, so the responsive layout system (#31)
+/// can shrink it under the mobile breakpoint.
+#[derive(Component)]
+pub(super) struct FighterPanelRoot;
+
+/// Marker for the action-button row, so it can switch to a 2×2 grid under
+/// the mobile breakpoint.
+#[derive(Component)]
+pub(super) struct ActionBarRoot;
+
+/// Marker for the combat-log panel, repositioned/resized under the mobile
+/// breakpoint so it doesn't overlap the taller 2×2 action grid.
+#[derive(Component)]
+pub(super) struct LogPanelRoot;
+
 /// The combat action a HUD button submits when clicked.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ActionButton(CombatAction);
@@ -92,6 +108,14 @@ impl CombatLog {
     /// All kept lines joined for a single text node, newest at the bottom.
     pub fn to_text(&self) -> String {
         self.lines().collect::<Vec<_>>().join("\n")
+    }
+
+    /// Like [`Self::to_text`], but only the last `max_lines` (or all of them,
+    /// if fewer) — the mobile HUD (#31) collapses the log to the last
+    /// [`crate::theme::MOBILE_LOG_LINES`] lines to save vertical space.
+    pub fn to_text_capped(&self, max_lines: usize) -> String {
+        let skip = self.lines.len().saturating_sub(max_lines);
+        self.lines().skip(skip).collect::<Vec<_>>().join("\n")
     }
 }
 
@@ -183,8 +207,10 @@ pub(super) fn spawn_hud(
     mut commands: Commands,
     ui_font: Res<UiFont>,
     panel_texture: Res<PanelTexture>,
+    viewport: Res<ViewportInfo>,
 ) {
     commands.insert_resource(CombatLog::default());
+    let is_mobile = viewport.is_mobile;
     commands.spawn((
         HudScreen,
         Node {
@@ -194,11 +220,11 @@ pub(super) fn spawn_hud(
             ..default()
         },
         children![
-            fighter_panel(CombatSide::Player, &ui_font, &panel_texture),
-            fighter_panel(CombatSide::Enemy, &ui_font, &panel_texture),
+            fighter_panel(CombatSide::Player, &ui_font, &panel_texture, is_mobile),
+            fighter_panel(CombatSide::Enemy, &ui_font, &panel_texture, is_mobile),
             pause_button(&ui_font),
-            log_panel(&ui_font, &panel_texture),
-            action_bar(&ui_font),
+            log_panel(&ui_font, &panel_texture, is_mobile),
+            action_bar(&ui_font, is_mobile),
         ],
     ));
 }
@@ -237,12 +263,26 @@ pub(super) fn teardown_hud(mut commands: Commands) {
     commands.remove_resource::<CombatLog>();
 }
 
+/// Narrower fighter-panel width under the mobile breakpoint, so both panels
+/// fit side by side above a portrait-phone viewport without overlapping.
+const PANEL_WIDTH_MOBILE: f32 = 150.0;
+
 /// One fighter's status panel in a top corner: name, HP bar, stamina bar.
-fn fighter_panel(side: CombatSide, ui_font: &UiFont, panel_texture: &PanelTexture) -> impl Bundle {
+fn fighter_panel(
+    side: CombatSide,
+    ui_font: &UiFont,
+    panel_texture: &PanelTexture,
+    is_mobile: bool,
+) -> impl Bundle {
+    let width = if is_mobile {
+        PANEL_WIDTH_MOBILE
+    } else {
+        PANEL_WIDTH
+    };
     let mut node = Node {
         position_type: PositionType::Absolute,
         top: Val::Px(12.0),
-        width: Val::Px(PANEL_WIDTH),
+        width: Val::Px(width),
         flex_direction: FlexDirection::Column,
         row_gap: Val::Px(6.0),
         padding: UiRect::all(Val::Px(10.0)),
@@ -254,6 +294,7 @@ fn fighter_panel(side: CombatSide, ui_font: &UiFont, panel_texture: &PanelTextur
     }
     (
         panel_bundle(panel_texture, node),
+        FighterPanelRoot,
         children![
             (
                 Text::new(""),
@@ -311,20 +352,32 @@ fn bar(side: CombatSide, pool: Pool, fill_color: Color, ui_font: &UiFont) -> imp
     )
 }
 
-/// The right-side combat-log panel with a single multi-line text node.
-fn log_panel(ui_font: &UiFont, panel_texture: &PanelTexture) -> impl Bundle {
+/// The right-side combat-log panel with a single multi-line text node. Under
+/// the mobile breakpoint it moves up and narrows so it clears the taller 2×2
+/// action grid at the bottom of the screen.
+fn log_panel(ui_font: &UiFont, panel_texture: &PanelTexture, is_mobile: bool) -> impl Bundle {
+    let node = if is_mobile {
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(12.0),
+            right: Val::Px(12.0),
+            top: Val::Px(96.0),
+            padding: UiRect::all(Val::Px(8.0)),
+            ..default()
+        }
+    } else {
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(12.0),
+            top: Val::Px(120.0),
+            width: Val::Px(300.0),
+            padding: UiRect::all(Val::Px(8.0)),
+            ..default()
+        }
+    };
     (
-        panel_bundle(
-            panel_texture,
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(12.0),
-                top: Val::Px(120.0),
-                width: Val::Px(300.0),
-                padding: UiRect::all(Val::Px(8.0)),
-                ..default()
-            },
-        ),
+        panel_bundle(panel_texture, node),
+        LogPanelRoot,
         children![(
             Text::new(""),
             ui_font.text_font(15.0),
@@ -334,9 +387,24 @@ fn log_panel(ui_font: &UiFont, panel_texture: &PanelTexture) -> impl Bundle {
     )
 }
 
-/// The bottom action bar with combat and movement buttons.
-fn action_bar(ui_font: &UiFont) -> impl Bundle {
-    (
+/// The bottom action bar with combat and movement buttons: a single
+/// (wrapping) row on desktop, a tighter wrap grid of ≥48px touch targets
+/// under the mobile breakpoint (#31).
+fn action_bar(ui_font: &UiFont, is_mobile: bool) -> impl Bundle {
+    let node = if is_mobile {
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(8.0),
+            left: Val::Px(8.0),
+            right: Val::Px(8.0),
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
+            justify_content: JustifyContent::Center,
+            column_gap: Val::Px(8.0),
+            row_gap: Val::Px(8.0),
+            ..default()
+        }
+    } else {
         Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(16.0),
@@ -348,24 +416,39 @@ fn action_bar(ui_font: &UiFont) -> impl Bundle {
             row_gap: Val::Px(8.0),
             column_gap: Val::Px(12.0),
             ..default()
-        },
+        }
+    };
+    (
+        node,
+        ActionBarRoot,
         children![
-            action_button(CombatAction::QuickStrike, ui_font),
-            action_button(CombatAction::HeavyStrike, ui_font),
-            action_button(CombatAction::Block, ui_font),
-            action_button(CombatAction::Rest, ui_font),
-            action_button(CombatAction::StepForward, ui_font),
-            action_button(CombatAction::StepBack, ui_font),
-            action_button(CombatAction::LeapForward, ui_font),
+            action_button(CombatAction::QuickStrike, ui_font, is_mobile),
+            action_button(CombatAction::HeavyStrike, ui_font, is_mobile),
+            action_button(CombatAction::Block, ui_font, is_mobile),
+            action_button(CombatAction::Rest, ui_font, is_mobile),
+            action_button(CombatAction::StepForward, ui_font, is_mobile),
+            action_button(CombatAction::StepBack, ui_font, is_mobile),
+            action_button(CombatAction::LeapForward, ui_font, is_mobile),
         ],
     )
 }
 
-/// One action button: the Romanian label over its stamina cost.
-fn action_button(action: CombatAction, ui_font: &UiFont) -> impl Bundle {
-    (
-        Button,
-        ActionButton(action),
+/// One action button: the Romanian label over its stamina cost. Under the
+/// mobile breakpoint it grows to a ≥[`ACTION_BUTTON_TOUCH_TARGET`] square-ish
+/// tile so four of them wrap into a 2×2 grid.
+fn action_button(action: CombatAction, ui_font: &UiFont, is_mobile: bool) -> impl Bundle {
+    let node = if is_mobile {
+        Node {
+            width: Val::Percent(46.0),
+            min_height: Val::Px(ACTION_BUTTON_TOUCH_TARGET),
+            height: Val::Px(58.0),
+            flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            row_gap: Val::Px(2.0),
+            ..default()
+        }
+    } else {
         Node {
             width: Val::Px(150.0),
             height: Val::Px(64.0),
@@ -374,7 +457,12 @@ fn action_button(action: CombatAction, ui_font: &UiFont) -> impl Bundle {
             align_items: AlignItems::Center,
             row_gap: Val::Px(2.0),
             ..default()
-        },
+        }
+    };
+    (
+        Button,
+        ActionButton(action),
+        node,
         BackgroundColor(BUTTON_NORMAL),
         children![
             (
@@ -590,12 +678,97 @@ pub(super) fn collect_log_lines(
     }
 }
 
-/// Rewrites the log text node whenever the [`CombatLog`] changed.
-pub(super) fn update_log_text(log: Res<CombatLog>, mut texts: Query<&mut Text, With<LogText>>) {
+/// Rewrites the log text node whenever the [`CombatLog`] changed, capping it
+/// to the last [`MOBILE_LOG_LINES`] under the mobile breakpoint (#31).
+pub(super) fn update_log_text(
+    log: Res<CombatLog>,
+    viewport: Res<ViewportInfo>,
+    mut texts: Query<&mut Text, With<LogText>>,
+) {
     for mut text in &mut texts {
-        let value = log.to_text();
+        let value = if viewport.is_mobile {
+            log.to_text_capped(MOBILE_LOG_LINES)
+        } else {
+            log.to_text()
+        };
         if text.0 != value {
             text.0 = value;
+        }
+    }
+}
+
+/// Query filter for one responsive-layout node kind: it carries `Root` but
+/// none of the other three root markers, so the four queries in
+/// [`apply_responsive_hud_layout`] never alias the same entity.
+type ResponsiveNodeFilter<Root, A, B, C> = (With<Root>, Without<A>, Without<B>, Without<C>);
+
+/// Re-flows the HUD when [`ViewportInfo`] crosses the mobile breakpoint:
+/// resizes the fighter panels, the action grid/buttons, and the log panel in
+/// place instead of respawning the whole HUD.
+pub(super) fn apply_responsive_hud_layout(
+    viewport: Res<ViewportInfo>,
+    mut panels: Query<
+        &mut Node,
+        ResponsiveNodeFilter<FighterPanelRoot, ActionBarRoot, LogPanelRoot, ActionButton>,
+    >,
+    mut action_bars: Query<
+        &mut Node,
+        ResponsiveNodeFilter<ActionBarRoot, FighterPanelRoot, LogPanelRoot, ActionButton>,
+    >,
+    mut buttons: Query<
+        &mut Node,
+        ResponsiveNodeFilter<ActionButton, FighterPanelRoot, ActionBarRoot, LogPanelRoot>,
+    >,
+    mut logs: Query<
+        &mut Node,
+        ResponsiveNodeFilter<LogPanelRoot, FighterPanelRoot, ActionBarRoot, ActionButton>,
+    >,
+) {
+    if !viewport.is_changed() {
+        return;
+    }
+    let is_mobile = viewport.is_mobile;
+    let panel_width = if is_mobile {
+        PANEL_WIDTH_MOBILE
+    } else {
+        PANEL_WIDTH
+    };
+    for mut node in &mut panels {
+        node.width = Val::Px(panel_width);
+    }
+    for mut node in &mut action_bars {
+        node.flex_wrap = if is_mobile {
+            FlexWrap::Wrap
+        } else {
+            FlexWrap::NoWrap
+        };
+        node.left = Val::Px(if is_mobile { 8.0 } else { 0.0 });
+        node.right = Val::Px(if is_mobile { 8.0 } else { 0.0 });
+        node.column_gap = Val::Px(if is_mobile { 8.0 } else { 12.0 });
+        node.row_gap = Val::Px(if is_mobile { 8.0 } else { 0.0 });
+    }
+    for mut node in &mut buttons {
+        if is_mobile {
+            node.width = Val::Percent(46.0);
+            node.min_height = Val::Px(ACTION_BUTTON_TOUCH_TARGET);
+            node.height = Val::Px(58.0);
+        } else {
+            node.width = Val::Px(170.0);
+            node.min_height = Val::Auto;
+            node.height = Val::Px(64.0);
+        }
+    }
+    for mut node in &mut logs {
+        if is_mobile {
+            node.left = Val::Px(12.0);
+            node.right = Val::Px(12.0);
+            node.top = Val::Px(96.0);
+            node.width = Val::Auto;
+        } else {
+            node.left = Val::Auto;
+            node.right = Val::Px(12.0);
+            node.top = Val::Px(120.0);
+            node.width = Val::Px(300.0);
         }
     }
 }
@@ -860,6 +1033,21 @@ mod tests {
     }
 
     #[test]
+    fn to_text_capped_keeps_only_the_newest_lines() {
+        let mut log = CombatLog::default();
+        for i in 1..=8 {
+            log.push(format!("line {i}"));
+        }
+        // Mobile HUD (#31): the last MOBILE_LOG_LINES only.
+        assert_eq!(
+            log.to_text_capped(crate::theme::MOBILE_LOG_LINES),
+            "line 6\nline 7\nline 8"
+        );
+        // A cap bigger than the stored history returns everything.
+        assert_eq!(log.to_text_capped(100), log.to_text());
+    }
+
+    #[test]
     fn action_enabled_matches_the_engine_rules() {
         use CombatAction::*;
         let enemy_turn = CombatTurn {
@@ -958,6 +1146,42 @@ mod tests {
             .count();
         assert_eq!(logs, 1, "one log text node");
         assert!(app.world().get_resource::<CombatLog>().is_some());
+    }
+
+    #[test]
+    fn narrowing_the_viewport_grows_the_action_buttons_and_wraps_the_grid() {
+        let mut app = test_app();
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<crate::core::ViewportInfo>()
+            .set_if_neq(crate::core::ViewportInfo {
+                width: 375.0,
+                height: 812.0,
+                is_mobile: true,
+            });
+        app.update();
+
+        let action_bar_wrap = app
+            .world_mut()
+            .query_filtered::<&Node, With<ActionBarRoot>>()
+            .single(app.world())
+            .expect("one action bar root")
+            .flex_wrap;
+        assert_eq!(action_bar_wrap, FlexWrap::Wrap, "2x2 grid under mobile");
+
+        let mut buttons = app
+            .world_mut()
+            .query_filtered::<&Node, With<ActionButton>>();
+        for node in buttons.iter(app.world()) {
+            let Val::Px(min_height) = node.min_height else {
+                panic!("expected a pixel min height on mobile");
+            };
+            assert!(
+                min_height >= crate::theme::ACTION_BUTTON_TOUCH_TARGET,
+                "action button min height {min_height} below the touch target"
+            );
+        }
     }
 
     #[test]
