@@ -146,7 +146,8 @@ impl Sfx {
 /// Total mapping from combat events to sounds: every variant plays something.
 pub fn sfx_for(event: CombatEvent) -> Sfx {
     match event {
-        CombatEvent::Missed => Sfx::Whoosh,
+        CombatEvent::Missed | CombatEvent::Moved { .. } => Sfx::Whoosh,
+        CombatEvent::OutOfReach => Sfx::Fail,
         CombatEvent::Hit { .. } => Sfx::Hit,
         CombatEvent::Crit { .. } => Sfx::Crit,
         CombatEvent::Blocked { .. } | CombatEvent::Guarded => Sfx::Block,
@@ -503,6 +504,14 @@ mod tests {
             (CombatEvent::Blocked { dmg: 1 }, Sfx::Block),
             (CombatEvent::Guarded, Sfx::Block),
             (CombatEvent::Rested { amount: 2 }, Sfx::Rest),
+            (
+                CombatEvent::Moved {
+                    from: crate::combat::DuelDistance::FAR,
+                    to: crate::combat::DuelDistance::NEAR,
+                },
+                Sfx::Whoosh,
+            ),
+            (CombatEvent::OutOfReach, Sfx::Fail),
             (CombatEvent::OutOfStamina, Sfx::Fail),
             (CombatEvent::Defeated, Sfx::Defeated),
         ];

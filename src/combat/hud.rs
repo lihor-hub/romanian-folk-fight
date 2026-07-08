@@ -20,7 +20,7 @@ use crate::theme::{
     PanelTexture, STAMINA_FILL, TEXT_DISABLED, panel_bundle,
 };
 
-use super::engine::{CombatAction, CombatEvent, REST_RESTORE};
+use super::engine::{CombatAction, CombatEvent, DuelDistance, REST_RESTORE};
 use super::systems::{CombatLogEvent, CombatSide, CombatTurn, PlayerActionEvent};
 
 /// How many log lines the combat log keeps and shows.
@@ -109,6 +109,9 @@ pub fn action_label(action: CombatAction) -> &'static str {
         CombatAction::HeavyStrike => "Lovitură grea",
         CombatAction::Block => "Apărare",
         CombatAction::Rest => "Odihnă",
+        CombatAction::StepForward => "Pas înainte",
+        CombatAction::StepBack => "Pas înapoi",
+        CombatAction::LeapForward => "Salt înainte",
     }
 }
 
@@ -117,6 +120,9 @@ pub fn action_label(action: CombatAction) -> &'static str {
 pub fn cost_label(action: CombatAction) -> String {
     match action {
         CombatAction::Rest => format!("+{REST_RESTORE} stamina"),
+        CombatAction::StepForward | CombatAction::StepBack | CombatAction::LeapForward => {
+            "poziție".to_string()
+        }
         _ => format!("-{} stamina", action.stamina_cost()),
     }
 }
@@ -130,8 +136,13 @@ pub fn action_enabled(turn: &CombatTurn, stamina: i32, action: CombatAction) -> 
         return false;
     }
     match action {
-        CombatAction::QuickStrike | CombatAction::HeavyStrike => stamina >= action.stamina_cost(),
+        CombatAction::QuickStrike | CombatAction::HeavyStrike => {
+            turn.distance.in_melee_reach() && stamina >= action.stamina_cost()
+        }
         CombatAction::Block | CombatAction::Rest => true,
+        CombatAction::StepForward => turn.distance.band() > DuelDistance::CLOSE.band(),
+        CombatAction::StepBack => turn.distance.band() < DuelDistance::FAR.band(),
+        CombatAction::LeapForward => turn.distance.band() > DuelDistance::CLOSE.band(),
     }
 }
 
@@ -140,6 +151,7 @@ pub fn action_enabled(turn: &CombatTurn, stamina: i32, action: CombatAction) -> 
 pub fn log_line(actor: &str, opponent: &str, event: CombatEvent) -> String {
     match event {
         CombatEvent::Missed => format!("{actor} ratează lovitura."),
+        CombatEvent::OutOfReach => format!("{actor} este prea departe pentru lovitură."),
         CombatEvent::Hit { dmg } => format!("{actor} lovește pentru {dmg}!"),
         CombatEvent::Crit { dmg } => format!("{actor} dă o lovitură critică pentru {dmg}!"),
         CombatEvent::Blocked { dmg } => format!("{opponent} blochează: doar {dmg} daune."),
@@ -147,6 +159,13 @@ pub fn log_line(actor: &str, opponent: &str, event: CombatEvent) -> String {
         CombatEvent::Rested { amount } => {
             format!("{actor} se odihnește și recuperează {amount} stamina.")
         }
+        CombatEvent::Moved { from, to } if from == to => {
+            format!("{actor} își ține poziția.")
+        }
+        CombatEvent::Moved { from, to } if to.band() < from.band() => {
+            format!("{actor} înaintează în arenă.")
+        }
+        CombatEvent::Moved { .. } => format!("{actor} se retrage un pas."),
         CombatEvent::OutOfStamina => format!("{actor} nu are destulă stamina!"),
         CombatEvent::Defeated => format!("{opponent} este învins!"),
     }
@@ -308,7 +327,7 @@ fn log_panel(ui_font: &UiFont, panel_texture: &PanelTexture) -> impl Bundle {
     )
 }
 
-/// The bottom action bar with the four combat buttons.
+/// The bottom action bar with combat and movement buttons.
 fn action_bar(ui_font: &UiFont) -> impl Bundle {
     (
         Node {
@@ -317,7 +336,9 @@ fn action_bar(ui_font: &UiFont) -> impl Bundle {
             left: Val::Px(0.0),
             right: Val::Px(0.0),
             flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
             justify_content: JustifyContent::Center,
+            row_gap: Val::Px(8.0),
             column_gap: Val::Px(12.0),
             ..default()
         },
@@ -326,6 +347,9 @@ fn action_bar(ui_font: &UiFont) -> impl Bundle {
             action_button(CombatAction::HeavyStrike, ui_font),
             action_button(CombatAction::Block, ui_font),
             action_button(CombatAction::Rest, ui_font),
+            action_button(CombatAction::StepForward, ui_font),
+            action_button(CombatAction::StepBack, ui_font),
+            action_button(CombatAction::LeapForward, ui_font),
         ],
     )
 }
@@ -336,7 +360,7 @@ fn action_button(action: CombatAction, ui_font: &UiFont) -> impl Bundle {
         Button,
         ActionButton(action),
         Node {
-            width: Val::Px(170.0),
+            width: Val::Px(150.0),
             height: Val::Px(64.0),
             flex_direction: FlexDirection::Column,
             justify_content: JustifyContent::Center,
@@ -592,6 +616,7 @@ mod tests {
         over: false,
         player_blocking: false,
         enemy_blocking: false,
+        distance: DuelDistance::CLOSE,
     };
 
     /// Headless app on the fight screen with a deterministic duel RNG whose
@@ -763,6 +788,24 @@ mod tests {
                 "Făt-Frumos se odihnește și recuperează 20 stamina.",
             ),
             (
+                CombatEvent::OutOfReach,
+                "Făt-Frumos este prea departe pentru lovitură.",
+            ),
+            (
+                CombatEvent::Moved {
+                    from: DuelDistance::FAR,
+                    to: DuelDistance::NEAR,
+                },
+                "Făt-Frumos înaintează în arenă.",
+            ),
+            (
+                CombatEvent::Moved {
+                    from: DuelDistance::NEAR,
+                    to: DuelDistance::FAR,
+                },
+                "Făt-Frumos se retrage un pas.",
+            ),
+            (
                 CombatEvent::OutOfStamina,
                 "Făt-Frumos nu are destulă stamina!",
             ),
@@ -796,17 +839,28 @@ mod tests {
             over: true,
             ..PLAYER_TURN
         };
+        let far = CombatTurn {
+            distance: DuelDistance::FAR,
+            ..PLAYER_TURN
+        };
         let cases = [
             // (turn, stamina, action, expected, why)
             (PLAYER_TURN, 50, QuickStrike, true, "affordable on my turn"),
             (enemy_turn, 50, QuickStrike, false, "not my turn"),
             (over, 50, QuickStrike, false, "duel is over"),
+            (far, 50, QuickStrike, false, "too far for quick strike"),
             (PLAYER_TURN, 4, QuickStrike, false, "below the 5 cost"),
             (PLAYER_TURN, 5, QuickStrike, true, "exactly the 5 cost"),
+            (far, 50, HeavyStrike, false, "too far for heavy strike"),
             (PLAYER_TURN, 14, HeavyStrike, false, "below the 15 cost"),
             (PLAYER_TURN, 15, HeavyStrike, true, "exactly the 15 cost"),
             (PLAYER_TURN, 0, Block, true, "block never rejects"),
             (PLAYER_TURN, 0, Rest, true, "rest never rejects"),
+            (PLAYER_TURN, 0, StepForward, false, "already close"),
+            (PLAYER_TURN, 0, StepBack, true, "can open distance"),
+            (far, 0, StepForward, true, "can close distance"),
+            (far, 0, StepBack, false, "already at max distance"),
+            (far, 0, LeapForward, true, "can leap from range"),
             (over, 0, Rest, false, "nothing after the duel ends"),
         ];
         for (turn, stamina, action, expected, why) in cases {
@@ -820,10 +874,16 @@ mod tests {
         assert_eq!(action_label(CombatAction::HeavyStrike), "Lovitură grea");
         assert_eq!(action_label(CombatAction::Block), "Apărare");
         assert_eq!(action_label(CombatAction::Rest), "Odihnă");
+        assert_eq!(action_label(CombatAction::StepForward), "Pas înainte");
+        assert_eq!(action_label(CombatAction::StepBack), "Pas înapoi");
+        assert_eq!(action_label(CombatAction::LeapForward), "Salt înainte");
         assert_eq!(cost_label(CombatAction::QuickStrike), "-5 stamina");
         assert_eq!(cost_label(CombatAction::HeavyStrike), "-15 stamina");
         assert_eq!(cost_label(CombatAction::Block), "-3 stamina");
         assert_eq!(cost_label(CombatAction::Rest), "+20 stamina");
+        assert_eq!(cost_label(CombatAction::StepForward), "poziție");
+        assert_eq!(cost_label(CombatAction::StepBack), "poziție");
+        assert_eq!(cost_label(CombatAction::LeapForward), "poziție");
     }
 
     // --- headless screen behavior ---
@@ -842,7 +902,10 @@ mod tests {
             .query_filtered::<(), (With<ActionButton>, With<Button>)>()
             .iter(app.world())
             .count();
-        assert_eq!(buttons, 4, "four action buttons");
+        assert_eq!(
+            buttons, 7,
+            "four combat buttons plus three movement buttons"
+        );
         let fills = app
             .world_mut()
             .query::<&BarFill>()
@@ -1027,11 +1090,19 @@ mod tests {
             CombatAction::QuickStrike,
             CombatAction::Block,
             CombatAction::Rest,
+            CombatAction::StepBack,
         ] {
             let button = find_button(&mut app, affordable);
             assert!(
                 !app.world().entity(button).contains::<DisabledButton>(),
                 "{affordable:?} stays enabled at 10 stamina"
+            );
+        }
+        for unavailable in [CombatAction::StepForward, CombatAction::LeapForward] {
+            let button = find_button(&mut app, unavailable);
+            assert!(
+                app.world().entity(button).contains::<DisabledButton>(),
+                "{unavailable:?} greys out while already close"
             );
         }
 
@@ -1071,6 +1142,9 @@ mod tests {
             CombatAction::HeavyStrike,
             CombatAction::Block,
             CombatAction::Rest,
+            CombatAction::StepForward,
+            CombatAction::StepBack,
+            CombatAction::LeapForward,
         ] {
             let button = find_button(&mut app, action);
             assert!(

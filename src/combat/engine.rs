@@ -1,7 +1,8 @@
 //! Pure turn-based combat resolution: no Bevy ECS types beyond the plain
 //! [`Attributes`] data struct, so every branch is unit-testable with a seeded
 //! RNG. The ECS glue in [`super::systems`] builds [`FighterState`] snapshots
-//! from components, calls [`resolve_action`], and writes the results back.
+//! from components, calls [`resolve_action_at_distance`], and writes the
+//! results back.
 
 use rand::{Rng, RngExt as _};
 
@@ -23,7 +24,59 @@ pub const HEAVY_STRIKE_BASE_HIT: i32 = 60;
 /// AI's kill-range check builds on the same number.
 pub const HEAVY_DAMAGE_MULTIPLIER: i32 = 2;
 
-/// One of the four things a fighter can do on their turn.
+/// Minimum tactical distance: both fighters are inside melee reach.
+pub const MIN_DISTANCE_BAND: u8 = 0;
+/// Maximum tactical distance: fighters need to advance before striking.
+pub const MAX_DISTANCE_BAND: u8 = 2;
+
+/// Relative spacing between the two fighters in the duel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DuelDistance {
+    band: u8,
+}
+
+impl DuelDistance {
+    /// Fighters are toe-to-toe; melee strikes can connect.
+    pub const CLOSE: Self = Self {
+        band: MIN_DISTANCE_BAND,
+    };
+    /// One measured step apart.
+    pub const NEAR: Self = Self { band: 1 };
+    /// Out of melee reach.
+    pub const FAR: Self = Self {
+        band: MAX_DISTANCE_BAND,
+    };
+
+    /// The default spacing for a newly spawned fight, preserving existing
+    /// close-range combat behavior.
+    pub const fn starting() -> Self {
+        Self::CLOSE
+    }
+
+    /// Current distance band, mainly for tests and HUD text.
+    pub const fn band(self) -> u8 {
+        self.band
+    }
+
+    /// Whether melee strikes can reach at this distance.
+    pub const fn in_melee_reach(self) -> bool {
+        self.band == MIN_DISTANCE_BAND
+    }
+
+    fn advance(self, amount: u8) -> Self {
+        Self {
+            band: self.band.saturating_sub(amount),
+        }
+    }
+
+    fn retreat(self, amount: u8) -> Self {
+        Self {
+            band: (self.band + amount).min(MAX_DISTANCE_BAND),
+        }
+    }
+}
+
+/// One of the tactical choices a fighter can make on their turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CombatAction {
     /// Cheap, accurate strike for `base_damage`.
@@ -35,6 +88,12 @@ pub enum CombatAction {
     Block,
     /// Recover [`REST_RESTORE`] stamina, capped at max.
     Rest,
+    /// Close the distance by one band.
+    StepForward,
+    /// Open the distance by one band.
+    StepBack,
+    /// Bound forward by two bands, clamped at close range.
+    LeapForward,
 }
 
 impl CombatAction {
@@ -47,7 +106,7 @@ impl CombatAction {
             Self::QuickStrike => QUICK_STRIKE_COST,
             Self::HeavyStrike => HEAVY_STRIKE_COST,
             Self::Block => BLOCK_COST,
-            Self::Rest => 0,
+            Self::Rest | Self::StepForward | Self::StepBack | Self::LeapForward => 0,
         }
     }
 }
@@ -100,6 +159,8 @@ impl FighterState {
 pub enum CombatEvent {
     /// A strike was attempted but missed.
     Missed,
+    /// A melee strike could not reach at the current distance.
+    OutOfReach,
     /// A normal hit landed for `dmg`.
     Hit { dmg: i32 },
     /// A critical hit landed for `dmg` (already doubled).
@@ -111,6 +172,13 @@ pub enum CombatEvent {
     Guarded,
     /// The actor rested and recovered `amount` stamina.
     Rested { amount: i32 },
+    /// The actor changed the duel distance.
+    Moved {
+        /// Distance before movement.
+        from: DuelDistance,
+        /// Distance after movement.
+        to: DuelDistance,
+    },
     /// A strike was rejected because the actor lacked the stamina; no state
     /// changed.
     OutOfStamina,
@@ -137,6 +205,18 @@ pub fn resolve_action(
     action: CombatAction,
     rng: &mut impl Rng,
 ) -> Vec<CombatEvent> {
+    let mut distance = DuelDistance::starting();
+    resolve_action_at_distance(actor, target, action, &mut distance, rng)
+}
+
+/// Resolves one action while reading/writing the duel distance.
+pub fn resolve_action_at_distance(
+    actor: &mut FighterState,
+    target: &mut FighterState,
+    action: CombatAction,
+    distance: &mut DuelDistance,
+    rng: &mut impl Rng,
+) -> Vec<CombatEvent> {
     match action {
         CombatAction::QuickStrike => strike(
             actor,
@@ -144,6 +224,7 @@ pub fn resolve_action(
             action.stamina_cost(),
             QUICK_STRIKE_BASE_HIT,
             1,
+            *distance,
             rng,
         ),
         CombatAction::HeavyStrike => strike(
@@ -152,6 +233,7 @@ pub fn resolve_action(
             action.stamina_cost(),
             HEAVY_STRIKE_BASE_HIT,
             HEAVY_DAMAGE_MULTIPLIER,
+            *distance,
             rng,
         ),
         CombatAction::Block => {
@@ -167,6 +249,9 @@ pub fn resolve_action(
             actor.stamina += amount;
             vec![CombatEvent::Rested { amount }]
         }
+        CombatAction::StepForward => move_distance(actor, distance, |distance| distance.advance(1)),
+        CombatAction::StepBack => move_distance(actor, distance, |distance| distance.retreat(1)),
+        CombatAction::LeapForward => move_distance(actor, distance, |distance| distance.advance(2)),
     }
 }
 
@@ -179,10 +264,15 @@ fn strike(
     cost: i32,
     base_hit: i32,
     damage_multiplier: i32,
+    distance: DuelDistance,
     rng: &mut impl Rng,
 ) -> Vec<CombatEvent> {
     if actor.stamina < cost {
         return vec![CombatEvent::OutOfStamina];
+    }
+    if !distance.in_melee_reach() {
+        actor.blocking = false;
+        return vec![CombatEvent::OutOfReach];
     }
     actor.blocking = false;
     actor.stamina -= cost;
@@ -221,6 +311,20 @@ fn strike(
         events.push(CombatEvent::Defeated);
     }
     events
+}
+
+fn move_distance(
+    actor: &mut FighterState,
+    distance: &mut DuelDistance,
+    movement: impl FnOnce(DuelDistance) -> DuelDistance,
+) -> Vec<CombatEvent> {
+    actor.blocking = false;
+    let from = *distance;
+    *distance = movement(*distance);
+    vec![CombatEvent::Moved {
+        from,
+        to: *distance,
+    }]
 }
 
 /// One `0..100` roll against a percent chance; shared with the combat AI so
@@ -297,6 +401,105 @@ mod tests {
         assert_eq!(events, vec![CombatEvent::Hit { dmg: 6 }]);
         assert_eq!(target.hp, 94, "base_damage(putere 4) = 6");
         assert_eq!(actor.stamina, 50, "quick strike costs 5");
+    }
+
+    #[test]
+    fn movement_actions_change_distance_and_clamp_at_the_edges() {
+        let mut actor = fighter();
+        let mut target = fighter();
+        let mut distance = DuelDistance::starting();
+
+        let events = resolve_action_at_distance(
+            &mut actor,
+            &mut target,
+            CombatAction::StepBack,
+            &mut distance,
+            &mut rng_hit_no_crit(),
+        );
+        assert_eq!(
+            events,
+            vec![CombatEvent::Moved {
+                from: DuelDistance::CLOSE,
+                to: DuelDistance::NEAR,
+            }]
+        );
+        assert_eq!(distance, DuelDistance::NEAR);
+
+        resolve_action_at_distance(
+            &mut actor,
+            &mut target,
+            CombatAction::StepBack,
+            &mut distance,
+            &mut rng_hit_no_crit(),
+        );
+        assert_eq!(distance, DuelDistance::FAR);
+
+        let events = resolve_action_at_distance(
+            &mut actor,
+            &mut target,
+            CombatAction::StepBack,
+            &mut distance,
+            &mut rng_hit_no_crit(),
+        );
+        assert_eq!(
+            events,
+            vec![CombatEvent::Moved {
+                from: DuelDistance::FAR,
+                to: DuelDistance::FAR,
+            }],
+            "retreating at max distance clamps in place"
+        );
+
+        resolve_action_at_distance(
+            &mut actor,
+            &mut target,
+            CombatAction::LeapForward,
+            &mut distance,
+            &mut rng_hit_no_crit(),
+        );
+        assert_eq!(distance, DuelDistance::CLOSE);
+    }
+
+    #[test]
+    fn far_melee_strikes_are_reach_gated_without_spending_stamina() {
+        let mut actor = fighter();
+        let mut target = fighter();
+        let mut distance = DuelDistance::FAR;
+        let events = resolve_action_at_distance(
+            &mut actor,
+            &mut target,
+            CombatAction::QuickStrike,
+            &mut distance,
+            &mut rng_hit_no_crit(),
+        );
+        assert_eq!(events, vec![CombatEvent::OutOfReach]);
+        assert_eq!(target, fighter(), "target untouched out of reach");
+        assert_eq!(actor.stamina, 55, "reach-gated strike spends no stamina");
+        assert_eq!(distance, DuelDistance::FAR);
+    }
+
+    #[test]
+    fn leap_forward_can_make_a_later_strike_connect() {
+        let mut actor = fighter();
+        let mut target = fighter();
+        let mut distance = DuelDistance::FAR;
+        resolve_action_at_distance(
+            &mut actor,
+            &mut target,
+            CombatAction::LeapForward,
+            &mut distance,
+            &mut rng_hit_no_crit(),
+        );
+        assert_eq!(distance, DuelDistance::CLOSE);
+        let events = resolve_action_at_distance(
+            &mut actor,
+            &mut target,
+            CombatAction::QuickStrike,
+            &mut distance,
+            &mut rng_hit_no_crit(),
+        );
+        assert_eq!(events, vec![CombatEvent::Hit { dmg: 6 }]);
+        assert_eq!(target.hp, 94);
     }
 
     #[test]

@@ -9,8 +9,8 @@ pub mod hud;
 pub mod pause;
 pub mod systems;
 
-pub use ai::{AiProfile, choose_action};
-pub use engine::{CombatAction, CombatEvent, FighterState};
+pub use ai::{AiProfile, choose_action, choose_action_at_distance};
+pub use engine::{CombatAction, CombatEvent, DuelDistance, FighterState};
 pub use hud::CombatLog;
 pub use pause::PauseState;
 pub use systems::{CombatLogEvent, CombatPlugin, CombatRng, CombatSide, CombatTurn};

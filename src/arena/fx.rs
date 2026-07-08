@@ -420,7 +420,7 @@ fn spawn_combat_fx(
                     &ui_font,
                 );
             }
-            CombatEvent::Missed => {
+            CombatEvent::Missed | CombatEvent::OutOfReach => {
                 spawn_damage_text(
                     &mut commands,
                     at,

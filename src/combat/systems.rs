@@ -12,7 +12,7 @@ use crate::core::{GameState, despawn_screen};
 use crate::items::Equipment;
 
 use super::ai::{self, AiProfile};
-use super::engine::{self, CombatAction, CombatEvent};
+use super::engine::{self, CombatAction, CombatEvent, DuelDistance};
 use super::hud;
 use super::pause::{self, PauseState};
 
@@ -49,6 +49,8 @@ pub struct CombatTurn {
     pub player_blocking: bool,
     /// Whether the enemy is guarding since their last turn.
     pub enemy_blocking: bool,
+    /// Persistent relative spacing between the fighters.
+    pub distance: DuelDistance,
 }
 
 /// Seeded RNG that drives every combat roll; the engine never touches
@@ -187,12 +189,13 @@ fn init_turn(
         over: false,
         player_blocking: false,
         enemy_blocking: false,
+        distance: DuelDistance::starting(),
     });
 }
 
-/// Debug-only keyboard mapping (the HUD buttons are the real input):
-/// 1 = quick strike, 2 = heavy strike, 3 = block, 4 = rest. Only listens on
-/// the player's turn while the duel is running.
+/// Debug-only keyboard mapping (the HUD buttons are the real input): 1–4 are
+/// strikes/guard/rest, and 5–7 are movement. Only listens on the player's
+/// turn while the duel is running.
 #[cfg(debug_assertions)]
 fn player_input(
     keys: Res<ButtonInput<KeyCode>>,
@@ -210,6 +213,9 @@ fn player_input(
         (KeyCode::Digit2, CombatAction::HeavyStrike),
         (KeyCode::Digit3, CombatAction::Block),
         (KeyCode::Digit4, CombatAction::Rest),
+        (KeyCode::Digit5, CombatAction::StepForward),
+        (KeyCode::Digit6, CombatAction::StepBack),
+        (KeyCode::Digit7, CombatAction::LeapForward),
     ];
     for (key, action) in mappings {
         if keys.just_pressed(key) {
@@ -278,7 +284,7 @@ fn enemy_turn(
         warn!("no unique enemy AiProfile ({error}); using the default");
         AiProfile::default()
     });
-    let action = ai::choose_action(&me, &foe, &profile, &mut rng.0);
+    let action = ai::choose_action_at_distance(&me, &foe, &profile, turn.distance, &mut rng.0);
     apply_action(
         action,
         CombatSide::Enemy,
@@ -337,7 +343,13 @@ fn apply_action(
     let (_, _, mut actor_hp, mut actor_stamina) = actor;
     let (_, _, mut target_hp, mut target_stamina) = target;
 
-    let events = engine::resolve_action(&mut actor_state, &mut target_state, action, &mut rng.0);
+    let events = engine::resolve_action_at_distance(
+        &mut actor_state,
+        &mut target_state,
+        action,
+        &mut turn.distance,
+        &mut rng.0,
+    );
 
     actor_hp.current = actor_state.hp;
     actor_stamina.current = actor_state.stamina;
@@ -487,6 +499,7 @@ mod tests {
                 over: false,
                 player_blocking: false,
                 enemy_blocking: false,
+                distance: DuelDistance::starting(),
             }
         );
         assert_eq!(enemy_pools(&mut app), (70, 40), "enemy untouched");
@@ -567,6 +580,38 @@ mod tests {
         press_vs_resting_enemy(&mut app, KeyCode::Digit2);
         assert_eq!(enemy_pools(&mut app), (58, 20), "70 hp - 2 * 6 damage");
         assert_eq!(player_pools(&mut app), (90, 35), "heavy strike costs 15");
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn movement_actions_update_distance_and_pass_the_turn() {
+        let mut app = test_app();
+        press_vs_resting_enemy(&mut app, KeyCode::Digit6);
+        assert_eq!(turn(&app).distance, DuelDistance::NEAR);
+        assert_eq!(
+            turn(&app).side,
+            CombatSide::Player,
+            "the drained enemy rested and passed back"
+        );
+
+        press_vs_resting_enemy(&mut app, KeyCode::Digit5);
+        assert_eq!(turn(&app).distance, DuelDistance::CLOSE);
+        assert_eq!(enemy_pools(&mut app).0, 70, "movement deals no damage");
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn enemy_advances_back_after_the_player_opens_distance() {
+        let mut app = test_app();
+        press(&mut app, KeyCode::Digit6);
+        assert_eq!(
+            turn(&app).distance,
+            DuelDistance::CLOSE,
+            "the player steps back to near, then the ready enemy steps forward"
+        );
+        assert_eq!(turn(&app).side, CombatSide::Player);
+        assert_eq!(player_pools(&mut app), (90, 50));
+        assert_eq!(enemy_pools(&mut app), (70, 40));
     }
 
     #[cfg(debug_assertions)]
