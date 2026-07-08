@@ -18,8 +18,8 @@ use crate::menu::DisabledButton;
 use crate::progression::Wallet;
 use crate::save::SaveRequested;
 use crate::theme::{
-    BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK,
-    PanelTexture, TEXT_DISABLED, panel_bundle,
+    BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, MIN_TOUCH_TARGET,
+    NIGHT_BLACK, PanelTexture, TEXT_DISABLED, panel_bundle,
 };
 use crate::ui_widgets::wide_button;
 
@@ -187,6 +187,7 @@ impl Plugin for ShopPlugin {
             .init_resource::<OwnedItems>()
             .init_resource::<PlayerEquipment>()
             .init_resource::<ShopIcons>()
+            .add_plugins(crate::ui_widgets::ScrollInputPlugin)
             .add_message::<SaveRequested>()
             .add_systems(PreStartup, load_shop_icons)
             .add_systems(OnEnter(GameState::Shop), spawn_shop_screen)
@@ -200,6 +201,7 @@ impl Plugin for ShopPlugin {
                             .or_else(resource_changed::<OwnedItems>)
                             .or_else(resource_changed::<PlayerEquipment>),
                     ),
+                    crate::ui_widgets::scroll_with_wheel_and_touch,
                 )
                     .chain()
                     .run_if(in_state(GameState::Shop)),
@@ -341,9 +343,14 @@ fn spawn_shop_screen(
                 align_items: AlignItems::Center,
                 row_gap: Val::Px(4.0),
                 padding: UiRect::all(Val::Px(12.0)),
+                // The catalog can outgrow short viewports (portrait phones,
+                // #31); scroll instead of clipping unreachable rows.
+                overflow: Overflow::scroll_y(),
                 ..default()
             },
             BackgroundColor(NIGHT_BLACK),
+            ScrollPosition::default(),
+            crate::ui_widgets::Scrollable,
         ))
         .with_children(|parent| {
             // Header row: title on the left, wallet balance top-right.
@@ -544,7 +551,9 @@ fn spawn_item_row(
                 Button,
                 Node {
                     width: Val::Px(120.0),
-                    height: Val::Px(26.0),
+                    // ≥44px touch target (#31), up from the original 26px
+                    // mouse-only height.
+                    height: Val::Px(MIN_TOUCH_TARGET),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     ..default()

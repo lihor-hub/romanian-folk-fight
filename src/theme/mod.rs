@@ -62,6 +62,33 @@ pub const BLOCKED_GRAY: Color = Color::srgb(0.62, 0.60, 0.58);
 /// Combat-log / HUD banner backdrop.
 pub const BANNER_BACKGROUND: Color = Color::srgba(0.0, 0.0, 0.0, 0.72);
 
+// --- Responsive breakpoint (#31: mobile touch layout) ---
+
+/// Window width, in logical pixels, below which the UI reflows to the
+/// mobile layout: bigger touch targets, a 2×2 action grid, a shorter combat
+/// log. Matches the "portrait phone" cutoff called out in the issue.
+pub const MOBILE_BREAKPOINT: f32 = 700.0;
+
+/// Minimum touch-target size (both axes) for any interactive element, per
+/// common mobile accessibility guidance.
+pub const MIN_TOUCH_TARGET: f32 = 44.0;
+
+/// Minimum size of a combat action button under the mobile breakpoint —
+/// bigger than [`MIN_TOUCH_TARGET`] because these are the highest-frequency
+/// taps in the game.
+pub const ACTION_BUTTON_TOUCH_TARGET: f32 = 48.0;
+
+/// Number of combat-log lines shown under the mobile breakpoint (the full
+/// history still lives in `CombatLog`; this only trims what's displayed).
+pub const MOBILE_LOG_LINES: usize = 3;
+
+/// Whether a window of the given logical width should use the mobile
+/// layout. Pure so the breakpoint choice is unit-testable without spinning
+/// up a window.
+pub fn is_mobile_width(width: f32) -> bool {
+    width < MOBILE_BREAKPOINT
+}
+
 // --- Spacing scale ---
 
 pub const SPACE_XS: f32 = 4.0;
@@ -239,5 +266,19 @@ mod tests {
         app.add_plugins((MinimalPlugins, ThemePlugin));
         app.update();
         assert!(app.world().get_resource::<PanelTexture>().is_some());
+    }
+
+    #[test]
+    fn narrow_windows_use_the_mobile_layout() {
+        assert!(is_mobile_width(375.0));
+        assert!(is_mobile_width(414.0));
+        assert!(!is_mobile_width(MOBILE_BREAKPOINT));
+        assert!(!is_mobile_width(1280.0));
+    }
+
+    #[test]
+    fn touch_targets_meet_the_documented_minimums() {
+        const { assert!(MIN_TOUCH_TARGET >= 44.0) };
+        const { assert!(ACTION_BUTTON_TOUCH_TARGET >= 48.0) };
     }
 }

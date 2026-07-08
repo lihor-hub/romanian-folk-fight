@@ -65,6 +65,7 @@ pub struct CreationPlugin;
 impl Plugin for CreationPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CharacterDraft>()
+            .add_plugins(crate::ui_widgets::ScrollInputPlugin)
             .add_systems(OnEnter(GameState::CharacterCreation), spawn_creation_screen)
             .add_systems(
                 Update,
@@ -73,6 +74,7 @@ impl Plugin for CreationPlugin {
                     update_button_backgrounds,
                     update_control_availability,
                     update_labels.run_if(resource_changed::<CharacterDraft>),
+                    crate::ui_widgets::scroll_with_wheel_and_touch,
                 )
                     .chain()
                     .run_if(in_state(GameState::CharacterCreation)),
@@ -95,9 +97,15 @@ fn spawn_creation_screen(mut commands: Commands, draft: Res<CharacterDraft>, ui_
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 row_gap: Val::Px(12.0),
+                // Attribute rows plus the preview can outgrow short
+                // viewports (portrait phones, #31); scroll instead of
+                // clipping unreachable controls.
+                overflow: Overflow::scroll_y(),
                 ..default()
             },
             BackgroundColor(NIGHT_BLACK),
+            ScrollPosition::default(),
+            crate::ui_widgets::Scrollable,
         ))
         .with_children(|parent| {
             parent.spawn((

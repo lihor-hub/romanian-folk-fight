@@ -2,7 +2,10 @@
 <html lang="ro">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
     <title>Romanian Folk Fight</title>
     <meta
       name="description"
@@ -53,6 +56,8 @@
         width: 100%;
         height: 100%;
         overflow: hidden;
+        overscroll-behavior: none;
+        touch-action: none;
         background: #1a1214;
       }
       #game-canvas {
@@ -60,6 +65,8 @@
         width: 100%;
         height: 100%;
         outline: none;
+        overscroll-behavior: none;
+        touch-action: none;
       }
       #loading {
         position: absolute;

@@ -357,7 +357,7 @@ fn shake_amplitude(dmg: i32) -> f32 {
 fn apply_screen_shake(
     time: Res<Time>,
     mut shake: ResMut<ScreenShake>,
-    mut cameras: Query<&mut Transform, With<Camera2d>>,
+    mut cameras: Query<&mut Transform, With<crate::core::WorldCamera>>,
 ) {
     if !shake.active {
         return;
@@ -388,7 +388,7 @@ fn apply_screen_shake(
 /// back at rest immediately.
 fn reset_screen_shake(
     mut shake: ResMut<ScreenShake>,
-    mut cameras: Query<&mut Transform, With<Camera2d>>,
+    mut cameras: Query<&mut Transform, With<crate::core::WorldCamera>>,
 ) {
     if !shake.active {
         return;
@@ -409,9 +409,9 @@ fn spawn_combat_fx(
     mut events: MessageReader<CombatLogEvent>,
     mut commands: Commands,
     mut shake: ResMut<ScreenShake>,
-    players: Query<&Transform, (With<PlayerFighter>, Without<Camera2d>)>,
-    enemies: Query<&Transform, (With<EnemyFighter>, Without<Camera2d>)>,
-    cameras: Query<&Transform, With<Camera2d>>,
+    players: Query<&Transform, (With<PlayerFighter>, Without<crate::core::WorldCamera>)>,
+    enemies: Query<&Transform, (With<EnemyFighter>, Without<crate::core::WorldCamera>)>,
+    cameras: Query<&Transform, With<crate::core::WorldCamera>>,
     ui_font: Res<UiFont>,
 ) {
     for CombatLogEvent {
@@ -535,6 +535,15 @@ mod tests {
         app.world_mut()
             .resource_mut::<Time<Virtual>>()
             .set_max_delta(Duration::from_secs(10));
+        // Zero-length frames by default: MinimalPlugins' `Time` otherwise
+        // advances by real wall-clock elapsed between `update()` calls,
+        // which makes fade-alpha assertions flaky under load (more systems
+        // in a frame's schedule = more wall time = a small but nonzero
+        // fraction instead of the expected "just spawned" 1.0). `advance`
+        // overrides this for the frames that need a real tick.
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::ZERO,
+        ));
         app.update();
         app.world_mut()
             .resource_mut::<NextState<GameState>>()
@@ -810,7 +819,7 @@ mod tests {
     /// The camera translation.
     fn camera_at(app: &mut App) -> Vec3 {
         app.world_mut()
-            .query_filtered::<&Transform, With<Camera2d>>()
+            .query_filtered::<&Transform, With<crate::core::WorldCamera>>()
             .single(app.world())
             .expect("one camera")
             .translation
