@@ -756,7 +756,10 @@ mod tests {
             .query_filtered::<(), (With<ArenaScreen>, With<Sprite>, Without<Fighter>)>()
             .iter(app.world())
             .count();
-        assert_eq!(scenery, 3, "two parallax background layers + ground");
+        assert_eq!(
+            scenery, 4,
+            "two parallax layers + foreground depth + ground"
+        );
     }
 
     #[test]

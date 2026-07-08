@@ -44,6 +44,15 @@ impl BackgroundTier {
             ),
         }
     }
+
+    /// Asset path of this tier's stable stage-depth foreground layer.
+    fn foreground_path(self) -> &'static str {
+        match self {
+            Self::Village => "backgrounds/village_foreground.png",
+            Self::Forest => "backgrounds/forest_foreground.png",
+            Self::Mountains => "backgrounds/mountains_foreground.png",
+        }
+    }
 }
 
 /// The tier backing the current ladder fight; laps wrap (fight 11 is back
@@ -60,20 +69,36 @@ pub fn background_tier(ladder: LadderProgress) -> BackgroundTier {
 /// sprite sheets. Headless apps (no `AssetServer`) keep default handles.
 #[derive(Resource, Default)]
 pub struct ArenaBackgrounds {
-    village: (Handle<Image>, Handle<Image>),
-    forest: (Handle<Image>, Handle<Image>),
-    mountains: (Handle<Image>, Handle<Image>),
+    village: BackgroundHandles,
+    forest: BackgroundHandles,
+    mountains: BackgroundHandles,
+}
+
+#[derive(Default)]
+struct BackgroundHandles {
+    far: Handle<Image>,
+    near: Handle<Image>,
+    foreground: Handle<Image>,
 }
 
 impl ArenaBackgrounds {
     /// The `(far, near)` layer handles for `tier`.
     pub fn layers(&self, tier: BackgroundTier) -> (Handle<Image>, Handle<Image>) {
-        let (far, near) = match tier {
+        let handles = self.handles(tier);
+        (handles.far.clone(), handles.near.clone())
+    }
+
+    /// The stage-depth foreground handle for `tier`.
+    fn foreground(&self, tier: BackgroundTier) -> Handle<Image> {
+        self.handles(tier).foreground.clone()
+    }
+
+    fn handles(&self, tier: BackgroundTier) -> &BackgroundHandles {
+        match tier {
             BackgroundTier::Village => &self.village,
             BackgroundTier::Forest => &self.forest,
             BackgroundTier::Mountains => &self.mountains,
-        };
-        (far.clone(), near.clone())
+        }
     }
 }
 
@@ -86,7 +111,11 @@ fn load_backgrounds(mut commands: Commands, asset_server: Option<Res<AssetServer
             (BackgroundTier::Mountains, &mut backgrounds.mountains),
         ] {
             let (far, near) = tier.layer_paths();
-            *slot = (server.load(far), server.load(near));
+            *slot = BackgroundHandles {
+                far: server.load(far),
+                near: server.load(near),
+                foreground: server.load(tier.foreground_path()),
+            };
         }
     }
     commands.insert_resource(backgrounds);
@@ -100,6 +129,13 @@ pub struct ParallaxLayer {
     pub rate: f32,
     /// Resting x the drift oscillates around.
     pub base_x: f32,
+}
+
+/// Stable foreground/stage-depth layer for one background tier.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArenaForeground {
+    /// Tier whose stage edge this entity displays.
+    pub tier: BackgroundTier,
 }
 
 /// Parallax speed of the distant backdrop relative to the near overlay.
@@ -135,6 +171,18 @@ pub(super) fn spawn_background(
             Transform::from_xyz(0.0, 0.0, z),
         ));
     }
+    commands.spawn((
+        ArenaScreen,
+        ArenaForeground { tier },
+        Sprite {
+            image: backgrounds.foreground(tier),
+            custom_size: Some(LAYER_SIZE),
+            ..default()
+        },
+        // Behind fighters and labels, but in front of the ground strip and
+        // parallax art so the duel reads as staged without hiding silhouettes.
+        Transform::from_xyz(0.0, 0.0, -8.5),
+    ));
 }
 
 /// The subtle idle drift: each layer sways around its base at its own
@@ -562,6 +610,64 @@ mod tests {
     }
 
     #[test]
+    fn every_tier_maps_to_a_foreground_asset() {
+        for (tier, path) in [
+            (
+                BackgroundTier::Village,
+                "backgrounds/village_foreground.png",
+            ),
+            (BackgroundTier::Forest, "backgrounds/forest_foreground.png"),
+            (
+                BackgroundTier::Mountains,
+                "backgrounds/mountains_foreground.png",
+            ),
+        ] {
+            assert_eq!(tier.foreground_path(), path);
+            assert!(
+                path.ends_with("_foreground.png"),
+                "{tier:?} foreground is distinct from parallax layers"
+            );
+        }
+    }
+
+    #[test]
+    fn every_foreground_asset_exists_on_disk() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for tier in [
+            BackgroundTier::Village,
+            BackgroundTier::Forest,
+            BackgroundTier::Mountains,
+        ] {
+            let path = manifest.join("assets").join(tier.foreground_path());
+            assert!(
+                path.is_file(),
+                "{tier:?} foreground missing at {}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn each_tier_spawns_one_foreground_layer_tagged_for_cleanup() {
+        for (progress, tier) in [
+            (LadderProgress(0), BackgroundTier::Village),
+            (LadderProgress(4), BackgroundTier::Forest),
+            (LadderProgress(7), BackgroundTier::Mountains),
+        ] {
+            let mut app = test_app_at(progress);
+            let layers: Vec<(BackgroundTier, f32, bool)> = app
+                .world_mut()
+                .query::<(&ArenaForeground, &Transform, Option<&ArenaScreen>)>()
+                .iter(app.world())
+                .map(|(foreground, transform, screen)| {
+                    (foreground.tier, transform.translation.z, screen.is_some())
+                })
+                .collect();
+            assert_eq!(layers, vec![(tier, -8.5, true)], "{tier:?}");
+        }
+    }
+
+    #[test]
     fn the_arena_spawns_two_parallax_layers_that_drift_at_different_rates() {
         let mut app = test_app();
         let rates: Vec<f32> = app
@@ -759,6 +865,7 @@ mod tests {
         assert_eq!(count::<DamageText>(&mut app), 0, "no numbers leak");
         assert_eq!(count::<HitParticle>(&mut app), 0, "no sparks leak");
         assert_eq!(count::<ParallaxLayer>(&mut app), 0, "no layers leak");
+        assert_eq!(count::<ArenaForeground>(&mut app), 0, "no foreground leaks");
         assert_eq!(camera_at(&mut app), rest, "camera restored on exit");
         assert!(!app.world().resource::<ScreenShake>().is_active());
     }

@@ -83,7 +83,8 @@ to the fighter frame and dedicated to the public domain (**CC0 1.0**,
 
 All parallax background layers below are **self-generated placeholder art**
 produced by `scripts/generate-backgrounds.py` for this project (issue #23),
-following `docs/art-direction.md`. They are dedicated to the public domain
+with foreground depth added for issue #74, following `docs/art-direction.md`.
+They are dedicated to the public domain
 (**CC0 1.0**, <https://creativecommons.org/publicdomain/zero/1.0/>) and are
 pending replacement by bespoke final art.
 
@@ -91,10 +92,13 @@ pending replacement by bespoke final art.
 | --- | --- | --- | --- |
 | `backgrounds/village_far.png` | Sat românesc — dusk sky, hills, cottages (far layer) | self-generated | CC0 1.0 |
 | `backgrounds/village_near.png` | Sat românesc — wooden fence, haystacks (near layer) | self-generated | CC0 1.0 |
+| `backgrounds/village_foreground.png` | Sat românesc — plank stage edge, posts, crowd silhouettes (foreground depth) | self-generated | CC0 1.0 |
 | `backgrounds/forest_far.png` | Pădurea întunecată — moonlit fir silhouettes (far layer) | self-generated | CC0 1.0 |
 | `backgrounds/forest_near.png` | Pădurea întunecată — trunks, canopy, ferns (near layer) | self-generated | CC0 1.0 |
+| `backgrounds/forest_foreground.png` | Pădurea întunecată — roots, moss, and stones (foreground depth) | self-generated | CC0 1.0 |
 | `backgrounds/mountains_far.png` | Munții Carpați — peaks, fortress silhouette (far layer) | self-generated | CC0 1.0 |
 | `backgrounds/mountains_near.png` | Munții Carpați — rocky outcrops of the pass (near layer) | self-generated | CC0 1.0 |
+| `backgrounds/mountains_foreground.png` | Munții Carpați — carved stone arena lip and snow banks (foreground depth) | self-generated | CC0 1.0 |
 
 ## Audio (music and sound effects)
 
