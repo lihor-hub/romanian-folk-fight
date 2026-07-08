@@ -185,7 +185,10 @@ fn handle_menu_actions(
             continue;
         }
         match action {
-            MenuAction::NewGame => next_state.set(GameState::CharacterCreation),
+            MenuAction::NewGame => {
+                crate::progression::reset_run(&mut commands);
+                next_state.set(GameState::CharacterCreation);
+            }
             MenuAction::Continue => {
                 let save = store.as_ref().and_then(|store| load_save(store));
                 match save {
@@ -249,6 +252,41 @@ mod tests {
             matches!(*next, NextState::Pending(GameState::CharacterCreation)),
             "pressing Luptă nouă must queue CharacterCreation"
         );
+    }
+
+    #[test]
+    fn new_game_resets_the_previous_run_resources_before_creation() {
+        let mut app = test_app();
+        app.insert_resource(crate::progression::Wallet(210));
+        app.insert_resource(crate::progression::Level {
+            level: 3,
+            xp: 90,
+            unspent_points: 2,
+        });
+        app.insert_resource(PlayerCharacter {
+            name: "Greuceanu".to_string(),
+            attributes: Attributes {
+                putere: 6,
+                agilitate: 2,
+                vitalitate: 4,
+                noroc: 2,
+            },
+            appearance: crate::character::PlayerAppearance::default(),
+        });
+        app.update();
+        app.world_mut()
+            .spawn((Button, Interaction::Pressed, MenuAction::NewGame));
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<crate::progression::Wallet>(),
+            crate::progression::Wallet::default()
+        );
+        assert_eq!(
+            *app.world().resource::<crate::progression::Level>(),
+            crate::progression::Level::default()
+        );
+        assert!(app.world().get_resource::<PlayerCharacter>().is_none());
     }
 
     #[test]
@@ -354,6 +392,7 @@ mod tests {
                 vitalitate: 4,
                 noroc: 2,
             },
+            appearance: crate::character::PlayerAppearance::default(),
         };
         let level = Level {
             level: 3,

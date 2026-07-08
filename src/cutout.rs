@@ -5,6 +5,8 @@
 
 use bevy::prelude::*;
 
+use crate::character::{AccentColor, BodyBuild, HairStyle, PlayerAppearance, SkinTone};
+
 /// Registers cutout-rig support. The first implementation is spawn-helper
 /// driven, so the plugin currently documents ownership without scheduling
 /// systems.
@@ -26,6 +28,7 @@ pub enum CutoutTemplate {
 /// usable draw order while staying close to the planned anatomical part set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CutoutPartKind {
+    Hair,
     UpperArmBack,
     ForearmBack,
     HandBack,
@@ -76,9 +79,16 @@ pub struct CutoutPartMarker {
 
 /// Human/player neutral pose.
 pub fn human_template() -> CutoutRigTemplate {
+    human_template_for(PlayerAppearance::default())
+}
+
+/// Human/player neutral pose customized for one saved appearance selection.
+pub fn human_template_for(appearance: PlayerAppearance) -> CutoutRigTemplate {
+    let mut parts = human_parts(1.0);
+    apply_player_appearance(&mut parts, appearance);
     CutoutRigTemplate {
         template: CutoutTemplate::Human,
-        parts: human_parts(1.0),
+        parts,
     }
 }
 
@@ -206,6 +216,7 @@ fn human_parts(scale: f32) -> Vec<CutoutPart> {
             -0.03,
         ),
         part(CutoutPartKind::Torso, 0.0, 6.0, 44.0, 74.0, 0.0, 0.0),
+        part(CutoutPartKind::Hair, 1.0, 71.0, 32.0, 20.0, 0.02, 0.02),
         part(CutoutPartKind::Head, 4.0, 60.0, 38.0, 42.0, 0.04, 0.03),
         part(
             CutoutPartKind::UpperArmFront,
@@ -274,6 +285,12 @@ fn human_parts(scale: f32) -> Vec<CutoutPart> {
 fn strigoi_part(mut part: CutoutPart) -> CutoutPart {
     part.color = enemy_color(part.kind);
     match part.kind {
+        CutoutPartKind::Hair => {
+            part.offset.x -= 3.0;
+            part.offset.y += 13.0;
+            part.size.x *= 1.06;
+            part.size.y *= 1.3;
+        }
         CutoutPartKind::Torso => {
             part.offset.y += 6.0;
             part.size.x *= 0.72;
@@ -328,6 +345,12 @@ fn strigoi_part(mut part: CutoutPart) -> CutoutPart {
 fn zmeu_part(mut part: CutoutPart) -> CutoutPart {
     part.color = boss_color(part.kind);
     match part.kind {
+        CutoutPartKind::Hair => {
+            part.offset.x += 2.0;
+            part.offset.y += 21.0;
+            part.size.x *= 1.16;
+            part.size.y *= 1.34;
+        }
         CutoutPartKind::Torso => {
             part.offset.y += 10.0;
             part.size.x *= 1.34;
@@ -398,8 +421,172 @@ fn part(
     }
 }
 
+fn apply_player_appearance(parts: &mut [CutoutPart], appearance: PlayerAppearance) {
+    let skin = skin_color(appearance.skin_tone);
+    let garment = accent_color(appearance.accent);
+    let cloth = limb_cloth_color(appearance.accent);
+    let hair = hair_color(appearance.hair);
+
+    for part in parts.iter_mut() {
+        match part.kind {
+            CutoutPartKind::Hair => {
+                apply_hair_style(part, appearance.hair);
+                part.color = hair;
+            }
+            CutoutPartKind::Torso => part.color = garment,
+            CutoutPartKind::Head | CutoutPartKind::HandBack | CutoutPartKind::HandFront => {
+                part.color = skin;
+            }
+            CutoutPartKind::FootBack | CutoutPartKind::FootFront => {
+                part.color = boot_color();
+            }
+            _ => part.color = cloth,
+        }
+        apply_build(part, appearance.build);
+    }
+}
+
+fn apply_hair_style(part: &mut CutoutPart, hair: HairStyle) {
+    match hair {
+        HairStyle::Braided => {
+            part.offset.x = -1.0;
+            part.offset.y = 74.0;
+            part.size.x = 28.0;
+            part.size.y = 18.0;
+        }
+        HairStyle::Long => {
+            part.offset.x = 0.0;
+            part.offset.y = 70.0;
+            part.size.x = 34.0;
+            part.size.y = 25.0;
+        }
+        HairStyle::Short => {
+            part.offset.x = 2.0;
+            part.offset.y = 74.0;
+            part.size.x = 26.0;
+            part.size.y = 14.0;
+        }
+        HairStyle::Tied => {
+            part.offset.x = 3.0;
+            part.offset.y = 76.0;
+            part.size.x = 24.0;
+            part.size.y = 16.0;
+        }
+    }
+}
+
+fn apply_build(part: &mut CutoutPart, build: BodyBuild) {
+    match build {
+        BodyBuild::Lean => match part.kind {
+            CutoutPartKind::Hair => {}
+            CutoutPartKind::Torso => {
+                part.size.x *= 0.92;
+                part.size.y *= 0.96;
+            }
+            CutoutPartKind::Head => {
+                part.size.x *= 0.96;
+                part.size.y *= 0.96;
+            }
+            CutoutPartKind::UpperArmBack
+            | CutoutPartKind::UpperArmFront
+            | CutoutPartKind::ForearmBack
+            | CutoutPartKind::ForearmFront
+            | CutoutPartKind::ThighBack
+            | CutoutPartKind::ThighFront
+            | CutoutPartKind::ShinBack
+            | CutoutPartKind::ShinFront => {
+                part.size.x *= 0.9;
+            }
+            _ => {}
+        },
+        BodyBuild::Balanced => {}
+        BodyBuild::Sturdy => match part.kind {
+            CutoutPartKind::Hair => {}
+            CutoutPartKind::Torso => {
+                part.size.x *= 1.08;
+                part.size.y *= 1.02;
+            }
+            CutoutPartKind::ThighBack
+            | CutoutPartKind::ThighFront
+            | CutoutPartKind::ShinBack
+            | CutoutPartKind::ShinFront => {
+                part.size.x *= 1.08;
+            }
+            _ => {}
+        },
+        BodyBuild::Powerful => match part.kind {
+            CutoutPartKind::Hair => {}
+            CutoutPartKind::Torso => {
+                part.size.x *= 1.14;
+                part.size.y *= 1.06;
+                part.offset.y += 2.0;
+            }
+            CutoutPartKind::UpperArmBack
+            | CutoutPartKind::UpperArmFront
+            | CutoutPartKind::ForearmBack
+            | CutoutPartKind::ForearmFront => {
+                part.size.x *= 1.14;
+                part.size.y *= 1.04;
+            }
+            CutoutPartKind::ThighBack
+            | CutoutPartKind::ThighFront
+            | CutoutPartKind::ShinBack
+            | CutoutPartKind::ShinFront => {
+                part.size.x *= 1.12;
+                part.size.y *= 1.04;
+            }
+            CutoutPartKind::Head => {
+                part.size.x *= 1.04;
+                part.size.y *= 1.04;
+            }
+            _ => {}
+        },
+    }
+}
+
+fn skin_color(tone: SkinTone) -> Color {
+    match tone {
+        SkinTone::Fair => Color::srgb(0.92, 0.79, 0.66),
+        SkinTone::Warm => Color::srgb(0.86, 0.68, 0.52),
+        SkinTone::Olive => Color::srgb(0.71, 0.56, 0.39),
+        SkinTone::Deep => Color::srgb(0.53, 0.36, 0.24),
+    }
+}
+
+fn accent_color(accent: AccentColor) -> Color {
+    match accent {
+        AccentColor::Crimson => Color::srgb(0.72, 0.16, 0.16),
+        AccentColor::Forest => Color::srgb(0.22, 0.41, 0.22),
+        AccentColor::Gold => Color::srgb(0.73, 0.56, 0.18),
+        AccentColor::Storm => Color::srgb(0.34, 0.38, 0.46),
+    }
+}
+
+fn limb_cloth_color(accent: AccentColor) -> Color {
+    match accent {
+        AccentColor::Crimson => Color::srgb(0.9, 0.84, 0.72),
+        AccentColor::Forest => Color::srgb(0.82, 0.87, 0.76),
+        AccentColor::Gold => Color::srgb(0.91, 0.84, 0.61),
+        AccentColor::Storm => Color::srgb(0.82, 0.82, 0.86),
+    }
+}
+
+fn hair_color(hair: HairStyle) -> Color {
+    match hair {
+        HairStyle::Braided => Color::srgb(0.12, 0.08, 0.07),
+        HairStyle::Long => Color::srgb(0.36, 0.22, 0.12),
+        HairStyle::Short => Color::srgb(0.55, 0.38, 0.18),
+        HairStyle::Tied => Color::srgb(0.48, 0.48, 0.5),
+    }
+}
+
+fn boot_color() -> Color {
+    Color::srgb(0.12, 0.08, 0.07)
+}
+
 fn human_color(kind: CutoutPartKind) -> Color {
     match kind {
+        CutoutPartKind::Hair => hair_color(PlayerAppearance::default().hair),
         CutoutPartKind::Torso => Color::srgb(0.72, 0.16, 0.16),
         CutoutPartKind::Head | CutoutPartKind::HandBack | CutoutPartKind::HandFront => {
             Color::srgb(0.86, 0.68, 0.52)
@@ -411,6 +598,7 @@ fn human_color(kind: CutoutPartKind) -> Color {
 
 fn enemy_color(kind: CutoutPartKind) -> Color {
     match kind {
+        CutoutPartKind::Hair => Color::srgb(0.18, 0.2, 0.22),
         CutoutPartKind::Torso => Color::srgb(0.24, 0.29, 0.34),
         CutoutPartKind::Head | CutoutPartKind::HandBack | CutoutPartKind::HandFront => {
             Color::srgb(0.62, 0.68, 0.72)
@@ -422,6 +610,7 @@ fn enemy_color(kind: CutoutPartKind) -> Color {
 
 fn boss_color(kind: CutoutPartKind) -> Color {
     match kind {
+        CutoutPartKind::Hair => Color::srgb(0.18, 0.08, 0.07),
         CutoutPartKind::Torso => Color::srgb(0.52, 0.18, 0.1),
         CutoutPartKind::Head | CutoutPartKind::HandBack | CutoutPartKind::HandFront => {
             Color::srgb(0.8, 0.6, 0.42)

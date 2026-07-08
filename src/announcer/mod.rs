@@ -544,6 +544,7 @@ mod tests {
         app.insert_resource(PlayerCharacter {
             name: "Făt-Frumos".to_string(),
             attributes,
+            appearance: crate::character::PlayerAppearance::default(),
         });
         app.insert_resource(progress);
         app.insert_resource(CombatRng(ChaCha8Rng::seed_from_u64(9)));

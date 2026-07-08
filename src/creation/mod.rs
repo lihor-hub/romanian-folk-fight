@@ -1,5 +1,6 @@
-//! Character creation screen: pick a folk hero name, distribute attribute
-//! points, preview derived stats, and enter the arena.
+//! Character creation screen: choose a folklore preset or a custom path,
+//! edit attributes and appearance, preview the cutout rig, and enter the
+//! arena.
 //!
 //! The allocation rules live in [`draft`] as pure logic; this module only
 //! wires them to Bevy UI following the button pattern from the main menu.
@@ -8,24 +9,30 @@ pub mod draft;
 
 use bevy::prelude::*;
 
-pub use draft::{AttributeKind, CharacterDraft, FOLK_NAMES, FREE_POINTS};
+pub use draft::{AttributeKind, CharacterDraft, FOLK_NAMES, FREE_POINTS, HeroChoice, HeroPreset};
 
-use crate::character::{Attributes, stats};
+use crate::character::{Attributes, PlayerAppearance, stats};
 use crate::core::{GameState, UiFont, despawn_screen};
-use crate::cutout::{human_template, spawn_cutout_rig};
+use crate::cutout::{CutoutRig, human_template_for, spawn_cutout_rig};
+use crate::items::Equipment;
 use crate::menu::DisabledButton;
+use crate::shop::{OwnedItems, PlayerEquipment};
 use crate::theme::{
     BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK,
     TEXT_DISABLED,
 };
-use crate::ui_widgets::{attribute_row::spawn_attribute_row, small_button, wide_button};
+use crate::ui_widgets::{
+    attribute_row::spawn_attribute_row, button_bundle, scroll_with_wheel_and_touch, small_button,
+    wide_button,
+};
 
-/// The confirmed player character: chosen name plus final attributes. Written
-/// by the confirm button and read by the fight screen.
+/// The confirmed player character: chosen name, final attributes, and saved
+/// appearance. Written by the confirm button and read by the fight screen.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
 pub struct PlayerCharacter {
     pub name: String,
     pub attributes: Attributes,
+    pub appearance: PlayerAppearance,
 }
 
 /// Marker for the creation-screen root; everything under it is despawned by
@@ -33,21 +40,41 @@ pub struct PlayerCharacter {
 #[derive(Component)]
 struct CreationScreen;
 
-/// What a creation-screen button does when pressed (same approach as
-/// `MenuAction` from the main menu).
+/// Marker for the cutout preview root so resource changes can re-render it.
+#[derive(Component)]
+struct CreationPreview;
+
+/// Which appearance selector row a label or button belongs to.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+enum AppearanceField {
+    SkinTone,
+    Build,
+    Hair,
+    Accent,
+}
+
+impl AppearanceField {
+    fn label(self) -> &'static str {
+        match self {
+            Self::SkinTone => "Piele",
+            Self::Build => "Trup",
+            Self::Hair => "Păr",
+            Self::Accent => "Accent",
+        }
+    }
+}
+
+/// What a creation-screen button does when pressed.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 enum CreationAction {
-    /// Cycle to the previous folk hero name.
+    SelectChoice(HeroChoice),
     PreviousName,
-    /// Cycle to the next folk hero name.
     NextName,
-    /// Spend one free point on the attribute.
     Increase(AttributeKind),
-    /// Refund one point from the attribute.
     Decrease(AttributeKind),
-    /// Confirm the build, store [`PlayerCharacter`], and start the fight.
+    PreviousAppearance(AppearanceField),
+    NextAppearance(AppearanceField),
     Confirm,
-    /// Return to the main menu and reset the draft.
     Back,
 }
 
@@ -55,9 +82,11 @@ enum CreationAction {
 /// refreshes all of them whenever the draft changes.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 enum CreationLabel {
+    Description,
     Name,
     Points,
     Value(AttributeKind),
+    Appearance(AppearanceField),
     Preview,
 }
 
@@ -74,8 +103,10 @@ impl Plugin for CreationPlugin {
                     handle_creation_actions,
                     update_button_backgrounds,
                     update_control_availability,
+                    update_choice_button_styles,
                     update_labels.run_if(resource_changed::<CharacterDraft>),
-                    crate::ui_widgets::scroll_with_wheel_and_touch,
+                    refresh_preview_rig.run_if(resource_changed::<CharacterDraft>),
+                    scroll_with_wheel_and_touch,
                 )
                     .chain()
                     .run_if(in_state(GameState::CharacterCreation)),
@@ -109,9 +140,6 @@ fn spawn_creation_screen(
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 row_gap: Val::Px(12.0),
-                // Attribute rows plus the preview can outgrow short
-                // viewports (portrait phones, #31); scroll instead of
-                // clipping unreachable controls.
                 overflow: Overflow::scroll_y(),
                 ..default()
             },
@@ -124,13 +152,50 @@ fn spawn_creation_screen(
                 ui_font.text_font_bold(44.0),
                 TextColor(CREAM),
                 Node {
-                    margin: UiRect::bottom(Val::Px(20.0)),
+                    margin: UiRect::bottom(Val::Px(12.0)),
                     ..default()
                 },
             ));
 
-            // Name selection: `<` and `>` cycle through the curated folk
-            // hero names.
+            parent
+                .spawn(Node {
+                    width: Val::Px(680.0),
+                    max_width: Val::Percent(94.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    for choice in HeroChoice::ALL {
+                        row.spawn((
+                            button_bundle(
+                                choice.label(),
+                                Val::Px(150.0),
+                                Val::Px(46.0),
+                                18.0,
+                                &ui_font,
+                            ),
+                            CreationAction::SelectChoice(choice),
+                        ));
+                    }
+                });
+
+            parent.spawn((
+                Text::new(description_text(&draft)),
+                ui_font.text_font(18.0),
+                TextColor(CREAM),
+                CreationLabel::Description,
+                Node {
+                    width: Val::Px(680.0),
+                    max_width: Val::Percent(94.0),
+                    margin: UiRect::bottom(Val::Px(8.0)),
+                    ..default()
+                },
+            ));
+
             parent
                 .spawn(Node {
                     flex_direction: FlexDirection::Row,
@@ -162,10 +227,27 @@ fn spawn_creation_screen(
                 TextColor(CREAM),
                 CreationLabel::Points,
                 Node {
-                    margin: UiRect::vertical(Val::Px(8.0)),
+                    margin: UiRect::vertical(Val::Px(4.0)),
                     ..default()
                 },
             ));
+
+            for field in [
+                AppearanceField::SkinTone,
+                AppearanceField::Build,
+                AppearanceField::Hair,
+                AppearanceField::Accent,
+            ] {
+                spawn_option_row(
+                    parent,
+                    field.label(),
+                    appearance_text(&draft, field),
+                    CreationAction::PreviousAppearance(field),
+                    CreationAction::NextAppearance(field),
+                    CreationLabel::Appearance(field),
+                    &ui_font,
+                );
+            }
 
             for kind in AttributeKind::ALL {
                 spawn_attribute_row(
@@ -200,24 +282,80 @@ fn spawn_creation_screen(
     let preview = commands
         .spawn((
             CreationScreen,
+            CreationPreview,
             Transform::from_xyz(255.0, 5.0, 25.0).with_scale(Vec3::splat(0.82)),
         ))
         .id();
     spawn_cutout_rig(
         &mut commands,
         preview,
-        human_template(),
+        human_template_for(draft.appearance()),
         asset_server.as_deref(),
         false,
     );
 }
 
-/// The "points remaining" label text.
+fn spawn_option_row(
+    parent: &mut ChildSpawnerCommands,
+    label: &str,
+    value: String,
+    previous: impl Bundle,
+    next: impl Bundle,
+    value_label: impl Bundle,
+    ui_font: &UiFont,
+) {
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(12.0),
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn(Node {
+                width: Val::Px(140.0),
+                ..default()
+            })
+            .with_children(|slot| {
+                slot.spawn((Text::new(label), ui_font.text_font(24.0), TextColor(CREAM)));
+            });
+            row.spawn((small_button("<", ui_font), previous));
+            row.spawn(Node {
+                width: Val::Px(180.0),
+                justify_content: JustifyContent::Center,
+                ..default()
+            })
+            .with_children(|slot| {
+                slot.spawn((
+                    Text::new(value),
+                    ui_font.text_font(24.0),
+                    TextColor(CREAM),
+                    value_label,
+                ));
+            });
+            row.spawn((small_button(">", ui_font), next));
+        });
+}
+
 fn points_text(draft: &CharacterDraft) -> String {
     format!("Puncte rămase: {}", draft.points_remaining())
 }
 
-/// The derived-stat preview text, computed with the shared `stats` formulas.
+fn description_text(draft: &CharacterDraft) -> String {
+    let gear = if draft.starter_items().is_empty() {
+        "Echipare: fără echipament de pornire.".to_string()
+    } else {
+        let names = draft
+            .starter_items()
+            .iter()
+            .map(|item| item.item().name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("Echipare: {names}.")
+    };
+    format!("{}\n{}", draft.description(), gear)
+}
+
 fn preview_text(draft: &CharacterDraft) -> String {
     let attrs = draft.attributes();
     format!(
@@ -228,11 +366,17 @@ fn preview_text(draft: &CharacterDraft) -> String {
     )
 }
 
-/// Query filter: enabled buttons whose interaction changed this frame.
+fn appearance_text(draft: &CharacterDraft, field: AppearanceField) -> String {
+    match field {
+        AppearanceField::SkinTone => draft.skin_tone().label().to_string(),
+        AppearanceField::Build => draft.build().label().to_string(),
+        AppearanceField::Hair => draft.hair().label().to_string(),
+        AppearanceField::Accent => draft.accent().label().to_string(),
+    }
+}
+
 type ChangedEnabledButton = (Changed<Interaction>, With<Button>, Without<DisabledButton>);
 
-/// Query data for [`update_control_availability`]: a button, its action,
-/// whether it is currently disabled, and what it needs restyled.
 type AvailabilityControlled = (
     Entity,
     &'static CreationAction,
@@ -241,9 +385,6 @@ type AvailabilityControlled = (
     &'static Children,
 );
 
-/// Runs the [`CreationAction`] of whichever enabled button was pressed. The
-/// draft methods enforce the allocation invariants, so a press that would
-/// break them is simply a no-op.
 fn handle_creation_actions(
     mut commands: Commands,
     interactions: Query<(&Interaction, &CreationAction), ChangedEnabledButton>,
@@ -255,6 +396,7 @@ fn handle_creation_actions(
             continue;
         }
         match *action {
+            CreationAction::SelectChoice(choice) => draft.select_choice(choice),
             CreationAction::PreviousName => draft.previous_name(),
             CreationAction::NextName => draft.next_name(),
             CreationAction::Increase(kind) => {
@@ -263,14 +405,33 @@ fn handle_creation_actions(
             CreationAction::Decrease(kind) => {
                 draft.decrease(kind);
             }
+            CreationAction::PreviousAppearance(field) => match field {
+                AppearanceField::SkinTone => draft.previous_skin_tone(),
+                AppearanceField::Build => draft.previous_build(),
+                AppearanceField::Hair => draft.previous_hair(),
+                AppearanceField::Accent => draft.previous_accent(),
+            },
+            CreationAction::NextAppearance(field) => match field {
+                AppearanceField::SkinTone => draft.next_skin_tone(),
+                AppearanceField::Build => draft.next_build(),
+                AppearanceField::Hair => draft.next_hair(),
+                AppearanceField::Accent => draft.next_accent(),
+            },
             CreationAction::Confirm => {
                 if draft.is_complete() {
                     commands.insert_resource(PlayerCharacter {
                         name: draft.name().to_string(),
                         attributes: draft.attributes(),
+                        appearance: draft.appearance(),
                     });
-                    // The build now lives in `PlayerCharacter`; reset so any
-                    // later visit to the screen starts from a fresh draft.
+                    let mut equipment = Equipment::default();
+                    for &item in draft.starter_items() {
+                        equipment.equip(item);
+                    }
+                    commands.insert_resource(OwnedItems(
+                        draft.starter_items().iter().copied().collect(),
+                    ));
+                    commands.insert_resource(PlayerEquipment(equipment));
                     draft.reset();
                     next_state.set(GameState::Fight);
                 }
@@ -283,8 +444,6 @@ fn handle_creation_actions(
     }
 }
 
-/// Hover/pressed background feedback for every enabled button (same pattern
-/// as the main menu).
 fn update_button_backgrounds(
     mut buttons: Query<(&Interaction, &mut BackgroundColor), ChangedEnabledButton>,
 ) {
@@ -297,10 +456,6 @@ fn update_button_backgrounds(
     }
 }
 
-/// Enables/disables `+`, `-`, and confirm buttons to match the draft: `+`
-/// greys out with 0 points remaining, `-` at the base value, confirm until
-/// all points are spent. Only touches buttons whose enabled state actually
-/// flipped, so it does not fight the hover-feedback system.
 fn update_control_availability(
     draft: Res<CharacterDraft>,
     mut commands: Commands,
@@ -309,13 +464,16 @@ fn update_control_availability(
 ) {
     for (entity, action, was_disabled, mut background, children) in &mut buttons {
         let enabled = match action {
+            CreationAction::PreviousName | CreationAction::NextName => draft.can_cycle_name(),
             CreationAction::Increase(_) => draft.can_increase(),
             CreationAction::Decrease(kind) => draft.can_decrease(*kind),
             CreationAction::Confirm => draft.is_complete(),
-            _ => continue,
+            CreationAction::SelectChoice(_)
+            | CreationAction::PreviousAppearance(_)
+            | CreationAction::NextAppearance(_)
+            | CreationAction::Back => continue,
         };
         if enabled != was_disabled {
-            // Already in the right state; leave hover feedback alone.
             continue;
         }
         let text_color = if enabled {
@@ -335,28 +493,86 @@ fn update_control_availability(
     }
 }
 
-/// Refreshes every [`CreationLabel`] text from the draft. Scheduled after the
-/// action handler and gated on `resource_changed`, so the preview reacts on
-/// the same frame as the click.
+fn update_choice_button_styles(
+    draft: Res<CharacterDraft>,
+    mut buttons: Query<
+        (
+            &CreationAction,
+            &Interaction,
+            &mut BackgroundColor,
+            &Children,
+        ),
+        With<Button>,
+    >,
+    mut text_colors: Query<&mut TextColor>,
+) {
+    for (action, interaction, mut background, children) in &mut buttons {
+        let CreationAction::SelectChoice(choice) = action else {
+            continue;
+        };
+        let selected = *choice == draft.choice();
+        background.0 = if selected {
+            BUTTON_PRESSED
+        } else {
+            match interaction {
+                Interaction::Pressed => BUTTON_PRESSED,
+                Interaction::Hovered => BUTTON_HOVERED,
+                Interaction::None => BUTTON_NORMAL,
+            }
+        };
+        for child in children.iter() {
+            if let Ok(mut color) = text_colors.get_mut(child) {
+                color.0 = CREAM;
+            }
+        }
+    }
+}
+
 fn update_labels(draft: Res<CharacterDraft>, mut labels: Query<(&mut Text, &CreationLabel)>) {
     for (mut text, label) in &mut labels {
         text.0 = match label {
+            CreationLabel::Description => description_text(&draft),
             CreationLabel::Name => draft.name().to_string(),
             CreationLabel::Points => points_text(&draft),
             CreationLabel::Value(kind) => draft.get(*kind).to_string(),
+            CreationLabel::Appearance(field) => appearance_text(&draft, *field),
             CreationLabel::Preview => preview_text(&draft),
         };
+    }
+}
+
+fn refresh_preview_rig(
+    draft: Res<CharacterDraft>,
+    mut commands: Commands,
+    previews: Query<(Entity, Option<&Children>), With<CreationPreview>>,
+    asset_server: Option<Res<AssetServer>>,
+) {
+    for (preview, children) in &previews {
+        if let Some(children) = children {
+            for child in children.iter() {
+                commands.entity(child).despawn();
+            }
+        }
+        commands.entity(preview).remove::<CutoutRig>();
+        spawn_cutout_rig(
+            &mut commands,
+            preview,
+            human_template_for(draft.appearance()),
+            asset_server.as_deref(),
+            false,
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::character::{AccentColor, BodyBuild, HairStyle, SkinTone};
     use crate::core::CorePlugin;
-    use crate::cutout::{CutoutPartMarker, CutoutRig, human_template};
+    use crate::cutout::{CutoutPartMarker, human_template};
+    use crate::items::ItemId;
     use bevy::state::app::StatesPlugin;
 
-    /// Headless app already sitting on the creation screen.
     fn test_app() -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, CreationPlugin));
@@ -364,8 +580,8 @@ mod tests {
         app.world_mut()
             .resource_mut::<NextState<GameState>>()
             .set(GameState::CharacterCreation);
-        app.update(); // transition + OnEnter spawn
-        app.update(); // availability pass settles initial disabled states
+        app.update();
+        app.update();
         app
     }
 
@@ -408,13 +624,12 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(roots, 1, "creation screen root spawned");
-        // 2 name arrows + 4 * (+/-) + confirm + back.
         let buttons = app
             .world_mut()
             .query_filtered::<(), With<Button>>()
             .iter(app.world())
             .count();
-        assert_eq!(buttons, 12);
+        assert_eq!(buttons, 25);
     }
 
     #[test]
@@ -422,7 +637,7 @@ mod tests {
         let mut app = test_app();
         let preview = app
             .world_mut()
-            .query_filtered::<Entity, (With<CreationScreen>, With<CutoutRig>)>()
+            .query_filtered::<Entity, (With<CreationPreview>, With<CutoutRig>)>()
             .single(app.world())
             .expect("one cutout preview root exists");
         let children = app
@@ -438,85 +653,60 @@ mod tests {
     }
 
     #[test]
-    fn pressed_plus_mutates_the_draft_resource() {
+    fn selecting_a_preset_populates_the_editable_draft() {
         let mut app = test_app();
-        press(&mut app, CreationAction::Increase(AttributeKind::Putere));
-        assert_eq!(draft(&app).get(AttributeKind::Putere), 2);
-        assert_eq!(draft(&app).points_remaining(), FREE_POINTS - 1);
-    }
-
-    #[test]
-    fn minus_at_base_value_is_disabled_and_inert() {
-        let mut app = test_app();
-        let minus = find_button(&mut app, CreationAction::Decrease(AttributeKind::Noroc));
-        assert!(
-            app.world().entity(minus).contains::<DisabledButton>(),
-            "`-` greys out at the base value"
+        press(
+            &mut app,
+            CreationAction::SelectChoice(HeroChoice::Preset(HeroPreset::Ciobanul)),
         );
         assert_eq!(
-            app.world().get::<BackgroundColor>(minus).map(|b| b.0),
-            Some(BUTTON_DISABLED)
+            draft(&app).choice(),
+            HeroChoice::Preset(HeroPreset::Ciobanul)
         );
-        press(&mut app, CreationAction::Decrease(AttributeKind::Noroc));
-        assert_eq!(draft(&app).get(AttributeKind::Noroc), 1, "value unchanged");
-        assert_eq!(draft(&app).points_remaining(), FREE_POINTS);
+        assert_eq!(draft(&app).name(), "Ciobanul");
+        assert_eq!(draft(&app).attributes(), HeroPreset::Ciobanul.attributes());
+        assert_eq!(draft(&app).appearance(), HeroPreset::Ciobanul.appearance());
+        assert!(draft(&app).is_complete());
+        assert!(label_text(&mut app, CreationLabel::Description).contains("Echipare:"));
     }
 
     #[test]
-    fn minus_enables_after_a_point_is_spent_and_refunds() {
+    fn preset_names_disable_name_cycling_but_custom_reenables_it() {
         let mut app = test_app();
-        press(&mut app, CreationAction::Increase(AttributeKind::Agilitate));
-        let minus = find_button(&mut app, CreationAction::Decrease(AttributeKind::Agilitate));
+        let previous = find_button(&mut app, CreationAction::PreviousName);
         assert!(
-            !app.world().entity(minus).contains::<DisabledButton>(),
-            "`-` re-enables once above base"
-        );
-        press(&mut app, CreationAction::Decrease(AttributeKind::Agilitate));
-        assert_eq!(draft(&app).get(AttributeKind::Agilitate), 1);
-        assert_eq!(draft(&app).points_remaining(), FREE_POINTS);
-    }
-
-    #[test]
-    fn plus_disables_at_zero_points_remaining() {
-        let mut app = test_app();
-        for _ in 0..FREE_POINTS {
-            press(&mut app, CreationAction::Increase(AttributeKind::Putere));
-        }
-        assert_eq!(draft(&app).points_remaining(), 0);
-        app.update();
-        let plus = find_button(
-            &mut app,
-            CreationAction::Increase(AttributeKind::Vitalitate),
-        );
-        assert!(
-            app.world().entity(plus).contains::<DisabledButton>(),
-            "`+` greys out with no points left"
+            !app.world().entity(previous).contains::<DisabledButton>(),
+            "custom starts with editable names"
         );
         press(
             &mut app,
-            CreationAction::Increase(AttributeKind::Vitalitate),
+            CreationAction::SelectChoice(HeroChoice::Preset(HeroPreset::Haiducul)),
         );
-        assert_eq!(
-            draft(&app).get(AttributeKind::Vitalitate),
-            1,
-            "no overspend"
+        assert!(
+            app.world().entity(previous).contains::<DisabledButton>(),
+            "preset names are fixed"
+        );
+        press(&mut app, CreationAction::NextName);
+        assert_eq!(draft(&app).name(), "Haiducul");
+
+        press(&mut app, CreationAction::SelectChoice(HeroChoice::Custom));
+        assert!(
+            !app.world().entity(previous).contains::<DisabledButton>(),
+            "custom path reenables curated names"
         );
     }
 
     #[test]
-    fn confirm_is_gated_until_all_points_are_spent() {
+    fn custom_path_still_gates_confirm_until_all_points_are_spent() {
         let mut app = test_app();
         let confirm = find_button(&mut app, CreationAction::Confirm);
         assert!(
             app.world().entity(confirm).contains::<DisabledButton>(),
-            "confirm starts disabled"
+            "confirm starts disabled for custom heroes"
         );
         press(&mut app, CreationAction::Confirm);
         app.update();
-        assert!(
-            app.world().get_resource::<PlayerCharacter>().is_none(),
-            "no character before completion"
-        );
+        assert!(app.world().get_resource::<PlayerCharacter>().is_none());
         assert_eq!(
             *app.world().resource::<State<GameState>>().get(),
             GameState::CharacterCreation
@@ -524,9 +714,24 @@ mod tests {
     }
 
     #[test]
-    fn confirm_stores_player_character_and_starts_the_fight() {
+    fn custom_confirm_persists_edited_appearance_and_empty_loadout() {
         let mut app = test_app();
-        press(&mut app, CreationAction::NextName);
+        press(
+            &mut app,
+            CreationAction::NextAppearance(AppearanceField::SkinTone),
+        );
+        press(
+            &mut app,
+            CreationAction::NextAppearance(AppearanceField::Build),
+        );
+        press(
+            &mut app,
+            CreationAction::NextAppearance(AppearanceField::Hair),
+        );
+        press(
+            &mut app,
+            CreationAction::NextAppearance(AppearanceField::Accent),
+        );
         for _ in 0..4 {
             press(&mut app, CreationAction::Increase(AttributeKind::Putere));
         }
@@ -536,82 +741,82 @@ mod tests {
                 CreationAction::Increase(AttributeKind::Vitalitate),
             );
         }
-        let confirm = find_button(&mut app, CreationAction::Confirm);
-        assert!(
-            !app.world().entity(confirm).contains::<DisabledButton>(),
-            "confirm enables at exactly 10 spent"
-        );
+
         press(&mut app, CreationAction::Confirm);
-        app.update(); // transition applies
+        app.update();
 
         let player = app
             .world()
             .get_resource::<PlayerCharacter>()
             .expect("PlayerCharacter stored on confirm");
-        assert_eq!(player.name, FOLK_NAMES[1]);
+        assert_eq!(player.name, FOLK_NAMES[0]);
+        assert_eq!(
+            player.appearance,
+            PlayerAppearance {
+                skin_tone: SkinTone::Olive,
+                build: BodyBuild::Sturdy,
+                hair: HairStyle::Long,
+                accent: AccentColor::Forest,
+            }
+        );
+        assert_eq!(
+            *app.world().resource::<PlayerEquipment>(),
+            PlayerEquipment(Equipment::default())
+        );
+        assert_eq!(
+            *app.world().resource::<OwnedItems>(),
+            OwnedItems(Default::default())
+        );
+    }
+
+    #[test]
+    fn preset_confirm_stores_player_character_loadout_and_starts_the_fight() {
+        let mut app = test_app();
+        press(
+            &mut app,
+            CreationAction::SelectChoice(HeroChoice::Preset(HeroPreset::Voinicul)),
+        );
+        press(&mut app, CreationAction::Decrease(AttributeKind::Putere));
+        press(&mut app, CreationAction::Increase(AttributeKind::Agilitate));
+        press(&mut app, CreationAction::Confirm);
+        app.update();
+
+        let player = app
+            .world()
+            .get_resource::<PlayerCharacter>()
+            .expect("PlayerCharacter stored on confirm");
+        assert_eq!(player.name, "Voinicul");
         assert_eq!(
             player.attributes,
             Attributes {
-                putere: 5,
-                agilitate: 1,
-                vitalitate: 7,
-                noroc: 1,
+                putere: 3,
+                agilitate: 4,
+                vitalitate: 4,
+                noroc: 3,
             }
         );
+        assert_eq!(player.appearance, HeroPreset::Voinicul.appearance());
+        let loadout = app.world().resource::<PlayerEquipment>();
+        assert_eq!(
+            loadout.0.equipped(crate::items::Slot::Weapon),
+            Some(ItemId::BataCiobaneasca)
+        );
+        assert_eq!(
+            loadout.0.equipped(crate::items::Slot::Shield),
+            Some(ItemId::ScutDeLemn)
+        );
+        let owned = app.world().resource::<OwnedItems>();
+        assert!(owned.0.contains(&ItemId::BataCiobaneasca));
+        assert!(owned.0.contains(&ItemId::ScutDeLemn));
         assert_eq!(
             *app.world().resource::<State<GameState>>().get(),
             GameState::Fight
         );
-        assert_eq!(
-            *draft(&app),
-            CharacterDraft::default(),
-            "draft resets after confirm so a later visit starts fresh"
-        );
-        let leftovers = app
-            .world_mut()
-            .query_filtered::<(), With<CreationScreen>>()
-            .iter(app.world())
-            .count();
-        assert_eq!(leftovers, 0, "screen despawned on exit");
+        assert_eq!(*draft(&app), CharacterDraft::default());
     }
 
     #[test]
-    fn back_returns_to_main_menu_and_resets_the_draft() {
-        let mut app = test_app();
-        press(&mut app, CreationAction::NextName);
-        press(&mut app, CreationAction::Increase(AttributeKind::Noroc));
-        press(&mut app, CreationAction::Back);
-        app.update(); // transition applies
-
-        assert_eq!(
-            *app.world().resource::<State<GameState>>().get(),
-            GameState::MainMenu
-        );
-        assert_eq!(
-            *draft(&app),
-            CharacterDraft::default(),
-            "re-entering shows a fresh draft"
-        );
-    }
-
-    #[test]
-    fn name_arrows_cycle_and_update_the_label() {
-        let mut app = test_app();
-        assert_eq!(label_text(&mut app, CreationLabel::Name), FOLK_NAMES[0]);
-        press(&mut app, CreationAction::NextName);
-        assert_eq!(draft(&app).name(), FOLK_NAMES[1]);
-        assert_eq!(label_text(&mut app, CreationLabel::Name), FOLK_NAMES[1]);
-        press(&mut app, CreationAction::PreviousName);
-        press(&mut app, CreationAction::PreviousName);
-        assert_eq!(
-            label_text(&mut app, CreationLabel::Name),
-            FOLK_NAMES[FOLK_NAMES.len() - 1],
-            "wraps backwards"
-        );
-    }
-
-    #[test]
-    fn preview_and_points_labels_track_every_click() {
+    fn preview_and_labels_track_clicks() {
         let mut app = test_app();
         assert_eq!(
             label_text(&mut app, CreationLabel::Preview),
@@ -627,21 +832,19 @@ mod tests {
         );
         assert_eq!(
             label_text(&mut app, CreationLabel::Preview),
-            "HP: 70 | Stamina: 40 | Damage: 3",
-            "preview matches stats.rs formulas on the click frame"
+            "HP: 70 | Stamina: 40 | Damage: 3"
         );
         assert_eq!(
             label_text(&mut app, CreationLabel::Points),
             "Puncte rămase: 9"
         );
-        assert_eq!(
-            label_text(&mut app, CreationLabel::Value(AttributeKind::Vitalitate)),
-            "2"
+        press(
+            &mut app,
+            CreationAction::NextAppearance(AppearanceField::Accent),
         );
-        press(&mut app, CreationAction::Increase(AttributeKind::Putere));
         assert_eq!(
-            label_text(&mut app, CreationLabel::Preview),
-            "HP: 70 | Stamina: 40 | Damage: 4"
+            label_text(&mut app, CreationLabel::Appearance(AppearanceField::Accent)),
+            "Verde"
         );
     }
 }

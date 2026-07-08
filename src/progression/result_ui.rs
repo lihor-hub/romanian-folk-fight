@@ -443,6 +443,7 @@ mod tests {
         app.insert_resource(PlayerCharacter {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
+            appearance: crate::character::PlayerAppearance::default(),
         });
         app.update();
         app
@@ -523,6 +524,7 @@ mod tests {
         PlayerCharacter {
             name: "Făt-Frumos".to_string(),
             attributes: Attributes::default(),
+            appearance: crate::character::PlayerAppearance::default(),
         }
     }
 

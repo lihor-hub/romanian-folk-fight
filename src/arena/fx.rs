@@ -529,6 +529,7 @@ mod tests {
                 vitalitate: 4,
                 noroc: 3,
             },
+            appearance: crate::character::PlayerAppearance::default(),
         });
         app.insert_resource(progress);
         // Let `advance` jump the clock past the default 250 ms delta cap.

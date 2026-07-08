@@ -13,7 +13,7 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::character::Attributes;
+use crate::character::{Attributes, PlayerAppearance};
 use crate::core::GameState;
 use crate::creation::PlayerCharacter;
 use crate::items::{Equipment, ItemId, Slot};
@@ -22,7 +22,7 @@ use crate::roster::LadderProgress;
 use crate::shop::{OwnedItems, PlayerEquipment};
 
 /// The version written into every save; loads of any other version are
-/// discarded (no migration — a mismatched save simply doesn't resume).
+/// discarded. Additive fields can still default safely inside a version.
 pub const SAVE_VERSION: u32 = 1;
 
 /// The `localStorage` key of the wasm backend.
@@ -86,6 +86,10 @@ pub struct SaveGame {
     pub name: String,
     /// [`PlayerCharacter::attributes`].
     pub attrs: SavedAttributes,
+    /// [`PlayerCharacter::appearance`]. Missing on older v1 saves, where it
+    /// defaults to the current project baseline.
+    #[serde(default)]
+    pub appearance: PlayerAppearance,
     /// [`Level::level`].
     pub level: u32,
     /// [`Level::xp`].
@@ -126,6 +130,7 @@ impl SaveGame {
             version: SAVE_VERSION,
             name: player.name.clone(),
             attrs: player.attributes.into(),
+            appearance: player.appearance,
             level: level.level,
             xp: level.xp,
             unspent_points: level.unspent_points,
@@ -173,6 +178,7 @@ impl SaveGame {
         PlayerCharacter {
             name: self.name.clone(),
             attributes: self.attrs.into(),
+            appearance: self.appearance,
         }
     }
 
@@ -517,6 +523,12 @@ mod tests {
                 vitalitate: 7,
                 noroc: 2,
             },
+            appearance: PlayerAppearance {
+                skin_tone: crate::character::SkinTone::Olive,
+                build: crate::character::BodyBuild::Sturdy,
+                hair: crate::character::HairStyle::Tied,
+                accent: crate::character::AccentColor::Gold,
+            },
         };
         let level = Level {
             level: 4,
@@ -560,6 +572,15 @@ mod tests {
                 agilitate: 3,
                 vitalitate: 7,
                 noroc: 2,
+            }
+        );
+        assert_eq!(
+            save.appearance,
+            PlayerAppearance {
+                skin_tone: crate::character::SkinTone::Olive,
+                build: crate::character::BodyBuild::Sturdy,
+                hair: crate::character::HairStyle::Tied,
+                accent: crate::character::AccentColor::Gold,
             }
         );
         assert_eq!(save.level, 4);
@@ -626,6 +647,17 @@ mod tests {
         save.version = SAVE_VERSION + 1;
         let json = save.to_json().expect("plain data serializes");
         assert!(SaveGame::from_json(&json).is_none());
+    }
+
+    #[test]
+    fn a_v1_save_without_appearance_defaults_cleanly() {
+        let json = r#"{"version":1,"name":"Făt-Frumos","attrs":{"putere":5,"agilitate":3,"vitalitate":7,"noroc":2},"level":4,"xp":120,"unspent_points":3,"wallet":365,"owned_items":["BataCiobaneasca","Palos","ScutDeLemn"],"equipped":["Palos","ScutDeLemn"],"ladder_progress":12,"lap":2}"#;
+        let save = SaveGame::from_json(json).expect("old v1 save still loads");
+        assert_eq!(save.appearance, PlayerAppearance::default());
+        assert_eq!(
+            save.player_character().appearance,
+            PlayerAppearance::default()
+        );
     }
 
     #[test]
@@ -696,6 +728,12 @@ mod tests {
                 agilitate: 2,
                 vitalitate: 4,
                 noroc: 3,
+            },
+            appearance: PlayerAppearance {
+                skin_tone: crate::character::SkinTone::Deep,
+                build: crate::character::BodyBuild::Balanced,
+                hair: crate::character::HairStyle::Braided,
+                accent: crate::character::AccentColor::Storm,
             },
         });
         app.update();
