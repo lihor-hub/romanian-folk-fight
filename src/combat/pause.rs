@@ -9,7 +9,7 @@
 
 use bevy::prelude::*;
 
-use crate::core::{GameState, despawn_screen};
+use crate::core::{GameState, UiFont, despawn_screen};
 use crate::menu::{BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, DisabledButton};
 use crate::settings::SettingsOpen;
 
@@ -144,7 +144,7 @@ fn update_button_backgrounds(
 }
 
 /// Spawns the semi-transparent scrim and the pause panel.
-fn spawn_overlay(mut commands: Commands) {
+fn spawn_overlay(mut commands: Commands, ui_font: Res<UiFont>) {
     commands.spawn((
         PauseOverlay,
         Node {
@@ -170,27 +170,30 @@ fn spawn_overlay(mut commands: Commands) {
             children![
                 (
                     Text::new("Pauză"),
-                    TextFont {
-                        font_size: FontSize::Px(34.0),
-                        ..default()
-                    },
+                    ui_font.text_font(34.0),
                     TextColor(CREAM),
                 ),
-                overlay_button("Continuă lupta", PauseAction::Resume),
-                overlay_button("Setări", PauseAction::Settings),
-                overlay_button("Abandonează", PauseAction::Abandon),
+                overlay_button("Continuă lupta", PauseAction::Resume, &ui_font),
+                overlay_button("Setări", PauseAction::Settings, &ui_font),
+                overlay_button("Abandonează", PauseAction::Abandon, &ui_font),
             ],
         )],
     ));
 }
 
 /// One wide, enabled overlay button in the main-menu style.
-fn overlay_button(label: &str, action: PauseAction) -> impl Bundle {
-    button_parts(label, action, BUTTON_NORMAL, CREAM)
+fn overlay_button(label: &str, action: PauseAction, ui_font: &UiFont) -> impl Bundle {
+    button_parts(label, action, BUTTON_NORMAL, CREAM, ui_font)
 }
 
 /// The shared shape of an overlay button: wide, centered label.
-fn button_parts(label: &str, action: PauseAction, background: Color, text: Color) -> impl Bundle {
+fn button_parts(
+    label: &str,
+    action: PauseAction,
+    background: Color,
+    text: Color,
+    ui_font: &UiFont,
+) -> impl Bundle {
     (
         Button,
         action,
@@ -202,14 +205,7 @@ fn button_parts(label: &str, action: PauseAction, background: Color, text: Color
             ..default()
         },
         BackgroundColor(background),
-        children![(
-            Text::new(label),
-            TextFont {
-                font_size: FontSize::Px(24.0),
-                ..default()
-            },
-            TextColor(text),
-        )],
+        children![(Text::new(label), ui_font.text_font(24.0), TextColor(text),)],
     )
 }
 

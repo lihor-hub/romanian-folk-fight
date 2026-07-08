@@ -10,7 +10,7 @@ use bevy::prelude::*;
 
 use crate::character::{EnemyFighter, PlayerFighter};
 use crate::combat::{CombatAction, CombatEvent, CombatLogEvent, CombatSide};
-use crate::core::GameState;
+use crate::core::{GameState, UiFont};
 use crate::menu::CREAM;
 use crate::roster::LadderProgress;
 
@@ -173,17 +173,21 @@ pub struct DamageText {
 /// Spawn height of a damage number above the defender's center.
 const DAMAGE_TEXT_OFFSET_Y: f32 = FIGHTER_SIZE.y / 2.0 + 10.0;
 
-fn spawn_damage_text(commands: &mut Commands, at: Vec3, text: String, size: f32, color: Color) {
+fn spawn_damage_text(
+    commands: &mut Commands,
+    at: Vec3,
+    text: String,
+    size: f32,
+    color: Color,
+    ui_font: &UiFont,
+) {
     commands.spawn((
         ArenaScreen,
         DamageText {
             timer: Timer::from_seconds(DAMAGE_TEXT_LIFETIME, TimerMode::Once),
         },
         Text2d::new(text),
-        TextFont {
-            font_size: FontSize::Px(size),
-            ..default()
-        },
+        ui_font.text_font(size),
         TextColor(color),
         Transform::from_translation(Vec3::new(at.x, at.y + DAMAGE_TEXT_OFFSET_Y, 6.0)),
     ));
@@ -364,6 +368,7 @@ fn spawn_combat_fx(
     players: Query<&Transform, (With<PlayerFighter>, Without<Camera2d>)>,
     enemies: Query<&Transform, (With<EnemyFighter>, Without<Camera2d>)>,
     cameras: Query<&Transform, With<Camera2d>>,
+    ui_font: Res<UiFont>,
 ) {
     for CombatLogEvent {
         actor,
@@ -384,7 +389,14 @@ fn spawn_combat_fx(
             .unwrap_or(Vec3::ZERO);
         match event {
             CombatEvent::Hit { dmg } => {
-                spawn_damage_text(&mut commands, at, dmg.to_string(), DAMAGE_FONT_SIZE, CREAM);
+                spawn_damage_text(
+                    &mut commands,
+                    at,
+                    dmg.to_string(),
+                    DAMAGE_FONT_SIZE,
+                    CREAM,
+                    &ui_font,
+                );
                 spawn_particles(&mut commands, at, HIT_PARTICLE_COUNT, CREAM);
                 if action == CombatAction::HeavyStrike {
                     shake.trigger(shake_amplitude(dmg), camera_rest);
@@ -397,6 +409,7 @@ fn spawn_combat_fx(
                     dmg.to_string(),
                     CRIT_FONT_SIZE,
                     CRIT_GOLD,
+                    &ui_font,
                 );
                 spawn_particles(&mut commands, at, CRIT_PARTICLE_COUNT, CRIT_GOLD);
                 shake.trigger(shake_amplitude(dmg), camera_rest);
@@ -408,6 +421,7 @@ fn spawn_combat_fx(
                     dmg.to_string(),
                     DAMAGE_FONT_SIZE,
                     BLOCKED_GRAY,
+                    &ui_font,
                 );
             }
             CombatEvent::Missed => {
@@ -417,6 +431,7 @@ fn spawn_combat_fx(
                     MISS_TEXT.to_string(),
                     DAMAGE_FONT_SIZE,
                     CREAM,
+                    &ui_font,
                 );
             }
             _ => {}

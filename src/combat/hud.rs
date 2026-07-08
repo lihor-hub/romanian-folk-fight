@@ -12,6 +12,7 @@ use std::collections::VecDeque;
 use bevy::prelude::*;
 
 use crate::character::{EnemyFighter, FighterName, Health, PlayerFighter, Stamina};
+use crate::core::UiFont;
 use crate::menu::{
     BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, DisabledButton,
     TEXT_DISABLED,
@@ -155,7 +156,7 @@ pub fn log_line(actor: &str, opponent: &str, event: CombatEvent) -> String {
 }
 
 /// Spawns the HUD overlay and a fresh [`CombatLog`] on entering the fight.
-pub(super) fn spawn_hud(mut commands: Commands) {
+pub(super) fn spawn_hud(mut commands: Commands, ui_font: Res<UiFont>) {
     commands.insert_resource(CombatLog::default());
     commands.spawn((
         HudScreen,
@@ -166,18 +167,18 @@ pub(super) fn spawn_hud(mut commands: Commands) {
             ..default()
         },
         children![
-            fighter_panel(CombatSide::Player),
-            fighter_panel(CombatSide::Enemy),
-            pause_button(),
-            log_panel(),
-            action_bar(),
+            fighter_panel(CombatSide::Player, &ui_font),
+            fighter_panel(CombatSide::Enemy, &ui_font),
+            pause_button(&ui_font),
+            log_panel(&ui_font),
+            action_bar(&ui_font),
         ],
     ));
 }
 
 /// The small, touch-friendly ⏸ button top-center of the HUD; clicking it
 /// opens the pause overlay (see [`super::pause`]).
-fn pause_button() -> impl Bundle {
+fn pause_button(ui_font: &UiFont) -> impl Bundle {
     (
         Button,
         super::pause::PauseButton,
@@ -195,11 +196,9 @@ fn pause_button() -> impl Bundle {
         },
         BackgroundColor(BUTTON_NORMAL),
         children![(
-            Text::new("⏸"),
-            TextFont {
-                font_size: FontSize::Px(24.0),
-                ..default()
-            },
+            // "||" instead of "⏸": U+23F8 has no glyph in the bundled font.
+            Text::new("||"),
+            ui_font.text_font(24.0),
             TextColor(CREAM),
         )],
     )
@@ -212,7 +211,7 @@ pub(super) fn teardown_hud(mut commands: Commands) {
 }
 
 /// One fighter's status panel in a top corner: name, HP bar, stamina bar.
-fn fighter_panel(side: CombatSide) -> impl Bundle {
+fn fighter_panel(side: CombatSide, ui_font: &UiFont) -> impl Bundle {
     let mut node = Node {
         position_type: PositionType::Absolute,
         top: Val::Px(12.0),
@@ -232,21 +231,18 @@ fn fighter_panel(side: CombatSide) -> impl Bundle {
         children![
             (
                 Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(20.0),
-                    ..default()
-                },
+                ui_font.text_font(20.0),
                 TextColor(CREAM),
                 HudLabel::Name(side),
             ),
-            bar(side, Pool::Health, HP_FILL),
-            bar(side, Pool::Stamina, STAMINA_FILL),
+            bar(side, Pool::Health, HP_FILL, ui_font),
+            bar(side, Pool::Stamina, STAMINA_FILL, ui_font),
         ],
     )
 }
 
 /// One bar row: a dark track with a colored fill, and a `current/max` label.
-fn bar(side: CombatSide, pool: Pool, fill_color: Color) -> impl Bundle {
+fn bar(side: CombatSide, pool: Pool, fill_color: Color, ui_font: &UiFont) -> impl Bundle {
     (
         Node {
             width: Val::Percent(100.0),
@@ -275,10 +271,7 @@ fn bar(side: CombatSide, pool: Pool, fill_color: Color) -> impl Bundle {
             ),
             (
                 Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
+                ui_font.text_font(14.0),
                 TextColor(CREAM),
                 HudLabel::Pool { side, pool },
             ),
@@ -287,7 +280,7 @@ fn bar(side: CombatSide, pool: Pool, fill_color: Color) -> impl Bundle {
 }
 
 /// The right-side combat-log panel with a single multi-line text node.
-fn log_panel() -> impl Bundle {
+fn log_panel(ui_font: &UiFont) -> impl Bundle {
     (
         Node {
             position_type: PositionType::Absolute,
@@ -300,10 +293,7 @@ fn log_panel() -> impl Bundle {
         BackgroundColor(PANEL_BACKGROUND),
         children![(
             Text::new(""),
-            TextFont {
-                font_size: FontSize::Px(15.0),
-                ..default()
-            },
+            ui_font.text_font(15.0),
             TextColor(CREAM),
             LogText,
         )],
@@ -311,7 +301,7 @@ fn log_panel() -> impl Bundle {
 }
 
 /// The bottom action bar with the four combat buttons.
-fn action_bar() -> impl Bundle {
+fn action_bar(ui_font: &UiFont) -> impl Bundle {
     (
         Node {
             position_type: PositionType::Absolute,
@@ -324,16 +314,16 @@ fn action_bar() -> impl Bundle {
             ..default()
         },
         children![
-            action_button(CombatAction::QuickStrike),
-            action_button(CombatAction::HeavyStrike),
-            action_button(CombatAction::Block),
-            action_button(CombatAction::Rest),
+            action_button(CombatAction::QuickStrike, ui_font),
+            action_button(CombatAction::HeavyStrike, ui_font),
+            action_button(CombatAction::Block, ui_font),
+            action_button(CombatAction::Rest, ui_font),
         ],
     )
 }
 
 /// One action button: the Romanian label over its stamina cost.
-fn action_button(action: CombatAction) -> impl Bundle {
+fn action_button(action: CombatAction, ui_font: &UiFont) -> impl Bundle {
     (
         Button,
         ActionButton(action),
@@ -350,18 +340,12 @@ fn action_button(action: CombatAction) -> impl Bundle {
         children![
             (
                 Text::new(action_label(action)),
-                TextFont {
-                    font_size: FontSize::Px(20.0),
-                    ..default()
-                },
+                ui_font.text_font(20.0),
                 TextColor(CREAM),
             ),
             (
                 Text::new(cost_label(action)),
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
+                ui_font.text_font(14.0),
                 TextColor(CREAM),
             ),
         ],

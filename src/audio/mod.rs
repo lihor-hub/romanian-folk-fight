@@ -20,7 +20,7 @@ use bevy::audio::{PlaybackMode, Volume};
 use bevy::prelude::*;
 
 use crate::combat::{CombatEvent, CombatLogEvent};
-use crate::core::{GameState, despawn_screen};
+use crate::core::{GameState, UiFont, despawn_screen};
 use crate::menu::{BUTTON_NORMAL, CREAM};
 use crate::roster::LadderProgress;
 use crate::shop::OwnedItems;
@@ -402,7 +402,11 @@ fn speaker_label(muted: bool) -> &'static str {
 }
 
 /// Small speaker toggle pinned to the menu's top-right corner.
-fn spawn_speaker_toggle(mut commands: Commands, settings: Res<AudioSettings>) {
+fn spawn_speaker_toggle(
+    mut commands: Commands,
+    settings: Res<AudioSettings>,
+    ui_font: Res<UiFont>,
+) {
     commands
         .spawn((
             SpeakerToggle,
@@ -420,7 +424,7 @@ fn spawn_speaker_toggle(mut commands: Commands, settings: Res<AudioSettings>) {
             parent.spawn((
                 SpeakerToggleLabel,
                 Text::new(speaker_label(settings.muted)),
-                TextFont::from_font_size(16.0),
+                ui_font.text_font(16.0),
                 TextColor(CREAM),
             ));
         });

@@ -7,7 +7,7 @@ use bevy::prelude::*;
 
 use crate::character::{AttributeKind, Health, PlayerFighter, Stamina, stats};
 use crate::combat::hud::bar_percent;
-use crate::core::GameState;
+use crate::core::{GameState, UiFont};
 use crate::creation::PlayerCharacter;
 use crate::menu::{BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK};
 use crate::save::SaveRequested;
@@ -89,6 +89,7 @@ pub(super) fn spawn_result_screen(
     wallet: Res<Wallet>,
     level: Res<Level>,
     player: Option<Res<PlayerCharacter>>,
+    ui_font: Res<UiFont>,
 ) {
     let (reward, xp) = match outcome {
         Some(outcome) => (outcome.reward, outcome.xp),
@@ -105,22 +106,34 @@ pub(super) fn spawn_result_screen(
     commands
         .spawn((screen_root(), ResultScreen))
         .with_children(|parent| {
-            parent.spawn(screen_title("Victorie!"));
-            parent.spawn(screen_line(format!("Recompensă: {reward} galbeni")));
-            parent.spawn(screen_line(format!("Experiență: {xp} XP")));
-            parent.spawn(screen_line(format!("Pungă: {} galbeni", wallet.0)));
-            parent.spawn(screen_line(format!(
-                "Nivel {} — XP: {}/{}",
-                level.level,
-                level.xp,
-                xp_to_next(level.level)
-            )));
+            parent.spawn(screen_title("Victorie!", &ui_font));
+            parent.spawn(screen_line(
+                format!("Recompensă: {reward} galbeni"),
+                &ui_font,
+            ));
+            parent.spawn(screen_line(format!("Experiență: {xp} XP"), &ui_font));
+            parent.spawn(screen_line(
+                format!("Pungă: {} galbeni", wallet.0),
+                &ui_font,
+            ));
+            parent.spawn(screen_line(
+                format!(
+                    "Nivel {} — XP: {}/{}",
+                    level.level,
+                    level.xp,
+                    xp_to_next(level.level)
+                ),
+                &ui_font,
+            ));
             parent.spawn(xp_bar(&level));
             if let Some(draft) = &draft {
-                spawn_allocation_panel(parent, draft);
+                spawn_allocation_panel(parent, draft, &ui_font);
             }
-            parent.spawn((wide_button("La prăvălie"), ResultAction::GoToShop));
-            parent.spawn((wide_button("Lupta următoare"), ResultAction::NextFight));
+            parent.spawn((wide_button("La prăvălie", &ui_font), ResultAction::GoToShop));
+            parent.spawn((
+                wide_button("Lupta următoare", &ui_font),
+                ResultAction::NextFight,
+            ));
         });
     if let Some(draft) = draft {
         commands.insert_resource(draft);
@@ -157,7 +170,11 @@ fn points_text(draft: &LevelUpDraft) -> String {
 /// Spawns the level-up allocation panel: the points-remaining line, one
 /// shared attribute row per attribute (the same widget as the creation
 /// screen), and the confirm button.
-fn spawn_allocation_panel(parent: &mut ChildSpawnerCommands, draft: &LevelUpDraft) {
+fn spawn_allocation_panel(
+    parent: &mut ChildSpawnerCommands,
+    draft: &LevelUpDraft,
+    ui_font: &UiFont,
+) {
     parent
         .spawn((
             AllocationPanel,
@@ -172,10 +189,7 @@ fn spawn_allocation_panel(parent: &mut ChildSpawnerCommands, draft: &LevelUpDraf
         .with_children(|panel| {
             panel.spawn((
                 Text::new(points_text(draft)),
-                TextFont {
-                    font_size: FontSize::Px(24.0),
-                    ..default()
-                },
+                ui_font.text_font(24.0),
                 TextColor(CREAM),
                 AllocationLabel::Points,
             ));
@@ -187,21 +201,32 @@ fn spawn_allocation_panel(parent: &mut ChildSpawnerCommands, draft: &LevelUpDraf
                     AllocateAction::Decrease(kind),
                     AllocateAction::Increase(kind),
                     AllocationLabel::Value(kind),
+                    ui_font,
                 );
             }
-            panel.spawn((wide_button("Confirmă"), AllocateAction::Confirm));
+            panel.spawn((wide_button("Confirmă", ui_font), AllocateAction::Confirm));
         });
 }
 
 /// Spawns the game-over screen: epitaph, the run's galbeni total, and the
 /// back-to-menu button.
-pub(super) fn spawn_game_over_screen(mut commands: Commands, wallet: Res<Wallet>) {
+pub(super) fn spawn_game_over_screen(
+    mut commands: Commands,
+    wallet: Res<Wallet>,
+    ui_font: Res<UiFont>,
+) {
     commands
         .spawn((screen_root(), GameOverScreen))
         .with_children(|parent| {
-            parent.spawn(screen_title("Ai fost răpus…"));
-            parent.spawn(screen_line(format!("Galbeni strânși: {}", wallet.0)));
-            parent.spawn((wide_button("Înapoi la menu"), GameOverAction::BackToMenu));
+            parent.spawn(screen_title("Ai fost răpus…", &ui_font));
+            parent.spawn(screen_line(
+                format!("Galbeni strânși: {}", wallet.0),
+                &ui_font,
+            ));
+            parent.spawn((
+                wide_button("Înapoi la menu", &ui_font),
+                GameOverAction::BackToMenu,
+            ));
         });
 }
 
@@ -222,13 +247,10 @@ fn screen_root() -> impl Bundle {
 }
 
 /// Large screen title with the same styling as the main-menu title.
-fn screen_title(label: &str) -> impl Bundle {
+fn screen_title(label: &str, ui_font: &UiFont) -> impl Bundle {
     (
         Text::new(label),
-        TextFont {
-            font_size: FontSize::Px(56.0),
-            ..default()
-        },
+        ui_font.text_font_bold(56.0),
         TextColor(CREAM),
         Node {
             margin: UiRect::bottom(Val::Px(32.0)),
@@ -238,15 +260,8 @@ fn screen_title(label: &str) -> impl Bundle {
 }
 
 /// One line of the breakdown text.
-fn screen_line(label: String) -> impl Bundle {
-    (
-        Text::new(label),
-        TextFont {
-            font_size: FontSize::Px(24.0),
-            ..default()
-        },
-        TextColor(CREAM),
-    )
+fn screen_line(label: String, ui_font: &UiFont) -> impl Bundle {
+    (Text::new(label), ui_font.text_font(24.0), TextColor(CREAM))
 }
 
 /// Query filter: buttons whose interaction changed this frame.

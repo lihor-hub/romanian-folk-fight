@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::audio::AudioSettings;
+use crate::core::UiFont;
 use crate::menu::{BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK};
 use crate::save::{SaveBackend, platform_backend};
 use crate::ui_widgets::{attribute_row::spawn_stepper_row, wide_button, wide_button_labeled};
@@ -217,7 +218,7 @@ fn mute_label(muted: bool) -> &'static str {
 
 /// Spawns the settings scrim and panel above everything else (the pause
 /// overlay sits at `GlobalZIndex(10)`).
-fn spawn_overlay(mut commands: Commands, audio: Res<AudioSettings>) {
+fn spawn_overlay(mut commands: Commands, audio: Res<AudioSettings>, ui_font: Res<UiFont>) {
     commands
         .spawn((
             SettingsOverlay,
@@ -247,10 +248,7 @@ fn spawn_overlay(mut commands: Commands, audio: Res<AudioSettings>) {
                 .with_children(|panel| {
                     panel.spawn((
                         Text::new("Setări"),
-                        TextFont {
-                            font_size: FontSize::Px(34.0),
-                            ..default()
-                        },
+                        ui_font.text_font(34.0),
                         TextColor(CREAM),
                     ));
                     spawn_stepper_row(
@@ -260,6 +258,7 @@ fn spawn_overlay(mut commands: Commands, audio: Res<AudioSettings>) {
                         SettingsAction::MusicStep(-1),
                         SettingsAction::MusicStep(1),
                         SettingsLabel::Music,
+                        &ui_font,
                     );
                     spawn_stepper_row(
                         panel,
@@ -268,12 +267,13 @@ fn spawn_overlay(mut commands: Commands, audio: Res<AudioSettings>) {
                         SettingsAction::SfxStep(-1),
                         SettingsAction::SfxStep(1),
                         SettingsLabel::Sfx,
+                        &ui_font,
                     );
                     panel.spawn((
-                        wide_button_labeled(mute_label(audio.muted), SettingsLabel::Mute),
+                        wide_button_labeled(mute_label(audio.muted), SettingsLabel::Mute, &ui_font),
                         SettingsAction::ToggleMute,
                     ));
-                    panel.spawn((wide_button("Înapoi"), SettingsAction::Back));
+                    panel.spawn((wide_button("Înapoi", &ui_font), SettingsAction::Back));
                 });
         });
 }

@@ -10,7 +10,7 @@ use crate::announcer::{
     fill_placeholders,
     lines::{LineKey, pool},
 };
-use crate::core::GameState;
+use crate::core::{GameState, UiFont};
 use crate::creation::PlayerCharacter;
 use crate::menu::{CREAM, NIGHT_BLACK};
 use crate::roster::{LADDER, LadderProgress};
@@ -56,6 +56,7 @@ pub(super) fn spawn_victory_screen(
     level: Res<Level>,
     earnings: Res<LifetimeEarnings>,
     ladder: Option<Res<LadderProgress>>,
+    ui_font: Res<UiFont>,
 ) {
     let hero = player.map_or_else(|| "Voinicul".to_string(), |player| player.name.clone());
     let fights_won = ladder.map_or(LADDER.len(), |ladder| ladder.0);
@@ -63,23 +64,36 @@ pub(super) fn spawn_victory_screen(
     commands
         .spawn((screen_root(), VictoryScreen))
         .with_children(|parent| {
-            parent.spawn(hero_name(&hero));
-            parent.spawn(screen_title("Ai învins!"));
+            parent.spawn(hero_name(&hero, &ui_font));
+            parent.spawn(screen_title("Ai învins!", &ui_font));
             parent.spawn(screen_line(
                 "Legenda ta se va cânta la șezători.".to_string(),
+                &ui_font,
             ));
-            parent.spawn(screen_line(line));
-            parent.spawn(screen_line(format!("Lupte câștigate: {fights_won}")));
-            parent.spawn(screen_line(format!("Nivel atins: {}", level.level)));
-            parent.spawn(screen_line(format!("Galbeni câștigați: {}", earnings.0)));
-            parent.spawn((wide_button("Turul 2"), VictoryAction::NextLap));
-            parent.spawn((wide_button("Înapoi la menu"), VictoryAction::BackToMenu));
-            spawn_credits(parent);
+            parent.spawn(screen_line(line, &ui_font));
+            parent.spawn(screen_line(
+                format!("Lupte câștigate: {fights_won}"),
+                &ui_font,
+            ));
+            parent.spawn(screen_line(
+                format!("Nivel atins: {}", level.level),
+                &ui_font,
+            ));
+            parent.spawn(screen_line(
+                format!("Galbeni câștigați: {}", earnings.0),
+                &ui_font,
+            ));
+            parent.spawn((wide_button("Turul 2", &ui_font), VictoryAction::NextLap));
+            parent.spawn((
+                wide_button("Înapoi la menu", &ui_font),
+                VictoryAction::BackToMenu,
+            ));
+            spawn_credits(parent, &ui_font);
         });
 }
 
 /// The short credits block: game name, tech, and the asset-credits pointer.
-fn spawn_credits(parent: &mut ChildSpawnerCommands) {
+fn spawn_credits(parent: &mut ChildSpawnerCommands, ui_font: &UiFont) {
     parent
         .spawn(Node {
             flex_direction: FlexDirection::Column,
@@ -94,7 +108,7 @@ fn spawn_credits(parent: &mut ChildSpawnerCommands) {
                 "Făurit în Rust cu motorul Bevy",
                 "Grafică: placeholder-e proprii (CC0) — vezi assets/CREDITS.md",
             ] {
-                credits.spawn(credits_line(text));
+                credits.spawn(credits_line(text, ui_font));
             }
         });
 }
@@ -116,25 +130,19 @@ fn screen_root() -> impl Bundle {
 }
 
 /// The hero's name, writ large above the title.
-fn hero_name(name: &str) -> impl Bundle {
+fn hero_name(name: &str, ui_font: &UiFont) -> impl Bundle {
     (
         Text::new(name),
-        TextFont {
-            font_size: FontSize::Px(72.0),
-            ..default()
-        },
+        ui_font.text_font_bold(72.0),
         TextColor(CREAM),
     )
 }
 
 /// The victory headline.
-fn screen_title(label: &str) -> impl Bundle {
+fn screen_title(label: &str, ui_font: &UiFont) -> impl Bundle {
     (
         Text::new(label),
-        TextFont {
-            font_size: FontSize::Px(48.0),
-            ..default()
-        },
+        ui_font.text_font_bold(48.0),
         TextColor(CREAM),
         Node {
             margin: UiRect::bottom(Val::Px(16.0)),
@@ -144,25 +152,15 @@ fn screen_title(label: &str) -> impl Bundle {
 }
 
 /// One line of the recap text.
-fn screen_line(label: String) -> impl Bundle {
-    (
-        Text::new(label),
-        TextFont {
-            font_size: FontSize::Px(24.0),
-            ..default()
-        },
-        TextColor(CREAM),
-    )
+fn screen_line(label: String, ui_font: &UiFont) -> impl Bundle {
+    (Text::new(label), ui_font.text_font(24.0), TextColor(CREAM))
 }
 
 /// One muted line of the credits block.
-fn credits_line(label: &str) -> impl Bundle {
+fn credits_line(label: &str, ui_font: &UiFont) -> impl Bundle {
     (
         Text::new(label),
-        TextFont {
-            font_size: FontSize::Px(16.0),
-            ..default()
-        },
+        ui_font.text_font(16.0),
         TextColor(CREDITS_GRAY),
     )
 }

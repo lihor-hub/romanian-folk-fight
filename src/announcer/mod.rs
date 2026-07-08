@@ -16,7 +16,7 @@ use rand::{Rng, RngExt as _};
 
 use crate::character::{EnemyFighter, FighterName, PlayerFighter};
 use crate::combat::{CombatEvent, CombatLogEvent, CombatRng, CombatSide};
-use crate::core::{GameState, despawn_screen};
+use crate::core::{GameState, UiFont, despawn_screen};
 use crate::menu::CREAM;
 use crate::roster::Boss;
 
@@ -177,7 +177,7 @@ impl Plugin for AnnouncerPlugin {
 
 /// Spawns the (hidden) banner strip and a fresh [`AnnouncerState`] on
 /// entering the fight.
-fn spawn_banner(mut commands: Commands) {
+fn spawn_banner(mut commands: Commands, ui_font: Res<UiFont>) {
     commands.insert_resource(AnnouncerState::default());
     commands.spawn((
         AnnouncerBanner,
@@ -200,10 +200,7 @@ fn spawn_banner(mut commands: Commands) {
             children![(
                 BannerText,
                 Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(22.0),
-                    ..default()
-                },
+                ui_font.text_font(22.0),
                 TextColor(CREAM),
             )],
         )],
