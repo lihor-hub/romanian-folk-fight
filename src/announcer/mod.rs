@@ -105,15 +105,15 @@ impl AnnouncerState {
 }
 
 /// The pool and number carried by one [`CombatEvent`]. The match is
-/// exhaustive on purpose: adding a combat event variant without announcer
-/// lines fails the build here.
+/// exhaustive on purpose: adding a combat event variant without choosing its
+/// announcement pool fails the build here.
 pub fn event_key(event: CombatEvent) -> (LineKey, i32) {
     match event {
-        CombatEvent::Missed => (LineKey::Missed, 0),
+        CombatEvent::Missed | CombatEvent::OutOfReach => (LineKey::Missed, 0),
         CombatEvent::Hit { dmg } => (LineKey::Hit, dmg),
         CombatEvent::Crit { dmg } => (LineKey::Crit, dmg),
         CombatEvent::Blocked { dmg } => (LineKey::Blocked, dmg),
-        CombatEvent::Guarded => (LineKey::Guarded, 0),
+        CombatEvent::Guarded | CombatEvent::Moved { .. } => (LineKey::Guarded, 0),
         CombatEvent::Rested { amount } => (LineKey::Rested, amount),
         CombatEvent::OutOfStamina => (LineKey::OutOfStamina, 0),
         CombatEvent::Defeated => (LineKey::Defeated, 0),
@@ -460,6 +460,15 @@ mod tests {
             (CombatEvent::Blocked { dmg: 3 }, LineKey::Blocked, 3),
             (CombatEvent::Guarded, LineKey::Guarded, 0),
             (CombatEvent::Rested { amount: 20 }, LineKey::Rested, 20),
+            (
+                CombatEvent::Moved {
+                    from: crate::combat::DuelDistance::FAR,
+                    to: crate::combat::DuelDistance::NEAR,
+                },
+                LineKey::Guarded,
+                0,
+            ),
+            (CombatEvent::OutOfReach, LineKey::Missed, 0),
             (CombatEvent::OutOfStamina, LineKey::OutOfStamina, 0),
             (CombatEvent::Defeated, LineKey::Defeated, 0),
         ];

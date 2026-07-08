@@ -11,7 +11,8 @@ use rand::{Rng, RngExt as _};
 use crate::character::stats;
 
 use super::engine::{
-    CombatAction, FighterState, HEAVY_DAMAGE_MULTIPLIER, HEAVY_STRIKE_COST, QUICK_STRIKE_COST, roll,
+    CombatAction, DuelDistance, FighterState, HEAVY_DAMAGE_MULTIPLIER, HEAVY_STRIKE_COST,
+    QUICK_STRIKE_COST, roll,
 };
 
 /// Per-archetype tuning knob for the enemy decision policy, attached as a
@@ -57,11 +58,30 @@ pub fn choose_action(
     profile: &AiProfile,
     rng: &mut impl Rng,
 ) -> CombatAction {
+    choose_action_at_distance(me, foe, profile, DuelDistance::starting(), rng)
+}
+
+/// Chooses an action while accounting for the duel's current spacing.
+pub fn choose_action_at_distance(
+    me: &FighterState,
+    foe: &FighterState,
+    profile: &AiProfile,
+    distance: DuelDistance,
+    rng: &mut impl Rng,
+) -> CombatAction {
     // 1. Cannot pay for any strike: recover.
     if me.stamina < QUICK_STRIKE_COST {
         return CombatAction::Rest;
     }
-    // 2. Running dry while badly hurt: mostly recover, sometimes turtle.
+    // 2. Out of reach: close the gap instead of wasting a melee strike.
+    if !distance.in_melee_reach() {
+        return if distance == DuelDistance::FAR {
+            CombatAction::LeapForward
+        } else {
+            CombatAction::StepForward
+        };
+    }
+    // 3. Running dry while badly hurt: mostly recover, sometimes turtle.
     if me.stamina < HEAVY_STRIKE_COST && 10 * me.hp < 3 * stats::max_hp(&me.attributes) {
         return if roll(rng, EXHAUSTED_REST_PERCENT) {
             CombatAction::Rest
@@ -69,7 +89,7 @@ pub fn choose_action(
             CombatAction::Block
         };
     }
-    // 3. Foe in kill range: go for the strongest strike we can pay for.
+    // 4. Foe in kill range: go for the strongest strike we can pay for.
     if foe.hp <= HEAVY_DAMAGE_MULTIPLIER * stats::base_damage(&me.attributes) {
         return if me.stamina >= HEAVY_STRIKE_COST {
             CombatAction::HeavyStrike
@@ -77,7 +97,7 @@ pub fn choose_action(
             CombatAction::QuickStrike
         };
     }
-    // 4. Weighted pick, tuned by aggression and fatigue.
+    // 5. Weighted pick, tuned by aggression and fatigue.
     let aggression = profile.aggression.clamp(0.0, 1.0);
     let heavy_weight = if me.stamina >= HEAVY_STRIKE_COST {
         aggression
@@ -206,6 +226,29 @@ mod tests {
     }
 
     #[test]
+    fn out_of_reach_enemy_advances_before_attacking() {
+        for seed in 0..20 {
+            let action = choose_action_at_distance(
+                &fighter(),
+                &fighter(),
+                &profile(1.0),
+                DuelDistance::NEAR,
+                &mut rng(seed),
+            );
+            assert_eq!(action, CombatAction::StepForward, "seed {seed}: near gap");
+
+            let action = choose_action_at_distance(
+                &fighter(),
+                &fighter(),
+                &profile(1.0),
+                DuelDistance::FAR,
+                &mut rng(seed),
+            );
+            assert_eq!(action, CombatAction::LeapForward, "seed {seed}: far gap");
+        }
+    }
+
+    #[test]
     fn never_strikes_unaffordably_nor_rests_at_full_over_1000_seeded_samples() {
         let mut rng = rng(42);
         for sample in 0..1_000 {
@@ -232,6 +275,9 @@ mod tests {
                     "sample {sample}: rested at full stamina"
                 ),
                 CombatAction::Block => {}
+                CombatAction::StepForward | CombatAction::StepBack | CombatAction::LeapForward => {
+                    panic!("sample {sample}: close-range policy chose movement")
+                }
             }
         }
     }

@@ -289,6 +289,7 @@ fn animate_combat_events(
         };
         match event {
             CombatEvent::Missed
+            | CombatEvent::OutOfReach
             | CombatEvent::Hit { .. }
             | CombatEvent::Crit { .. }
             | CombatEvent::Blocked { .. } => {
@@ -296,7 +297,7 @@ fn animate_combat_events(
                     set_clip(FighterClip::Attack, &mut clip, &mut anim, &mut sprite);
                     commands.entity(entity).insert(AttackLunge::for_side(actor));
                 }
-                if !matches!(event, CombatEvent::Missed)
+                if !matches!(event, CombatEvent::Missed | CombatEvent::OutOfReach)
                     && let Ok((_, mut clip, mut anim, mut sprite)) = defender
                     && *clip != FighterClip::Ko
                 {
@@ -308,7 +309,10 @@ fn animate_combat_events(
                     set_clip(FighterClip::Ko, &mut clip, &mut anim, &mut sprite);
                 }
             }
-            CombatEvent::Guarded | CombatEvent::Rested { .. } | CombatEvent::OutOfStamina => {}
+            CombatEvent::Guarded
+            | CombatEvent::Rested { .. }
+            | CombatEvent::Moved { .. }
+            | CombatEvent::OutOfStamina => {}
         }
     }
 }
