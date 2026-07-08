@@ -6,12 +6,14 @@
 //! numbers via `FighterState`.
 
 pub mod catalog;
+pub mod visuals;
 
 use std::collections::HashMap;
 
 use bevy::prelude::*;
 
 pub use catalog::{CATALOG, ItemId};
+pub use visuals::{ItemVisual, item_visual};
 
 /// Registers the equipment model. Items are plain data for now; shop and
 /// drop systems arrive with their own issues.

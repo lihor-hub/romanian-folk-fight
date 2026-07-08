@@ -15,7 +15,7 @@ use crate::character::{Attributes, EnemyFighter, PlayerFighter, spawn_fighter};
 use crate::combat::AiProfile;
 use crate::core::{GameState, UiFont, despawn_screen};
 use crate::creation::PlayerCharacter;
-use crate::items::Equipment;
+use crate::items::{Equipment, ItemId, Slot, item_visual};
 use crate::roster::{Boss, LadderProgress};
 use crate::theme::{BOSS_LABEL_COLOR, CREAM, GROUND_COLOR};
 use animation::{FighterClip, FighterSpriteSheets};
@@ -58,7 +58,9 @@ impl Plugin for ArenaPlugin {
             .add_systems(OnEnter(GameState::Fight), spawn_arena)
             .add_systems(
                 Update,
-                spawn_arena_when_ready.run_if(in_state(GameState::Fight)),
+                (spawn_arena_when_ready, spawn_player_gear_layers)
+                    .chain()
+                    .run_if(in_state(GameState::Fight)),
             )
             .add_systems(OnExit(GameState::Fight), despawn_screen::<ArenaScreen>);
     }
@@ -237,6 +239,64 @@ fn spawn_arena_fighter(
             ));
         });
     fighter
+}
+
+/// One visible equipment overlay attached to a fighter.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GearVisualLayer {
+    /// Catalog item shown by this layer.
+    pub item: ItemId,
+    /// Equipment slot this layer occupies.
+    pub slot: Slot,
+}
+
+/// Query alias for player fighters whose equipment changed this frame.
+type ChangedPlayerEquipment<'w, 's> =
+    Query<'w, 's, (Entity, &'static Equipment), (With<PlayerFighter>, Changed<Equipment>)>;
+
+/// Spawns player-only gear overlays from the fighter's current equipment.
+/// The shop copies [`crate::shop::PlayerEquipment`] onto the player fighter
+/// after spawn, and this system reacts to that changed [`Equipment`].
+fn spawn_player_gear_layers(
+    mut commands: Commands,
+    asset_server: Option<Res<AssetServer>>,
+    players: ChangedPlayerEquipment,
+    existing_layers: Query<(Entity, &ChildOf), With<GearVisualLayer>>,
+) {
+    for (player, equipment) in &players {
+        for (layer, child_of) in &existing_layers {
+            if child_of.parent() == player {
+                commands.entity(layer).despawn();
+            }
+        }
+
+        for slot in Slot::ALL {
+            let Some(item) = equipment.equipped(slot) else {
+                continue;
+            };
+            let Some(visual) = item_visual(item) else {
+                continue;
+            };
+            commands.entity(player).with_children(|body| {
+                body.spawn((
+                    GearVisualLayer { item, slot },
+                    gear_sprite(visual.asset_path, asset_server.as_deref()),
+                    Transform::from_xyz(0.0, 0.0, visual.z_offset),
+                ));
+            });
+        }
+    }
+}
+
+/// Runtime uses the generated transparent PNG; headless tests without an
+/// [`AssetServer`] still spawn a harmless placeholder sprite so ECS behavior
+/// remains testable.
+fn gear_sprite(asset_path: &'static str, asset_server: Option<&AssetServer>) -> Sprite {
+    if let Some(asset_server) = asset_server {
+        Sprite::from_image(asset_server.load(asset_path))
+    } else {
+        Sprite::from_color(Color::srgba(1.0, 1.0, 1.0, 0.35), FIGHTER_SIZE)
+    }
 }
 
 #[cfg(test)]
@@ -541,5 +601,101 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(arena, 0);
+    }
+
+    #[test]
+    fn equipped_player_items_spawn_visual_layers_from_the_shop_loadout() {
+        let mut loadout = Equipment::default();
+        loadout.equip(ItemId::Palos);
+        loadout.equip(ItemId::CojocGros);
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            ArenaPlugin,
+            crate::shop::ShopPlugin,
+        ));
+        app.insert_resource(player_character());
+        app.insert_resource(crate::shop::PlayerEquipment(loadout));
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Fight);
+        app.update();
+        app.update();
+
+        let player = app
+            .world_mut()
+            .query_filtered::<Entity, With<PlayerFighter>>()
+            .single(app.world())
+            .expect("player fighter exists");
+        let mut layers: Vec<(ItemId, Slot, Entity)> = app
+            .world_mut()
+            .query::<(&GearVisualLayer, &ChildOf)>()
+            .iter(app.world())
+            .filter(|(_, child_of)| child_of.parent() == player)
+            .map(|(layer, child_of)| (layer.item, layer.slot, child_of.parent()))
+            .collect();
+        layers.sort_by_key(|(id, _, _)| *id as usize);
+        assert_eq!(
+            layers,
+            vec![
+                (ItemId::Palos, Slot::Weapon, player),
+                (ItemId::CojocGros, Slot::Torso, player),
+            ]
+        );
+    }
+
+    #[test]
+    fn bare_player_spawns_no_visual_gear_layers() {
+        let mut app = test_app();
+        app.update();
+        let layers = app
+            .world_mut()
+            .query_filtered::<(), With<GearVisualLayer>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(layers, 0);
+    }
+
+    #[test]
+    fn gear_visual_layers_despawn_with_the_arena() {
+        let mut loadout = Equipment::default();
+        loadout.equip(ItemId::BataCiobaneasca);
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            ArenaPlugin,
+            crate::shop::ShopPlugin,
+        ));
+        app.insert_resource(player_character());
+        app.insert_resource(crate::shop::PlayerEquipment(loadout));
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Fight);
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<(), With<GearVisualLayer>>()
+                .iter(app.world())
+                .count(),
+            1
+        );
+
+        leave_fight(&mut app);
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<(), With<GearVisualLayer>>()
+                .iter(app.world())
+                .count(),
+            0
+        );
     }
 }

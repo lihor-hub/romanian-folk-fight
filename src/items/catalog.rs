@@ -248,4 +248,27 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn every_visual_metadata_entry_matches_its_catalog_item() {
+        for id in ItemId::ALL {
+            let visual = crate::items::visuals::item_visual(id).expect("visual metadata exists");
+            assert_eq!(visual.id, id);
+            assert_eq!(visual.slot, id.item().slot);
+        }
+    }
+
+    #[test]
+    fn every_visual_asset_exists_on_disk() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for id in ItemId::ALL {
+            let visual = crate::items::visuals::item_visual(id).expect("visual metadata exists");
+            let path = manifest.join("assets").join(visual.asset_path);
+            assert!(
+                path.is_file(),
+                "{id:?} visual asset missing at {}",
+                path.display()
+            );
+        }
+    }
 }
