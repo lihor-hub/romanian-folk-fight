@@ -69,7 +69,11 @@ full plan.
 
 ## License
 
-Not yet chosen — tracked in
-[#33](https://github.com/lihor-hub/romanian-folk-fight/issues/33). Asset
-licenses will be recorded per-file in `assets/CREDITS.md` as art and audio
-land.
+Dual-licensed under either:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+
+at your option.
+
+Assets are licensed separately per-file; see [CREDITS.md](assets/CREDITS.md) for details.
