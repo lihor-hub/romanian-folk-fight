@@ -65,3 +65,7 @@ replacement by bespoke final audio.
 | `audio/sfx_coin.ogg` | Purchase coin jingle | self-generated | CC0 1.0 |
 | `audio/sting_victory.ogg` | Victory sting | self-generated | CC0 1.0 |
 | `audio/sting_defeat.ogg` | Defeat sting | self-generated | CC0 1.0 |
+
+## Web page icons and social card (issue #32)
+
+- `web/favicon.svg`, `web/favicon-32.png`, `web/apple-touch-icon.png`, `web/og-image.png` — self-generated for this project (hand-written SVG shield/embroidery mark in the game palette; PNGs rendered from the SVGs with rsvg-convert). No third-party assets. License: same as the project.
