@@ -12,7 +12,7 @@ use bevy::prelude::*;
 pub use draft::{AttributeKind, CharacterDraft, FOLK_NAMES, FREE_POINTS, HeroChoice, HeroPreset};
 
 use crate::character::{Attributes, PlayerAppearance, stats};
-use crate::core::{GameState, UiFont, despawn_screen};
+use crate::core::{GameState, UiFont, ViewportInfo, despawn_screen};
 use crate::cutout::{CutoutRig, human_template_for, spawn_cutout_rig_with_gear};
 use crate::items::Equipment;
 use crate::menu::DisabledButton;
@@ -26,7 +26,6 @@ use crate::ui_widgets::{
     attribute_row::spawn_attribute_row, button_bundle, scroll_with_wheel_and_touch, small_button,
 };
 
-#[cfg(test)]
 const CREATION_TARGET_WIDTH: f32 = 800.0;
 const CREATION_ROOT_PADDING: f32 = 14.0;
 const CREATION_BODY_WIDTH: f32 = 760.0;
@@ -148,6 +147,12 @@ impl Plugin for CreationPlugin {
                     .run_if(in_state(GameState::CharacterCreation)),
             )
             .add_systems(
+                PostUpdate,
+                update_preview_transform
+                    .run_if(resource_changed::<ViewportInfo>)
+                    .run_if(in_state(GameState::CharacterCreation)),
+            )
+            .add_systems(
                 OnExit(GameState::CharacterCreation),
                 despawn_screen::<CreationScreen>,
             );
@@ -178,8 +183,11 @@ fn spawn_creation_screen(
                 align_items: AlignItems::Center,
                 row_gap: Val::Px(8.0),
                 padding: UiRect::all(Val::Px(CREATION_ROOT_PADDING)),
+                overflow: Overflow::scroll_y(),
                 ..default()
             },
+            ScrollPosition::default(),
+            crate::ui_widgets::Scrollable,
         ))
         .with_children(|parent| {
             parent.spawn((
@@ -215,7 +223,7 @@ fn spawn_creation_screen(
         .spawn((
             CreationScreen,
             CreationPreview,
-            creation_preview_transform(),
+            creation_preview_transform_for_width(CREATION_TARGET_WIDTH),
         ))
         .id();
     let equipment = equipment_from_items(draft.starter_items());
@@ -548,9 +556,20 @@ fn creation_preview_stage_center_x() -> f32 {
     -CREATION_BODY_WIDTH / 2.0 + CREATION_PREVIEW_STAGE_WIDTH / 2.0
 }
 
-fn creation_preview_transform() -> Transform {
+fn creation_preview_x_for_width(viewport_width: f32) -> f32 {
+    let usable_width = viewport_width - CREATION_ROOT_PADDING * 2.0;
+    let desktop_width =
+        CREATION_PREVIEW_STAGE_WIDTH + CREATION_BODY_GAP + CREATION_CONTROL_DECK_WIDTH;
+    if usable_width >= desktop_width {
+        creation_preview_stage_center_x()
+    } else {
+        0.0
+    }
+}
+
+fn creation_preview_transform_for_width(viewport_width: f32) -> Transform {
     Transform::from_xyz(
-        creation_preview_stage_center_x(),
+        creation_preview_x_for_width(viewport_width),
         CREATION_PREVIEW_Y,
         PREVIEW_Z,
     )
@@ -568,6 +587,15 @@ fn creation_preview_allocation_fits_width(viewport_width: f32) -> bool {
         && CREATION_BODY_WIDTH <= CREATION_TARGET_WIDTH - CREATION_ROOT_PADDING * 2.0
         && preview_width <= usable_width
         && control_width <= usable_width
+}
+
+fn update_preview_transform(
+    viewport: Res<ViewportInfo>,
+    mut previews: Query<&mut Transform, With<CreationPreview>>,
+) {
+    for mut transform in &mut previews {
+        transform.translation.x = creation_preview_x_for_width(viewport.width);
+    }
 }
 
 fn appearance_text(draft: &CharacterDraft, field: AppearanceField) -> String {
@@ -898,10 +926,15 @@ mod tests {
             .query_filtered::<&Transform, With<CreationPreview>>()
             .single(app.world())
             .expect("creation preview transform exists");
-        let expected = creation_preview_transform();
+        let expected = creation_preview_transform_for_width(CREATION_TARGET_WIDTH);
         assert_eq!(transform.translation, expected.translation);
         assert_eq!(transform.scale, expected.scale);
         assert!((transform.translation.x - creation_preview_stage_center_x()).abs() < f32::EPSILON);
+        assert_eq!(
+            creation_preview_x_for_width(375.0),
+            0.0,
+            "wrapped creator preview stage is centered on its own row"
+        );
         assert!(transform.translation.x.abs() <= CREATION_PREVIEW_STAGE_WIDTH / 2.0);
         assert!(transform.translation.y.abs() <= CREATION_PREVIEW_FRAME_HEIGHT / 2.0);
         assert_eq!(
@@ -909,9 +942,29 @@ mod tests {
                 .query_filtered::<(), (With<CreationScreen>, With<crate::ui_widgets::Scrollable>)>()
                 .iter(app.world())
                 .count(),
-            0,
-            "preview stage cannot scroll independently from the world rig"
+            1,
+            "stacked narrow creator layout must stay vertically reachable"
         );
+    }
+
+    #[test]
+    fn creation_preview_recenters_when_viewport_wraps() {
+        let mut app = test_app();
+        app.world_mut()
+            .resource_mut::<ViewportInfo>()
+            .set_if_neq(ViewportInfo {
+                width: 375.0,
+                height: 812.0,
+                is_mobile: true,
+            });
+        app.update();
+
+        let transform = app
+            .world_mut()
+            .query_filtered::<&Transform, With<CreationPreview>>()
+            .single(app.world())
+            .expect("creation preview transform exists");
+        assert_eq!(transform.translation.x, 0.0);
     }
 
     #[test]
