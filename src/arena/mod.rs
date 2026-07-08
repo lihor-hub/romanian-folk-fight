@@ -15,10 +15,10 @@ use crate::character::{Attributes, EnemyFighter, PlayerFighter, spawn_fighter};
 use crate::combat::AiProfile;
 use crate::core::{GameState, UiFont, despawn_screen};
 use crate::creation::PlayerCharacter;
-use crate::items::{Equipment, ItemId, Slot, item_visual};
+use crate::items::{Equipment, GearMotion, ItemId, Slot, item_visual};
 use crate::roster::{Boss, LadderProgress};
 use crate::theme::{BOSS_LABEL_COLOR, CREAM, GROUND_COLOR};
-use animation::{FighterClip, FighterSpriteSheets};
+use animation::{AnimationSet, FighterClip, FighterSpriteSheets};
 use fx::{ArenaBackgrounds, background_tier, spawn_background};
 
 /// Logical resolution the scene is designed for (the window in `main.rs`).
@@ -58,8 +58,13 @@ impl Plugin for ArenaPlugin {
             .add_systems(OnEnter(GameState::Fight), spawn_arena)
             .add_systems(
                 Update,
-                (spawn_arena_when_ready, spawn_player_gear_layers)
+                (
+                    spawn_arena_when_ready,
+                    spawn_equipped_gear_layers,
+                    sync_gear_visual_layers,
+                )
                     .chain()
+                    .after(AnimationSet::Apply)
                     .run_if(in_state(GameState::Fight)),
             )
             .add_systems(OnExit(GameState::Fight), despawn_screen::<ArenaScreen>);
@@ -242,30 +247,46 @@ fn spawn_arena_fighter(
 }
 
 /// One visible equipment overlay attached to a fighter.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct GearVisualLayer {
     /// Catalog item shown by this layer.
     pub item: ItemId,
     /// Equipment slot this layer occupies.
     pub slot: Slot,
+    /// Motion profile used to follow the owning fighter's pose.
+    pub motion: GearMotion,
+    /// Stable draw order relative to the fighter body.
+    pub z_offset: f32,
 }
 
-/// Query alias for player fighters whose equipment changed this frame.
-type ChangedPlayerEquipment<'w, 's> =
-    Query<'w, 's, (Entity, &'static Equipment), (With<PlayerFighter>, Changed<Equipment>)>;
+/// Last clip/frame copied from the owning fighter into a gear visual layer.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GearAnimationState {
+    pub clip: FighterClip,
+    pub frame: usize,
+}
 
-/// Spawns player-only gear overlays from the fighter's current equipment.
+/// Query alias for fighters whose equipment changed this frame.
+type ChangedFighterEquipment<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static Equipment),
+    (With<crate::character::Fighter>, Changed<Equipment>),
+>;
+
+/// Spawns gear overlays from each fighter's current equipment.
 /// The shop copies [`crate::shop::PlayerEquipment`] onto the player fighter
-/// after spawn, and this system reacts to that changed [`Equipment`].
-fn spawn_player_gear_layers(
+/// after spawn, and roster opponents also carry [`Equipment`]. This system
+/// reacts to both.
+fn spawn_equipped_gear_layers(
     mut commands: Commands,
     asset_server: Option<Res<AssetServer>>,
-    players: ChangedPlayerEquipment,
+    fighters: ChangedFighterEquipment,
     existing_layers: Query<(Entity, &ChildOf), With<GearVisualLayer>>,
 ) {
-    for (player, equipment) in &players {
+    for (fighter, equipment) in &fighters {
         for (layer, child_of) in &existing_layers {
-            if child_of.parent() == player {
+            if child_of.parent() == fighter {
                 commands.entity(layer).despawn();
             }
         }
@@ -277,11 +298,26 @@ fn spawn_player_gear_layers(
             let Some(visual) = item_visual(item) else {
                 continue;
             };
-            commands.entity(player).with_children(|body| {
+            commands.entity(fighter).with_children(|body| {
                 body.spawn((
-                    GearVisualLayer { item, slot },
-                    gear_sprite(visual.asset_path, asset_server.as_deref()),
-                    Transform::from_xyz(0.0, 0.0, visual.z_offset),
+                    GearVisualLayer {
+                        item,
+                        slot,
+                        motion: visual.motion,
+                        z_offset: visual.z_offset,
+                    },
+                    GearAnimationState {
+                        clip: FighterClip::Idle,
+                        frame: FighterClip::Idle.animation().first,
+                    },
+                    gear_sprite(visual.fallback_asset_path(), asset_server.as_deref()),
+                    gear_local_transform(
+                        visual.motion,
+                        FighterClip::Idle,
+                        FighterClip::Idle.animation().first,
+                        visual.z_offset,
+                        false,
+                    ),
                 ));
             });
         }
@@ -296,6 +332,131 @@ fn gear_sprite(asset_path: &'static str, asset_server: Option<&AssetServer>) -> 
         Sprite::from_image(asset_server.load(asset_path))
     } else {
         Sprite::from_color(Color::srgba(1.0, 1.0, 1.0, 0.35), FIGHTER_SIZE)
+    }
+}
+
+/// Copies the owning fighter's current animation state into every gear layer
+/// and applies a small local transform so static overlay art feels attached
+/// to hands, shield arm, head, torso, or feet during each clip.
+fn sync_gear_visual_layers(
+    fighters: Query<(&FighterClip, &Sprite)>,
+    mut layers: Query<(
+        &GearVisualLayer,
+        &ChildOf,
+        &mut GearAnimationState,
+        &mut Transform,
+    )>,
+) {
+    for (layer, child_of, mut state, mut transform) in &mut layers {
+        let Ok((clip, fighter_sprite)) = fighters.get(child_of.parent()) else {
+            continue;
+        };
+        let frame = fighter_sprite
+            .texture_atlas
+            .as_ref()
+            .map(|atlas| atlas.index)
+            .unwrap_or_else(|| clip.animation().first);
+        *state = GearAnimationState { clip: *clip, frame };
+        *transform = gear_local_transform(
+            layer.motion,
+            *clip,
+            frame,
+            layer.z_offset,
+            fighter_sprite.flip_x,
+        );
+    }
+}
+
+/// Presentation offsets for static gear overlays. The image stays the same,
+/// but the attachment transform changes with clip/frame so weapons and
+/// shields read as part of the animated fighter rather than a pasted layer.
+fn gear_local_transform(
+    motion: GearMotion,
+    clip: FighterClip,
+    frame: usize,
+    z_offset: f32,
+    flip_x: bool,
+) -> Transform {
+    let first = clip.animation().first;
+    let frame_in_clip = frame.saturating_sub(first) as f32;
+    let (mut x, y, rotation) = match motion {
+        GearMotion::WeaponHand => weapon_pose(clip, frame_in_clip),
+        GearMotion::ShieldArm => shield_pose(clip, frame_in_clip),
+        GearMotion::Body => body_pose(clip, frame_in_clip),
+        GearMotion::Head => head_pose(clip, frame_in_clip),
+        GearMotion::Feet => feet_pose(clip, frame_in_clip),
+    };
+    let mut angle = rotation;
+    if flip_x {
+        x = -x;
+        angle = -angle;
+    }
+    Transform {
+        translation: Vec3::new(x, y, z_offset),
+        rotation: Quat::from_rotation_z(angle),
+        scale: Vec3::ONE,
+    }
+}
+
+fn weapon_pose(clip: FighterClip, frame: f32) -> (f32, f32, f32) {
+    match clip {
+        FighterClip::Attack => (4.0 + frame * 5.0, 1.0 - frame * 1.5, -0.12 - frame * 0.08),
+        FighterClip::Hurt => (-3.0, -1.0, 0.12),
+        FighterClip::Ko => (-7.0, -7.0, 0.42),
+        FighterClip::StepForward => (3.0 + frame * 2.0, -1.0, -0.08),
+        FighterClip::StepBack => (-3.0 - frame * 2.0, 1.0, 0.08),
+        FighterClip::Idle => (0.0, idle_bob(frame), 0.0),
+    }
+}
+
+fn shield_pose(clip: FighterClip, frame: f32) -> (f32, f32, f32) {
+    match clip {
+        FighterClip::Attack => (-2.0 + frame, 1.0, 0.04),
+        FighterClip::Hurt => (-5.0, 0.0, -0.12),
+        FighterClip::Ko => (-8.0, -5.0, -0.22),
+        FighterClip::StepForward => (1.0 + frame, 0.0, 0.03),
+        FighterClip::StepBack => (-2.0 - frame, 1.0, -0.03),
+        FighterClip::Idle => (0.0, idle_bob(frame), 0.0),
+    }
+}
+
+fn body_pose(clip: FighterClip, frame: f32) -> (f32, f32, f32) {
+    match clip {
+        FighterClip::Hurt => (-2.0, -1.0, -0.04),
+        FighterClip::Ko => (-5.0, -6.0, 0.12),
+        FighterClip::StepForward => (frame, -1.0, 0.0),
+        FighterClip::StepBack => (-frame, 1.0, 0.0),
+        _ => (0.0, idle_bob(frame), 0.0),
+    }
+}
+
+fn head_pose(clip: FighterClip, frame: f32) -> (f32, f32, f32) {
+    match clip {
+        FighterClip::Attack => (2.0 + frame, -1.0, -0.04),
+        FighterClip::Hurt => (-3.0, -2.0, 0.08),
+        FighterClip::Ko => (-6.0, -8.0, 0.18),
+        FighterClip::StepForward => (frame, 0.0, 0.0),
+        FighterClip::StepBack => (-frame, 1.0, 0.0),
+        FighterClip::Idle => (0.0, idle_bob(frame), 0.0),
+    }
+}
+
+fn feet_pose(clip: FighterClip, frame: f32) -> (f32, f32, f32) {
+    match clip {
+        FighterClip::Attack => (2.0, -1.0, 0.0),
+        FighterClip::Hurt => (-2.0, -1.0, -0.03),
+        FighterClip::Ko => (-4.0, -4.0, 0.08),
+        FighterClip::StepForward => (3.0 + frame * 2.0, -1.0, 0.0),
+        FighterClip::StepBack => (-3.0 - frame * 2.0, 1.0, 0.0),
+        FighterClip::Idle => (0.0, idle_bob(frame) * 0.5, 0.0),
+    }
+}
+
+fn idle_bob(frame: f32) -> f32 {
+    if frame.rem_euclid(2.0) < 1.0 {
+        0.0
+    } else {
+        1.0
     }
 }
 
@@ -540,6 +701,39 @@ mod tests {
     }
 
     #[test]
+    fn equipped_opponents_spawn_visual_layers_from_roster_gear() {
+        let mut app = test_app_at(LadderProgress(9));
+        app.update();
+
+        let enemy = app
+            .world_mut()
+            .query_filtered::<Entity, With<EnemyFighter>>()
+            .single(app.world())
+            .expect("enemy fighter exists");
+        let mut layers: Vec<(ItemId, Slot, GearMotion, Entity)> = app
+            .world_mut()
+            .query::<(&GearVisualLayer, &ChildOf)>()
+            .iter(app.world())
+            .filter(|(_, child_of)| child_of.parent() == enemy)
+            .map(|(layer, child_of)| (layer.item, layer.slot, layer.motion, child_of.parent()))
+            .collect();
+        layers.sort_by_key(|(id, _, _, _)| *id as usize);
+        assert_eq!(
+            layers,
+            vec![
+                (
+                    ItemId::BuzduganCuTreiPeceti,
+                    Slot::Weapon,
+                    GearMotion::WeaponHand,
+                    enemy
+                ),
+                (ItemId::CamasaDeZale, Slot::Torso, GearMotion::Body, enemy),
+            ],
+            "roster equipment is visible, not only stat-bearing"
+        );
+    }
+
+    #[test]
     fn a_second_lap_opponent_is_stronger_and_labeled_with_the_lap() {
         let mut app = test_app_at(LadderProgress(10));
         let (name, attrs, _, boss, _) = enemy_snapshot(&mut app);
@@ -646,6 +840,141 @@ mod tests {
                 (ItemId::CojocGros, Slot::Torso, player),
             ]
         );
+    }
+
+    fn player_with_loadout(loadout: Equipment) -> App {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            ArenaPlugin,
+            crate::shop::ShopPlugin,
+        ));
+        app.insert_resource(player_character());
+        app.insert_resource(crate::shop::PlayerEquipment(loadout));
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Fight);
+        app.update();
+        app.update();
+        app
+    }
+
+    fn set_player_clip(app: &mut App, clip: FighterClip, frame: usize) {
+        let world = app.world_mut();
+        let (mut current, mut animation, mut sprite) = world
+            .query_filtered::<(
+                &mut FighterClip,
+                &mut animation::SpriteAnimation,
+                &mut Sprite,
+            ), With<PlayerFighter>>()
+            .single_mut(world)
+            .expect("player fighter exists");
+        *current = clip;
+        *animation = clip.animation();
+        sprite
+            .texture_atlas
+            .as_mut()
+            .expect("fighter has a texture atlas")
+            .index = frame;
+    }
+
+    #[test]
+    fn gear_layers_receive_clip_and_frame_state_from_the_owner() {
+        let mut loadout = Equipment::default();
+        loadout.equip(ItemId::Palos);
+        let mut app = player_with_loadout(loadout);
+
+        let attack_frame = FighterClip::Attack.animation().first + 2;
+        set_player_clip(&mut app, FighterClip::Attack, attack_frame);
+        app.update();
+
+        let (state, transform) = app
+            .world_mut()
+            .query_filtered::<(&GearAnimationState, &Transform), With<GearVisualLayer>>()
+            .single(app.world())
+            .expect("one gear layer exists");
+        assert_eq!(state.clip, FighterClip::Attack);
+        assert!(
+            (FighterClip::Attack.animation().first..=FighterClip::Attack.animation().last)
+                .contains(&state.frame),
+            "gear frame stays in the attack clip"
+        );
+        assert!(
+            transform.translation.x > 0.0 || transform.rotation != Quat::IDENTITY,
+            "weapon layer moves away from its idle attachment"
+        );
+    }
+
+    #[test]
+    fn gear_layers_follow_back_to_idle_after_the_owner_clip_resets() {
+        let mut loadout = Equipment::default();
+        loadout.equip(ItemId::ScutFerecat);
+        let mut app = player_with_loadout(loadout);
+
+        set_player_clip(
+            &mut app,
+            FighterClip::Hurt,
+            FighterClip::Hurt.animation().first,
+        );
+        app.update();
+        set_player_clip(
+            &mut app,
+            FighterClip::Idle,
+            FighterClip::Idle.animation().first,
+        );
+        app.update();
+
+        let (state, transform) = app
+            .world_mut()
+            .query_filtered::<(&GearAnimationState, &Transform), With<GearVisualLayer>>()
+            .single(app.world())
+            .expect("one gear layer exists");
+        assert_eq!(
+            *state,
+            GearAnimationState {
+                clip: FighterClip::Idle,
+                frame: FighterClip::Idle.animation().first,
+            }
+        );
+        assert_eq!(
+            transform.translation.z,
+            item_visual(ItemId::ScutFerecat).expect("visual").z_offset,
+            "z ordering is preserved while animation state changes"
+        );
+    }
+
+    #[test]
+    fn mirrored_fighters_mirror_gear_attachment_motion() {
+        let player = gear_local_transform(
+            GearMotion::WeaponHand,
+            FighterClip::Attack,
+            FighterClip::Attack.animation().first + 1,
+            0.06,
+            false,
+        );
+        let enemy = gear_local_transform(
+            GearMotion::WeaponHand,
+            FighterClip::Attack,
+            FighterClip::Attack.animation().first + 1,
+            0.06,
+            true,
+        );
+        assert_eq!(player.translation.x, -enemy.translation.x);
+        assert_eq!(player.translation.y, enemy.translation.y);
+        assert_eq!(player.translation.z, enemy.translation.z);
+        assert_ne!(player.rotation, enemy.rotation);
+    }
+
+    #[test]
+    fn gear_sprite_without_an_asset_server_uses_the_static_placeholder() {
+        let visual = item_visual(ItemId::Palos).expect("visual metadata");
+        assert_eq!(visual.animated_asset_path, None);
+        assert_eq!(visual.fallback_asset_path(), visual.asset_path);
+        let sprite = gear_sprite(visual.fallback_asset_path(), None);
+        assert_eq!(sprite.custom_size, Some(FIGHTER_SIZE));
     }
 
     #[test]

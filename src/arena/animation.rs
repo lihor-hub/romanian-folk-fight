@@ -467,6 +467,11 @@ fn apply_footwork(
 /// arena plugin.
 pub(super) struct AnimationPlugin;
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum AnimationSet {
+    Apply,
+}
+
 impl Plugin for AnimationPlugin {
     fn build(&self, app: &mut App) {
         // Idempotent with CombatPlugin's registration; keeps the arena
@@ -482,6 +487,7 @@ impl Plugin for AnimationPlugin {
                 apply_footwork,
             )
                 .chain()
+                .in_set(AnimationSet::Apply)
                 .run_if(in_state(crate::core::GameState::Fight)),
         );
     }
