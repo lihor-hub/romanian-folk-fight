@@ -75,6 +75,7 @@ pub struct SpriteAnimation {
     pub fps: f32,
     /// Loop or play once.
     pub mode: AnimationMode,
+    current: usize,
     timer: Timer,
     finished: bool,
 }
@@ -87,6 +88,7 @@ impl SpriteAnimation {
             last,
             fps,
             mode,
+            current: first,
             timer: Timer::new(Duration::from_secs_f32(1.0 / fps), TimerMode::Repeating),
             finished: false,
         }
@@ -120,7 +122,19 @@ impl SpriteAnimation {
                 }
             }
         }
+        self.current = frame;
         moved.then_some(frame)
+    }
+
+    /// Current frame for cutout-root animations that do not have a root atlas
+    /// sprite to store the index.
+    pub fn current_frame(&self) -> usize {
+        self.current
+    }
+
+    /// Snaps the current frame inside this clip without ticking the timer.
+    pub fn set_current_frame(&mut self, frame: usize) {
+        self.current = frame.clamp(self.first, self.last);
     }
 
     /// Whether a [`AnimationMode::Once`] clip has completed its last frame.
@@ -318,11 +332,11 @@ fn set_clip(
     clip: FighterClip,
     slot: &mut FighterClip,
     anim: &mut SpriteAnimation,
-    sprite: &mut Sprite,
+    sprite: Option<&mut Sprite>,
 ) {
     *slot = clip;
     *anim = clip.animation();
-    if let Some(atlas) = sprite.texture_atlas.as_mut() {
+    if let Some(atlas) = sprite.and_then(|sprite| sprite.texture_atlas.as_mut()) {
         atlas.index = anim.first;
     }
 }
@@ -335,7 +349,7 @@ type SideAnimation<'w, 's, Side, Other> = Query<
         Entity,
         &'static mut FighterClip,
         &'static mut SpriteAnimation,
-        &'static mut Sprite,
+        Option<&'static mut Sprite>,
     ),
     (With<Side>, Without<Other>),
 >;
@@ -366,19 +380,29 @@ fn animate_combat_events(
             | CombatEvent::Crit { .. }
             | CombatEvent::Blocked { .. } => {
                 if let Ok((entity, mut clip, mut anim, mut sprite)) = attacker {
-                    set_clip(FighterClip::Attack, &mut clip, &mut anim, &mut sprite);
+                    set_clip(
+                        FighterClip::Attack,
+                        &mut clip,
+                        &mut anim,
+                        sprite.as_deref_mut(),
+                    );
                     commands.entity(entity).insert(AttackLunge::for_side(actor));
                 }
                 if !matches!(event, CombatEvent::Missed | CombatEvent::OutOfReach)
                     && let Ok((_, mut clip, mut anim, mut sprite)) = defender
                     && *clip != FighterClip::Ko
                 {
-                    set_clip(FighterClip::Hurt, &mut clip, &mut anim, &mut sprite);
+                    set_clip(
+                        FighterClip::Hurt,
+                        &mut clip,
+                        &mut anim,
+                        sprite.as_deref_mut(),
+                    );
                 }
             }
             CombatEvent::Defeated => {
                 if let Ok((_, mut clip, mut anim, mut sprite)) = defender {
-                    set_clip(FighterClip::Ko, &mut clip, &mut anim, &mut sprite);
+                    set_clip(FighterClip::Ko, &mut clip, &mut anim, sprite.as_deref_mut());
                 }
             }
             CombatEvent::Guarded | CombatEvent::Rested { .. } | CombatEvent::OutOfStamina => {}
@@ -393,7 +417,7 @@ fn animate_combat_events(
                 if let Ok((entity, mut current, mut anim, mut sprite)) = attacker
                     && *current != FighterClip::Ko
                 {
-                    set_clip(clip, &mut current, &mut anim, &mut sprite);
+                    set_clip(clip, &mut current, &mut anim, sprite.as_deref_mut());
                     commands
                         .entity(entity)
                         .insert(FootworkStep::for_side(actor, clip));
@@ -405,23 +429,35 @@ fn animate_combat_events(
 
 /// Ticks every [`SpriteAnimation`] and writes the advanced frame into the
 /// sprite's atlas index.
-fn advance_animations(time: Res<Time>, mut query: Query<(&mut SpriteAnimation, &mut Sprite)>) {
-    for (mut anim, mut sprite) in &mut query {
-        let Some(atlas) = sprite.texture_atlas.as_mut() else {
-            continue;
-        };
-        if let Some(frame) = anim.advance(time.delta(), atlas.index) {
-            atlas.index = frame;
+fn advance_animations(
+    time: Res<Time>,
+    mut query: Query<(&mut SpriteAnimation, Option<&mut Sprite>)>,
+) {
+    for (mut anim, sprite) in &mut query {
+        if let Some(mut sprite) = sprite
+            && let Some(atlas) = sprite.texture_atlas.as_mut()
+        {
+            if let Some(frame) = anim.advance(time.delta(), atlas.index) {
+                atlas.index = frame;
+            }
+        } else {
+            let current = anim.current_frame();
+            anim.advance(time.delta(), current);
         }
     }
 }
 
 /// Returns every finished `Once` clip to the idle loop — except KO, which
 /// stays frozen on its last frame.
-fn return_to_idle(mut query: Query<(&mut FighterClip, &mut SpriteAnimation, &mut Sprite)>) {
+fn return_to_idle(mut query: Query<(&mut FighterClip, &mut SpriteAnimation, Option<&mut Sprite>)>) {
     for (mut clip, mut anim, mut sprite) in &mut query {
         if anim.is_finished() && *clip != FighterClip::Ko {
-            set_clip(FighterClip::Idle, &mut clip, &mut anim, &mut sprite);
+            set_clip(
+                FighterClip::Idle,
+                &mut clip,
+                &mut anim,
+                sprite.as_deref_mut(),
+            );
         }
     }
 }
@@ -577,7 +613,8 @@ mod tests {
         assert!(from.x < quarter.x && quarter.x < peak.x, "smooth arc out");
     }
 
-    /// Headless app inside the fight with both fighters spawned as sprites.
+    /// Headless app inside the fight with both fighters spawned as animated
+    /// roots.
     fn test_app() -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, ArenaPlugin));
@@ -603,19 +640,16 @@ mod tests {
     }
 
     fn side_state<M: Component>(app: &mut App) -> (FighterClip, usize) {
-        let (clip, sprite) = app
+        let (clip, anim) = app
             .world_mut()
-            .query_filtered::<(&FighterClip, &Sprite), With<M>>()
+            .query_filtered::<(&FighterClip, &SpriteAnimation), With<M>>()
             .single(app.world())
             .expect("fighter exists");
-        (
-            *clip,
-            sprite.texture_atlas.as_ref().expect("stub atlas").index,
-        )
+        (*clip, anim.current_frame())
     }
 
     #[test]
-    fn fighters_spawn_on_the_idle_clip_with_a_stub_atlas() {
+    fn fighters_spawn_on_the_idle_clip() {
         let mut app = test_app();
         assert_eq!(side_state::<PlayerFighter>(&mut app).0, FighterClip::Idle);
         assert_eq!(side_state::<EnemyFighter>(&mut app), (FighterClip::Idle, 0));
@@ -703,17 +737,15 @@ mod tests {
         assert_eq!(side_state::<EnemyFighter>(&mut app).0, FighterClip::Ko);
     }
 
-    /// Drives the marked fighter's animation to completion (and its sprite
-    /// index along with it) with explicit, deterministic deltas.
+    /// Drives the marked fighter's animation to completion with explicit,
+    /// deterministic deltas.
     fn finish_animation<M: Component>(app: &mut App) {
         let world = app.world_mut();
-        let mut query = world.query_filtered::<(&mut SpriteAnimation, &mut Sprite), With<M>>();
-        let (mut anim, mut sprite) = query.single_mut(world).expect("fighter exists");
-        let atlas = sprite.texture_atlas.as_mut().expect("stub atlas");
+        let mut query = world.query_filtered::<&mut SpriteAnimation, With<M>>();
+        let mut anim = query.single_mut(world).expect("fighter exists");
         for _ in 0..16 {
-            if let Some(frame) = anim.advance(ms(200), atlas.index) {
-                atlas.index = frame;
-            }
+            let current = anim.current_frame();
+            anim.advance(ms(200), current);
         }
         assert!(anim.is_finished(), "animation ran to completion");
     }
