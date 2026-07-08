@@ -19,12 +19,11 @@ use crate::menu::DisabledButton;
 use crate::save::SaveRequested;
 use crate::shop::{OwnedItems, PlayerEquipment};
 use crate::theme::{
-    BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK,
-    TEXT_DISABLED,
+    ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, FOLK_BLUE,
+    GOLD, PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
 };
 use crate::ui_widgets::{
     attribute_row::spawn_attribute_row, button_bundle, scroll_with_wheel_and_touch, small_button,
-    wide_button,
 };
 
 /// The confirmed player character: chosen name, final attributes, and saved
@@ -44,6 +43,17 @@ struct CreationScreen;
 /// Marker for the cutout preview root so resource changes can re-render it.
 #[derive(Component)]
 struct CreationPreview;
+
+/// Stable layout anchors for the preview-first creator screen.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+enum CreationLayoutRole {
+    PreviewStage,
+    ControlDeck,
+    PresetGrid,
+    AppearanceControls,
+    AttributeControls,
+    StatStrip,
+}
 
 /// Which appearance selector row a label or button belongs to.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,7 +98,18 @@ enum CreationLabel {
     Points,
     Value(AttributeKind),
     Appearance(AppearanceField),
-    Preview,
+    PreviewStat(PreviewStat),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreviewStat {
+    Health,
+    Stamina,
+    Damage,
+}
+
+impl PreviewStat {
+    const ALL: [Self; 3] = [Self::Health, Self::Stamina, Self::Damage];
 }
 
 pub struct CreationPlugin;
@@ -124,11 +145,12 @@ fn spawn_creation_screen(
     mut commands: Commands,
     draft: Res<CharacterDraft>,
     ui_font: Res<UiFont>,
+    panel_texture: Res<PanelTexture>,
     asset_server: Option<Res<AssetServer>>,
 ) {
     commands.spawn((
         CreationScreen,
-        Sprite::from_color(NIGHT_BLACK, Vec2::new(800.0, 600.0)),
+        Sprite::from_color(ARENA_BROWN, Vec2::new(800.0, 600.0)),
         Transform::from_xyz(0.0, 0.0, -40.0),
     ));
 
@@ -139,9 +161,10 @@ fn spawn_creation_screen(
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
-                justify_content: JustifyContent::Center,
+                justify_content: JustifyContent::FlexStart,
                 align_items: AlignItems::Center,
-                row_gap: Val::Px(12.0),
+                row_gap: Val::Px(8.0),
+                padding: UiRect::all(Val::Px(14.0)),
                 overflow: Overflow::scroll_y(),
                 ..default()
             },
@@ -151,141 +174,38 @@ fn spawn_creation_screen(
         .with_children(|parent| {
             parent.spawn((
                 Text::new("Creează-ți eroul"),
-                ui_font.text_font_bold(44.0),
+                ui_font.text_font_bold(38.0),
                 TextColor(CREAM),
                 Node {
-                    margin: UiRect::bottom(Val::Px(12.0)),
+                    margin: UiRect::bottom(Val::Px(4.0)),
                     ..default()
                 },
             ));
 
             parent
                 .spawn(Node {
-                    width: Val::Px(680.0),
+                    width: Val::Px(760.0),
                     max_width: Val::Percent(94.0),
+                    min_height: Val::Px(482.0),
+                    flex_direction: FlexDirection::Row,
                     flex_wrap: FlexWrap::Wrap,
                     justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(8.0),
-                    row_gap: Val::Px(8.0),
+                    align_items: AlignItems::Stretch,
+                    column_gap: Val::Px(12.0),
+                    row_gap: Val::Px(10.0),
                     ..default()
                 })
-                .with_children(|row| {
-                    for choice in HeroChoice::ALL {
-                        row.spawn((
-                            button_bundle(
-                                choice.label(),
-                                Val::Px(150.0),
-                                Val::Px(46.0),
-                                18.0,
-                                &ui_font,
-                            ),
-                            CreationAction::SelectChoice(choice),
-                        ));
-                    }
+                .with_children(|body| {
+                    spawn_preview_stage(body, &draft, &ui_font, &panel_texture);
+                    spawn_control_deck(body, &draft, &ui_font, &panel_texture);
                 });
-
-            parent.spawn((
-                Text::new(description_text(&draft)),
-                ui_font.text_font(18.0),
-                TextColor(CREAM),
-                CreationLabel::Description,
-                Node {
-                    width: Val::Px(680.0),
-                    max_width: Val::Percent(94.0),
-                    margin: UiRect::bottom(Val::Px(8.0)),
-                    ..default()
-                },
-            ));
-
-            parent
-                .spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(16.0),
-                    ..default()
-                })
-                .with_children(|row| {
-                    row.spawn((small_button("<", &ui_font), CreationAction::PreviousName));
-                    row.spawn(Node {
-                        width: Val::Px(320.0),
-                        justify_content: JustifyContent::Center,
-                        ..default()
-                    })
-                    .with_children(|slot| {
-                        slot.spawn((
-                            Text::new(draft.name()),
-                            ui_font.text_font(30.0),
-                            TextColor(CREAM),
-                            CreationLabel::Name,
-                        ));
-                    });
-                    row.spawn((small_button(">", &ui_font), CreationAction::NextName));
-                });
-
-            parent.spawn((
-                Text::new(points_text(&draft)),
-                ui_font.text_font(24.0),
-                TextColor(CREAM),
-                CreationLabel::Points,
-                Node {
-                    margin: UiRect::vertical(Val::Px(4.0)),
-                    ..default()
-                },
-            ));
-
-            for field in [
-                AppearanceField::SkinTone,
-                AppearanceField::Build,
-                AppearanceField::Hair,
-                AppearanceField::Accent,
-            ] {
-                spawn_option_row(
-                    parent,
-                    field.label(),
-                    appearance_text(&draft, field),
-                    CreationAction::PreviousAppearance(field),
-                    CreationAction::NextAppearance(field),
-                    CreationLabel::Appearance(field),
-                    &ui_font,
-                );
-            }
-
-            for kind in AttributeKind::ALL {
-                spawn_attribute_row(
-                    parent,
-                    kind,
-                    draft.get(kind),
-                    CreationAction::Decrease(kind),
-                    CreationAction::Increase(kind),
-                    CreationLabel::Value(kind),
-                    &ui_font,
-                );
-            }
-
-            parent.spawn((
-                Text::new(preview_text(&draft)),
-                ui_font.text_font(22.0),
-                TextColor(CREAM),
-                CreationLabel::Preview,
-                Node {
-                    margin: UiRect::vertical(Val::Px(8.0)),
-                    ..default()
-                },
-            ));
-
-            parent.spawn((
-                wide_button("Începe lupta", &ui_font),
-                CreationAction::Confirm,
-            ));
-            parent.spawn((wide_button("Înapoi", &ui_font), CreationAction::Back));
         });
 
     let preview = commands
         .spawn((
             CreationScreen,
             CreationPreview,
-            Transform::from_xyz(255.0, 5.0, 25.0).with_scale(Vec3::splat(0.82)),
+            Transform::from_xyz(-212.0, -18.0, 25.0).with_scale(Vec3::splat(1.02)),
         ))
         .id();
     let equipment = equipment_from_items(draft.starter_items());
@@ -297,6 +217,235 @@ fn spawn_creation_screen(
         false,
         &equipment,
     );
+}
+
+fn spawn_preview_stage(
+    parent: &mut ChildSpawnerCommands,
+    draft: &CharacterDraft,
+    ui_font: &UiFont,
+    panel_texture: &PanelTexture,
+) {
+    parent
+        .spawn((
+            panel_bundle(
+                panel_texture,
+                Node {
+                    width: Val::Px(338.0),
+                    min_height: Val::Px(482.0),
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::SpaceBetween,
+                    padding: UiRect::all(Val::Px(18.0)),
+                    ..default()
+                },
+            ),
+            BackgroundColor(PANEL_LINEN),
+            CreationLayoutRole::PreviewStage,
+        ))
+        .with_children(|stage| {
+            stage.spawn((
+                Text::new(draft.name()),
+                ui_font.text_font_bold(30.0),
+                TextColor(CREAM),
+                CreationLabel::Name,
+            ));
+            stage.spawn((
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(318.0),
+                    border: UiRect::all(Val::Px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(WALNUT),
+                BorderColor::all(GOLD),
+            ));
+            stage
+                .spawn((
+                    Node {
+                        flex_direction: FlexDirection::Row,
+                        justify_content: JustifyContent::SpaceBetween,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(6.0),
+                        ..default()
+                    },
+                    CreationLayoutRole::StatStrip,
+                ))
+                .with_children(|strip| {
+                    for stat in PreviewStat::ALL {
+                        strip.spawn((
+                            Node {
+                                width: Val::Px(92.0),
+                                height: Val::Px(36.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            BackgroundColor(FOLK_BLUE),
+                            children![(
+                                Text::new(preview_stat_text(draft, stat)),
+                                ui_font.text_font(15.0),
+                                TextColor(CREAM),
+                                CreationLabel::PreviewStat(stat),
+                            )],
+                        ));
+                    }
+                });
+        });
+}
+
+fn spawn_control_deck(
+    parent: &mut ChildSpawnerCommands,
+    draft: &CharacterDraft,
+    ui_font: &UiFont,
+    panel_texture: &PanelTexture,
+) {
+    parent
+        .spawn((
+            panel_bundle(
+                panel_texture,
+                Node {
+                    width: Val::Px(410.0),
+                    min_height: Val::Px(482.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(8.0),
+                    padding: UiRect::all(Val::Px(16.0)),
+                    ..default()
+                },
+            ),
+            BackgroundColor(PANEL_LINEN),
+            CreationLayoutRole::ControlDeck,
+        ))
+        .with_children(|deck| {
+            deck.spawn((
+                Node {
+                    width: Val::Percent(100.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(6.0),
+                    row_gap: Val::Px(6.0),
+                    ..default()
+                },
+                CreationLayoutRole::PresetGrid,
+            ))
+            .with_children(|row| {
+                for choice in HeroChoice::ALL {
+                    row.spawn((
+                        button_bundle(choice.label(), Val::Px(118.0), Val::Px(42.0), 15.0, ui_font),
+                        CreationAction::SelectChoice(choice),
+                    ));
+                }
+            });
+
+            deck.spawn((
+                Text::new(description_text(draft)),
+                ui_font.text_font(15.0),
+                TextColor(CREAM),
+                CreationLabel::Description,
+                Node {
+                    width: Val::Percent(100.0),
+                    min_height: Val::Px(46.0),
+                    ..default()
+                },
+            ));
+
+            deck.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                column_gap: Val::Px(10.0),
+                ..default()
+            })
+            .with_children(|row| {
+                row.spawn((small_button("<", ui_font), CreationAction::PreviousName));
+                row.spawn(Node {
+                    width: Val::Px(232.0),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                })
+                .with_children(|slot| {
+                    slot.spawn((
+                        Text::new(draft.name()),
+                        ui_font.text_font(24.0),
+                        TextColor(CREAM),
+                        CreationLabel::Name,
+                    ));
+                });
+                row.spawn((small_button(">", ui_font), CreationAction::NextName));
+            });
+
+            deck.spawn((
+                Text::new(points_text(draft)),
+                ui_font.text_font(18.0),
+                TextColor(CREAM),
+                CreationLabel::Points,
+            ));
+
+            deck.spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(4.0),
+                    ..default()
+                },
+                CreationLayoutRole::AppearanceControls,
+            ))
+            .with_children(|appearance| {
+                for field in [
+                    AppearanceField::SkinTone,
+                    AppearanceField::Build,
+                    AppearanceField::Hair,
+                    AppearanceField::Accent,
+                ] {
+                    spawn_option_row(
+                        appearance,
+                        field.label(),
+                        appearance_text(draft, field),
+                        CreationAction::PreviousAppearance(field),
+                        CreationAction::NextAppearance(field),
+                        CreationLabel::Appearance(field),
+                        ui_font,
+                    );
+                }
+            });
+
+            deck.spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(4.0),
+                    ..default()
+                },
+                CreationLayoutRole::AttributeControls,
+            ))
+            .with_children(|attributes| {
+                for kind in AttributeKind::ALL {
+                    spawn_attribute_row(
+                        attributes,
+                        kind,
+                        draft.get(kind),
+                        CreationAction::Decrease(kind),
+                        CreationAction::Increase(kind),
+                        CreationLabel::Value(kind),
+                        ui_font,
+                    );
+                }
+            });
+
+            deck.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::Center,
+                column_gap: Val::Px(10.0),
+                ..default()
+            })
+            .with_children(|actions| {
+                actions.spawn((
+                    button_bundle("Începe lupta", Val::Px(174.0), Val::Px(52.0), 20.0, ui_font),
+                    CreationAction::Confirm,
+                ));
+                actions.spawn((
+                    button_bundle("Înapoi", Val::Px(128.0), Val::Px(52.0), 20.0, ui_font),
+                    CreationAction::Back,
+                ));
+            });
+        });
 }
 
 fn spawn_option_row(
@@ -312,32 +461,38 @@ fn spawn_option_row(
         .spawn(Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
-            column_gap: Val::Px(12.0),
+            column_gap: Val::Px(8.0),
             ..default()
         })
         .with_children(|row| {
             row.spawn(Node {
-                width: Val::Px(140.0),
+                width: Val::Px(108.0),
                 ..default()
             })
             .with_children(|slot| {
-                slot.spawn((Text::new(label), ui_font.text_font(24.0), TextColor(CREAM)));
+                slot.spawn((Text::new(label), ui_font.text_font(18.0), TextColor(CREAM)));
             });
-            row.spawn((small_button("<", ui_font), previous));
+            row.spawn((
+                button_bundle("<", Val::Px(36.0), Val::Px(36.0), 20.0, ui_font),
+                previous,
+            ));
             row.spawn(Node {
-                width: Val::Px(180.0),
+                width: Val::Px(156.0),
                 justify_content: JustifyContent::Center,
                 ..default()
             })
             .with_children(|slot| {
                 slot.spawn((
                     Text::new(value),
-                    ui_font.text_font(24.0),
+                    ui_font.text_font(18.0),
                     TextColor(CREAM),
                     value_label,
                 ));
             });
-            row.spawn((small_button(">", ui_font), next));
+            row.spawn((
+                button_bundle(">", Val::Px(36.0), Val::Px(36.0), 20.0, ui_font),
+                next,
+            ));
         });
 }
 
@@ -360,14 +515,13 @@ fn description_text(draft: &CharacterDraft) -> String {
     format!("{}\n{}", draft.description(), gear)
 }
 
-fn preview_text(draft: &CharacterDraft) -> String {
+fn preview_stat_text(draft: &CharacterDraft, stat: PreviewStat) -> String {
     let attrs = draft.attributes();
-    format!(
-        "HP: {} | Stamina: {} | Damage: {}",
-        stats::max_hp(&attrs),
-        stats::max_stamina(&attrs),
-        stats::base_damage(&attrs),
-    )
+    match stat {
+        PreviewStat::Health => format!("HP {}", stats::max_hp(&attrs)),
+        PreviewStat::Stamina => format!("STA {}", stats::max_stamina(&attrs)),
+        PreviewStat::Damage => format!("DMG {}", stats::base_damage(&attrs)),
+    }
 }
 
 fn equipment_from_items(items: &[crate::items::ItemId]) -> Equipment {
@@ -547,7 +701,7 @@ fn update_labels(draft: Res<CharacterDraft>, mut labels: Query<(&mut Text, &Crea
             CreationLabel::Points => points_text(&draft),
             CreationLabel::Value(kind) => draft.get(*kind).to_string(),
             CreationLabel::Appearance(field) => appearance_text(&draft, *field),
-            CreationLabel::Preview => preview_text(&draft),
+            CreationLabel::PreviewStat(stat) => preview_stat_text(&draft, *stat),
         };
     }
 }
@@ -669,6 +823,29 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(buttons, 25);
+    }
+
+    #[test]
+    fn creation_layout_gives_the_preview_stage_primary_space() {
+        let mut app = test_app();
+        let preview_stage = app
+            .world_mut()
+            .query::<(&Node, &CreationLayoutRole)>()
+            .iter(app.world())
+            .find(|(_, role)| **role == CreationLayoutRole::PreviewStage)
+            .map(|(node, _)| node)
+            .expect("preview stage exists");
+        assert_eq!(preview_stage.width, Val::Px(338.0));
+        assert_eq!(preview_stage.min_height, Val::Px(482.0));
+
+        let control_deck = app
+            .world_mut()
+            .query::<(&Node, &CreationLayoutRole)>()
+            .iter(app.world())
+            .find(|(_, role)| **role == CreationLayoutRole::ControlDeck)
+            .map(|(node, _)| node)
+            .expect("control deck exists");
+        assert_eq!(control_deck.width, Val::Px(410.0));
     }
 
     #[test]
@@ -929,8 +1106,16 @@ mod tests {
     fn preview_and_labels_track_clicks() {
         let mut app = test_app();
         assert_eq!(
-            label_text(&mut app, CreationLabel::Preview),
-            "HP: 60 | Stamina: 35 | Damage: 3"
+            label_text(&mut app, CreationLabel::PreviewStat(PreviewStat::Health)),
+            "HP 60"
+        );
+        assert_eq!(
+            label_text(&mut app, CreationLabel::PreviewStat(PreviewStat::Stamina)),
+            "STA 35"
+        );
+        assert_eq!(
+            label_text(&mut app, CreationLabel::PreviewStat(PreviewStat::Damage)),
+            "DMG 3"
         );
         assert_eq!(
             label_text(&mut app, CreationLabel::Points),
@@ -941,8 +1126,12 @@ mod tests {
             CreationAction::Increase(AttributeKind::Vitalitate),
         );
         assert_eq!(
-            label_text(&mut app, CreationLabel::Preview),
-            "HP: 70 | Stamina: 40 | Damage: 3"
+            label_text(&mut app, CreationLabel::PreviewStat(PreviewStat::Health)),
+            "HP 70"
+        );
+        assert_eq!(
+            label_text(&mut app, CreationLabel::PreviewStat(PreviewStat::Stamina)),
+            "STA 40"
         );
         assert_eq!(
             label_text(&mut app, CreationLabel::Points),

@@ -19,8 +19,8 @@ use crate::menu::DisabledButton;
 use crate::progression::Wallet;
 use crate::save::SaveRequested;
 use crate::theme::{
-    BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, MIN_TOUCH_TARGET,
-    NIGHT_BLACK, PanelTexture, TEXT_DISABLED, panel_bundle,
+    ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD,
+    MIN_TOUCH_TARGET, PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
 };
 use crate::ui_widgets::wide_button;
 
@@ -69,6 +69,15 @@ pub struct ShopScreen;
 #[derive(Component)]
 struct ShopPreview;
 
+/// Stable anchors for the shop's catalog, preview, and body-slot map.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+enum ShopLayoutRole {
+    CatalogColumn,
+    PreviewStage,
+    LoadoutBodyMap,
+    StatStrip,
+}
+
 /// What a shop button does when pressed.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShopAction {
@@ -116,6 +125,17 @@ fn slot_label(slot: Slot) -> &'static str {
         Slot::Torso => "Trup",
         Slot::Head => "Cap",
         Slot::Feet => "Picioare",
+    }
+}
+
+/// Body attachment language shown next to each equipment slot.
+fn slot_region_label(slot: Slot) -> &'static str {
+    match slot {
+        Slot::Weapon => "mână",
+        Slot::Shield => "antebraț",
+        Slot::Torso => "trunchi",
+        Slot::Head => "cap",
+        Slot::Feet => "picioare",
     }
 }
 
@@ -361,7 +381,7 @@ fn spawn_shop_screen(
                 overflow: Overflow::scroll_y(),
                 ..default()
             },
-            BackgroundColor(NIGHT_BLACK),
+            BackgroundColor(ARENA_BROWN),
             ScrollPosition::default(),
             crate::ui_widgets::Scrollable,
         ))
@@ -391,43 +411,76 @@ fn spawn_shop_screen(
                         Some(ShopLabel::Wallet),
                     );
                 });
-            // The catalog, grouped by slot.
-            for slot in Slot::ALL {
-                spawn_icon_text_row(
-                    parent,
-                    ShopIconKind::Slot(slot),
-                    slot_label(slot).to_string(),
-                    18.0,
-                    ui_font,
-                    icons,
-                    None,
-                );
-                for item in CATALOG.iter().filter(|item| item.slot == slot) {
-                    let state = ItemButtonState::of(item.id, &wallet, &owned, &equipment);
-                    spawn_item_row(parent, item, state, ui_font, panel_texture);
-                }
-            }
-            spawn_loadout_preview(parent, &equipment, ui_font, panel_texture, icons);
-            // Live stat summary: purchases visibly matter.
             parent
                 .spawn(Node {
-                    column_gap: Val::Px(24.0),
-                    margin: UiRect::vertical(Val::Px(8.0)),
+                    width: Val::Px(760.0),
+                    max_width: Val::Percent(96.0),
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::FlexStart,
+                    column_gap: Val::Px(12.0),
+                    row_gap: Val::Px(10.0),
                     ..default()
                 })
-                .with_children(|panel| {
-                    panel.spawn((
-                        line_text(attack_text(&attributes, &equipment), 20.0, ui_font),
-                        ShopLabel::Attack,
-                    ));
-                    panel.spawn((
-                        line_text(armor_text(&equipment), 20.0, ui_font),
-                        ShopLabel::Armor,
-                    ));
-                    panel.spawn((
-                        line_text(health_text(&attributes), 20.0, ui_font),
-                        ShopLabel::Health,
-                    ));
+                .with_children(|body| {
+                    body.spawn((
+                        Node {
+                            width: Val::Px(430.0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(4.0),
+                            ..default()
+                        },
+                        ShopLayoutRole::CatalogColumn,
+                    ))
+                    .with_children(|catalog| {
+                        for slot in Slot::ALL {
+                            spawn_icon_text_row(
+                                catalog,
+                                ShopIconKind::Slot(slot),
+                                slot_label(slot).to_string(),
+                                18.0,
+                                ui_font,
+                                icons,
+                                None,
+                            );
+                            for item in CATALOG.iter().filter(|item| item.slot == slot) {
+                                let state =
+                                    ItemButtonState::of(item.id, &wallet, &owned, &equipment);
+                                spawn_item_row(catalog, item, state, ui_font, panel_texture);
+                            }
+                        }
+                    });
+
+                    body.spawn((
+                        panel_bundle(
+                            panel_texture,
+                            Node {
+                                width: Val::Px(318.0),
+                                min_height: Val::Px(470.0),
+                                flex_direction: FlexDirection::Column,
+                                row_gap: Val::Px(8.0),
+                                padding: UiRect::all(Val::Px(14.0)),
+                                ..default()
+                            },
+                        ),
+                        BackgroundColor(PANEL_LINEN),
+                        ShopLayoutRole::PreviewStage,
+                    ))
+                    .with_children(|preview_panel| {
+                        preview_panel.spawn((
+                            Node {
+                                width: Val::Percent(100.0),
+                                height: Val::Px(248.0),
+                                border: UiRect::all(Val::Px(2.0)),
+                                ..default()
+                            },
+                            BackgroundColor(WALNUT),
+                            BorderColor::all(GOLD),
+                        ));
+                        spawn_loadout_preview(preview_panel, &equipment, ui_font, icons);
+                        spawn_stat_strip(preview_panel, &attributes, &equipment, ui_font);
+                    });
                 });
             parent.spawn((
                 wide_button("Înapoi în arenă", ui_font),
@@ -452,7 +505,7 @@ fn spawn_shop_preview(
         .spawn((
             ShopScreen,
             ShopPreview,
-            Transform::from_xyz(286.0, -84.0, 25.0).with_scale(Vec3::splat(0.7)),
+            Transform::from_xyz(231.0, 78.0, 25.0).with_scale(Vec3::splat(0.68)),
         ))
         .id();
     spawn_cutout_rig_with_gear(
@@ -520,44 +573,98 @@ fn loadout_text(slot: Slot, equipment: &PlayerEquipment) -> String {
         .equipped(slot)
         .map(|id| id.item().name)
         .unwrap_or("liber");
-    format!("{}: {item}", slot_label(slot))
+    format!("{} / {}: {item}", slot_label(slot), slot_region_label(slot))
 }
 
 fn spawn_loadout_preview(
     parent: &mut ChildSpawnerCommands,
     equipment: &PlayerEquipment,
     ui_font: &UiFont,
-    panel_texture: &PanelTexture,
     icons: &ShopIcons,
 ) {
     parent
-        .spawn(panel_bundle(
-            panel_texture,
+        .spawn((
             Node {
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(4.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                margin: UiRect::vertical(Val::Px(8.0)),
+                width: Val::Percent(100.0),
                 ..default()
             },
+            ShopLayoutRole::LoadoutBodyMap,
         ))
         .with_children(|panel| {
             for slot in Slot::ALL {
                 panel
-                    .spawn(Node {
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(6.0),
-                        ..default()
-                    })
+                    .spawn((
+                        Node {
+                            height: Val::Px(34.0),
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(6.0),
+                            padding: UiRect::horizontal(Val::Px(6.0)),
+                            ..default()
+                        },
+                        BackgroundColor(WALNUT),
+                    ))
                     .with_children(|row| {
                         row.spawn(icon_node(ShopIconKind::Slot(slot), icons));
                         row.spawn((
-                            line_text(loadout_text(slot, equipment), 16.0, ui_font),
+                            line_text(loadout_text(slot, equipment), 14.0, ui_font),
                             ShopLabel::Loadout(slot),
                         ));
                     });
             }
         });
+}
+
+fn spawn_stat_strip(
+    parent: &mut ChildSpawnerCommands,
+    attributes: &Attributes,
+    equipment: &PlayerEquipment,
+    ui_font: &UiFont,
+) {
+    parent
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::SpaceBetween,
+                column_gap: Val::Px(6.0),
+                ..default()
+            },
+            ShopLayoutRole::StatStrip,
+        ))
+        .with_children(|strip| {
+            strip.spawn(stat_chip(
+                attack_text(attributes, equipment),
+                ShopLabel::Attack,
+                ui_font,
+            ));
+            strip.spawn(stat_chip(armor_text(equipment), ShopLabel::Armor, ui_font));
+            strip.spawn(stat_chip(
+                health_text(attributes),
+                ShopLabel::Health,
+                ui_font,
+            ));
+        });
+}
+
+fn stat_chip(label: String, shop_label: ShopLabel, ui_font: &UiFont) -> impl Bundle {
+    (
+        Node {
+            width: Val::Px(90.0),
+            height: Val::Px(36.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(WALNUT),
+        children![(
+            Text::new(label),
+            ui_font.text_font(14.0),
+            TextColor(CREAM),
+            shop_label,
+        )],
+    )
 }
 
 /// One catalog row: name, stat, price, and the buy/equip/equipped button.
@@ -573,7 +680,7 @@ fn spawn_item_row(
             panel_texture,
             Node {
                 align_items: AlignItems::Center,
-                column_gap: Val::Px(12.0),
+                column_gap: Val::Px(8.0),
                 padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
                 margin: UiRect::vertical(Val::Px(2.0)),
                 ..default()
@@ -581,18 +688,18 @@ fn spawn_item_row(
         ))
         .with_children(|row| {
             row.spawn((
-                column(220.0),
-                line_text(item.name.to_string(), 16.0, ui_font),
+                column(144.0),
+                line_text(item.name.to_string(), 14.0, ui_font),
             ));
-            row.spawn((column(90.0), line_text(stat_text(item), 16.0, ui_font)));
+            row.spawn((column(62.0), line_text(stat_text(item), 14.0, ui_font)));
             row.spawn((
-                column(90.0),
-                line_text(format!("{} galbeni", item.price), 16.0, ui_font),
+                column(70.0),
+                line_text(format!("{} g", item.price), 14.0, ui_font),
             ));
             let mut button = row.spawn((
                 Button,
                 Node {
-                    width: Val::Px(120.0),
+                    width: Val::Px(92.0),
                     // ≥44px touch target (#31), up from the original 26px
                     // mouse-only height.
                     height: Val::Px(MIN_TOUCH_TARGET),
@@ -609,7 +716,7 @@ fn spawn_item_row(
             button.with_children(|button| {
                 button.spawn((
                     Text::new(state.label()),
-                    ui_font.text_font(16.0),
+                    ui_font.text_font(14.0),
                     TextColor(state.text_color()),
                     ShopLabel::ItemButton(item.id),
                 ));
@@ -1061,6 +1168,32 @@ mod tests {
     }
 
     #[test]
+    fn shop_layout_maps_gear_slots_around_the_fighter_preview() {
+        let mut app = test_app();
+        set_state(&mut app, GameState::Shop);
+
+        let roles: Vec<ShopLayoutRole> = app
+            .world_mut()
+            .query::<&ShopLayoutRole>()
+            .iter(app.world())
+            .copied()
+            .collect();
+        assert!(roles.contains(&ShopLayoutRole::CatalogColumn));
+        assert!(roles.contains(&ShopLayoutRole::PreviewStage));
+        assert!(roles.contains(&ShopLayoutRole::LoadoutBodyMap));
+        assert!(roles.contains(&ShopLayoutRole::StatStrip));
+
+        let texts = texts(&mut app);
+        for slot in Slot::ALL {
+            let expected = format!("{} / {}: liber", slot_label(slot), slot_region_label(slot));
+            assert!(
+                texts.contains(&expected),
+                "missing body-region loadout row {expected}: {texts:?}"
+            );
+        }
+    }
+
+    #[test]
     fn equipment_changes_refresh_the_shop_cutout_preview() {
         let mut app = test_app();
         set_state(&mut app, GameState::Shop);
@@ -1154,7 +1287,7 @@ mod tests {
             "the summary is live: {texts:?}"
         );
         assert!(
-            texts.contains(&"Cap: Căciulă de oaie".to_string()),
+            texts.contains(&"Cap / cap: Căciulă de oaie".to_string()),
             "the loadout preview is live: {texts:?}"
         );
         assert_eq!(
@@ -1212,7 +1345,7 @@ mod tests {
             "Echipat"
         );
         assert!(
-            texts(&mut app).contains(&"Armă: Bâtă ciobănească".to_string()),
+            texts(&mut app).contains(&"Armă / mână: Bâtă ciobănească".to_string()),
             "loadout preview tracks slot swaps"
         );
     }
