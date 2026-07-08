@@ -25,6 +25,7 @@ use crate::theme::{
 use crate::ui_widgets::wide_button;
 
 const SHOP_ROOT_PADDING: f32 = 12.0;
+#[cfg(test)]
 const SHOP_TARGET_WIDTH: f32 = 800.0;
 const SHOP_BODY_WIDTH: f32 = 760.0;
 const SHOP_BODY_GAP: f32 = 12.0;
@@ -377,6 +378,7 @@ fn spawn_shop_screen(
     owned: Res<OwnedItems>,
     equipment: Res<PlayerEquipment>,
     player: Option<Res<PlayerCharacter>>,
+    viewport: Res<ViewportInfo>,
     assets: ShopScreenAssets,
 ) {
     let ui_font = &*assets.ui_font;
@@ -513,6 +515,7 @@ fn spawn_shop_screen(
         &mut commands,
         &equipment.0,
         appearance,
+        viewport.width,
         assets.asset_server.as_deref(),
     );
 }
@@ -521,13 +524,14 @@ fn spawn_shop_preview(
     commands: &mut Commands,
     equipment: &Equipment,
     appearance: PlayerAppearance,
+    viewport_width: f32,
     asset_server: Option<&AssetServer>,
 ) {
     let preview = commands
         .spawn((
             ShopScreen,
             ShopPreview,
-            shop_preview_transform_for_width(SHOP_TARGET_WIDTH),
+            shop_preview_transform_for_width(viewport_width),
         ))
         .id();
     spawn_cutout_rig_with_gear(
@@ -1301,9 +1305,8 @@ mod tests {
     }
 
     #[test]
-    fn shop_preview_recenters_when_viewport_wraps() {
+    fn shop_preview_starts_centered_when_entering_narrow_viewport() {
         let mut app = test_app();
-        set_state(&mut app, GameState::Shop);
         app.world_mut()
             .resource_mut::<ViewportInfo>()
             .set_if_neq(ViewportInfo {
@@ -1311,7 +1314,7 @@ mod tests {
                 height: 812.0,
                 is_mobile: true,
             });
-        app.update();
+        set_state(&mut app, GameState::Shop);
 
         let transform = app
             .world_mut()

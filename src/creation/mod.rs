@@ -26,6 +26,7 @@ use crate::ui_widgets::{
     attribute_row::spawn_attribute_row, button_bundle, scroll_with_wheel_and_touch, small_button,
 };
 
+#[cfg(test)]
 const CREATION_TARGET_WIDTH: f32 = 800.0;
 const CREATION_ROOT_PADDING: f32 = 14.0;
 const CREATION_BODY_WIDTH: f32 = 760.0;
@@ -164,6 +165,7 @@ fn spawn_creation_screen(
     draft: Res<CharacterDraft>,
     ui_font: Res<UiFont>,
     panel_texture: Res<PanelTexture>,
+    viewport: Res<ViewportInfo>,
     asset_server: Option<Res<AssetServer>>,
 ) {
     commands.spawn((
@@ -223,7 +225,7 @@ fn spawn_creation_screen(
         .spawn((
             CreationScreen,
             CreationPreview,
-            creation_preview_transform_for_width(CREATION_TARGET_WIDTH),
+            creation_preview_transform_for_width(viewport.width),
         ))
         .id();
     let equipment = equipment_from_items(draft.starter_items());
@@ -807,16 +809,23 @@ mod tests {
     use crate::save::{SaveGame, SavePlugin, SaveStore};
     use bevy::state::app::StatesPlugin;
 
-    fn test_app() -> App {
+    fn test_app_with_viewport(viewport: ViewportInfo) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, CreationPlugin));
         app.update();
+        app.world_mut()
+            .resource_mut::<ViewportInfo>()
+            .set_if_neq(viewport);
         app.world_mut()
             .resource_mut::<NextState<GameState>>()
             .set(GameState::CharacterCreation);
         app.update();
         app.update();
         app
+    }
+
+    fn test_app() -> App {
+        test_app_with_viewport(ViewportInfo::default())
     }
 
     fn test_app_with_save() -> (App, std::sync::Arc<std::sync::Mutex<Option<String>>>) {
@@ -948,17 +957,12 @@ mod tests {
     }
 
     #[test]
-    fn creation_preview_recenters_when_viewport_wraps() {
-        let mut app = test_app();
-        app.world_mut()
-            .resource_mut::<ViewportInfo>()
-            .set_if_neq(ViewportInfo {
-                width: 375.0,
-                height: 812.0,
-                is_mobile: true,
-            });
-        app.update();
-
+    fn creation_preview_starts_centered_when_entering_narrow_viewport() {
+        let mut app = test_app_with_viewport(ViewportInfo {
+            width: 375.0,
+            height: 812.0,
+            is_mobile: true,
+        });
         let transform = app
             .world_mut()
             .query_filtered::<&Transform, With<CreationPreview>>()
