@@ -6,19 +6,10 @@ use bevy::prelude::*;
 use crate::core::{GameState, UiFont, despawn_screen};
 use crate::save::{SaveStore, load_save};
 use crate::settings::SettingsOpen;
-
-// Placeholder folk palette (deep red / cream / black); real art comes in
-// Phase 4. Public so later screens (e.g. character creation) share the exact
-// same styling until a dedicated ui module exists.
-pub const DEEP_RED: Color = Color::srgb(0.55, 0.10, 0.10);
-pub const CREAM: Color = Color::srgb(0.96, 0.93, 0.84);
-pub const NIGHT_BLACK: Color = Color::srgb(0.07, 0.06, 0.06);
-
-pub const BUTTON_NORMAL: Color = DEEP_RED;
-pub const BUTTON_HOVERED: Color = Color::srgb(0.68, 0.16, 0.14);
-pub const BUTTON_PRESSED: Color = Color::srgb(0.42, 0.06, 0.06);
-pub const BUTTON_DISABLED: Color = Color::srgb(0.35, 0.33, 0.31);
-pub const TEXT_DISABLED: Color = Color::srgb(0.60, 0.58, 0.55);
+use crate::theme::{
+    BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD, NIGHT_BLACK,
+    PanelTexture, TEXT_DISABLED, panel_bundle,
+};
 
 /// Marker for the main-menu screen root; everything under it is despawned by
 /// [`despawn_screen`] on `OnExit(GameState::MainMenu)`.
@@ -66,7 +57,12 @@ impl Plugin for MenuPlugin {
 /// Spawns the main menu. **Continuă** is enabled exactly when a valid save
 /// loads from the [`SaveStore`]; a corrupt or version-mismatched save is
 /// discarded by [`load_save`] and the button stays a disabled marker.
-fn spawn_main_menu(mut commands: Commands, store: Option<Res<SaveStore>>, ui_font: Res<UiFont>) {
+fn spawn_main_menu(
+    mut commands: Commands,
+    store: Option<Res<SaveStore>>,
+    ui_font: Res<UiFont>,
+    panel_texture: Res<PanelTexture>,
+) {
     let has_save = store.is_some_and(|store| load_save(&store).is_some());
     commands
         .spawn((
@@ -83,41 +79,68 @@ fn spawn_main_menu(mut commands: Commands, store: Option<Res<SaveStore>>, ui_fon
             BackgroundColor(NIGHT_BLACK),
         ))
         .with_children(|parent| {
+            parent.spawn(motif_divider(&ui_font));
             parent.spawn((
                 Text::new("Romanian Folk Fight"),
                 ui_font.text_font_bold(56.0),
                 TextColor(CREAM),
                 Node {
-                    margin: UiRect::bottom(Val::Px(32.0)),
+                    margin: UiRect::vertical(Val::Px(12.0)),
                     ..default()
                 },
             ));
-            parent.spawn((
-                menu_button("Luptă nouă", CREAM, BUTTON_NORMAL, &ui_font),
-                MenuAction::NewGame,
-            ));
-            if has_save {
-                parent.spawn((
-                    menu_button("Continuă", CREAM, BUTTON_NORMAL, &ui_font),
-                    MenuAction::Continue,
-                ));
-            } else {
-                // No (valid) save to resume: a greyed-out, inert marker.
-                parent.spawn((
-                    menu_button("Continuă", TEXT_DISABLED, BUTTON_DISABLED, &ui_font),
-                    DisabledButton,
-                ));
-            }
-            parent.spawn((
-                menu_button("Setări", CREAM, BUTTON_NORMAL, &ui_font),
-                MenuAction::Settings,
-            ));
-            #[cfg(not(target_arch = "wasm32"))]
-            parent.spawn((
-                menu_button("Ieși", CREAM, BUTTON_NORMAL, &ui_font),
-                MenuAction::Quit,
-            ));
+            parent.spawn(motif_divider(&ui_font));
+            parent
+                .spawn(panel_bundle(
+                    &panel_texture,
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        row_gap: Val::Px(16.0),
+                        padding: UiRect::all(Val::Px(24.0)),
+                        margin: UiRect::top(Val::Px(20.0)),
+                        ..default()
+                    },
+                ))
+                .with_children(|panel| {
+                    panel.spawn((
+                        menu_button("Luptă nouă", CREAM, BUTTON_NORMAL, &ui_font),
+                        MenuAction::NewGame,
+                    ));
+                    if has_save {
+                        panel.spawn((
+                            menu_button("Continuă", CREAM, BUTTON_NORMAL, &ui_font),
+                            MenuAction::Continue,
+                        ));
+                    } else {
+                        // No (valid) save to resume: a greyed-out, inert marker.
+                        panel.spawn((
+                            menu_button("Continuă", TEXT_DISABLED, BUTTON_DISABLED, &ui_font),
+                            DisabledButton,
+                        ));
+                    }
+                    panel.spawn((
+                        menu_button("Setări", CREAM, BUTTON_NORMAL, &ui_font),
+                        MenuAction::Settings,
+                    ));
+                    #[cfg(not(target_arch = "wasm32"))]
+                    panel.spawn((
+                        menu_button("Ieși", CREAM, BUTTON_NORMAL, &ui_font),
+                        MenuAction::Quit,
+                    ));
+                });
         });
+}
+
+/// A thin gold rule flanked by two diamonds — the "motif divider" framing the
+/// menu title, echoing the embroidered ii cross-stitch used on the panel
+/// border.
+fn motif_divider(ui_font: &UiFont) -> impl Bundle {
+    (
+        Text::new("* -- * -- *"),
+        ui_font.text_font(20.0),
+        TextColor(GOLD),
+    )
 }
 
 /// A menu button with a centered text label.

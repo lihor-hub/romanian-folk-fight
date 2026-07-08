@@ -9,8 +9,11 @@ use crate::character::{AttributeKind, Health, PlayerFighter, Stamina, stats};
 use crate::combat::hud::bar_percent;
 use crate::core::{GameState, UiFont};
 use crate::creation::PlayerCharacter;
-use crate::menu::{BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK};
 use crate::save::SaveRequested;
+use crate::theme::{
+    BAR_TRACK, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK, PanelTexture,
+    STAMINA_FILL, panel_bundle,
+};
 use crate::ui_widgets::{attribute_row::spawn_attribute_row, wide_button};
 
 use super::{FightOutcome, Level, LevelUpDraft, Wallet, reset_run, top_up_pool, xp_to_next};
@@ -19,10 +22,6 @@ use super::{FightOutcome, Level, LevelUpDraft, Wallet, reset_run, top_up_pool, x
 const XP_BAR_WIDTH: f32 = 300.0;
 /// Height of the XP progress bar.
 const XP_BAR_HEIGHT: f32 = 12.0;
-/// Track color of the XP bar (same tone as the HUD pool bars).
-const XP_BAR_TRACK: Color = Color::srgb(0.16, 0.14, 0.13);
-/// Fill color of the XP bar (same tone as the HUD stamina bar).
-const XP_BAR_FILL: Color = Color::srgb(0.88, 0.74, 0.22);
 
 /// Marker for the victory-result screen root; despawned by
 /// [`crate::core::despawn_screen`] on `OnExit(GameState::FightResult)`.
@@ -90,6 +89,7 @@ pub(super) fn spawn_result_screen(
     level: Res<Level>,
     player: Option<Res<PlayerCharacter>>,
     ui_font: Res<UiFont>,
+    panel_texture: Res<PanelTexture>,
 ) {
     let (reward, xp) = match outcome {
         Some(outcome) => (outcome.reward, outcome.xp),
@@ -105,59 +105,75 @@ pub(super) fn spawn_result_screen(
         .map(|player| LevelUpDraft::new(player.attributes, level.unspent_points));
     commands
         .spawn((screen_root(), ResultScreen))
-        .with_children(|parent| {
-            parent.spawn(screen_title("Victorie!", &ui_font));
-            parent.spawn(screen_line(
-                format!("Recompensă: {reward} galbeni"),
-                &ui_font,
-            ));
-            parent.spawn(screen_line(format!("Experiență: {xp} XP"), &ui_font));
-            parent.spawn(screen_line(
-                format!("Pungă: {} galbeni", wallet.0),
-                &ui_font,
-            ));
-            parent.spawn(screen_line(
-                format!(
-                    "Nivel {} — XP: {}/{}",
-                    level.level,
-                    level.xp,
-                    xp_to_next(level.level)
-                ),
-                &ui_font,
-            ));
-            parent.spawn(xp_bar(&level));
-            if let Some(draft) = &draft {
-                spawn_allocation_panel(parent, draft, &ui_font);
-            }
-            parent.spawn((wide_button("La prăvălie", &ui_font), ResultAction::GoToShop));
-            parent.spawn((
-                wide_button("Lupta următoare", &ui_font),
-                ResultAction::NextFight,
-            ));
+        .with_children(|screen| {
+            screen
+                .spawn(panel_bundle(
+                    &panel_texture,
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        row_gap: Val::Px(16.0),
+                        padding: UiRect::all(Val::Px(28.0)),
+                        ..default()
+                    },
+                ))
+                .with_children(|parent| {
+                    parent.spawn(screen_title("Victorie!", &ui_font));
+                    parent.spawn(screen_line(
+                        format!("Recompensă: {reward} galbeni"),
+                        &ui_font,
+                    ));
+                    parent.spawn(screen_line(format!("Experiență: {xp} XP"), &ui_font));
+                    parent.spawn(screen_line(
+                        format!("Pungă: {} galbeni", wallet.0),
+                        &ui_font,
+                    ));
+                    parent.spawn(screen_line(
+                        format!(
+                            "Nivel {} — XP: {}/{}",
+                            level.level,
+                            level.xp,
+                            xp_to_next(level.level)
+                        ),
+                        &ui_font,
+                    ));
+                    parent.spawn(xp_bar(&level));
+                    if let Some(draft) = &draft {
+                        spawn_allocation_panel(parent, draft, &ui_font);
+                    }
+                    parent.spawn((wide_button("La prăvălie", &ui_font), ResultAction::GoToShop));
+                    parent.spawn((
+                        wide_button("Lupta următoare", &ui_font),
+                        ResultAction::NextFight,
+                    ));
+                });
         });
     if let Some(draft) = draft {
         commands.insert_resource(draft);
     }
 }
 
-/// The XP progress bar: a dark track with a fill sized to the progress
-/// towards the next level (same visual language as the HUD pool bars).
+/// The XP progress bar: a carved-wood track with a thin gold edge and a fill
+/// sized to the progress towards the next level (same visual language as the
+/// HUD pool bars).
 fn xp_bar(level: &Level) -> impl Bundle {
     let percent = bar_percent(level.xp as i32, xp_to_next(level.level) as i32);
     (
         Node {
             width: Val::Px(XP_BAR_WIDTH),
             height: Val::Px(XP_BAR_HEIGHT),
+            border: UiRect::all(Val::Px(1.5)),
             ..default()
         },
-        BackgroundColor(XP_BAR_TRACK),
+        BackgroundColor(BAR_TRACK),
+        BorderColor::all(crate::theme::GOLD),
         children![(
             Node {
                 width: Val::Percent(percent),
                 height: Val::Percent(100.0),
                 ..default()
             },
-            BackgroundColor(XP_BAR_FILL),
+            BackgroundColor(STAMINA_FILL),
         )],
     )
 }

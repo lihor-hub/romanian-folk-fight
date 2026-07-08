@@ -21,9 +21,9 @@ use bevy::prelude::*;
 
 use crate::combat::{CombatEvent, CombatLogEvent};
 use crate::core::{GameState, UiFont, despawn_screen};
-use crate::menu::{BUTTON_NORMAL, CREAM};
 use crate::roster::LadderProgress;
 use crate::shop::OwnedItems;
+use crate::theme::{BUTTON_NORMAL, CREAM};
 
 /// Session-scoped volume/mute settings applied to every spawned sound and,
 /// live, to every playing sink whenever they change.

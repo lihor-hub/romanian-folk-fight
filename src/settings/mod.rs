@@ -16,8 +16,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::AudioSettings;
 use crate::core::UiFont;
-use crate::menu::{BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK};
 use crate::save::{SaveBackend, platform_backend};
+use crate::theme::{
+    BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, PanelTexture, SCRIM_HEAVY, panel_bundle,
+};
 use crate::ui_widgets::{attribute_row::spawn_stepper_row, wide_button, wide_button_labeled};
 
 /// The version written into every stored settings blob; any other version is
@@ -162,8 +164,6 @@ enum SettingsLabel {
     Mute,
 }
 
-const SCRIM: Color = Color::srgba(0.0, 0.0, 0.0, 0.75);
-
 pub struct SettingsPlugin;
 
 impl Plugin for SettingsPlugin {
@@ -218,7 +218,12 @@ fn mute_label(muted: bool) -> &'static str {
 
 /// Spawns the settings scrim and panel above everything else (the pause
 /// overlay sits at `GlobalZIndex(10)`).
-fn spawn_overlay(mut commands: Commands, audio: Res<AudioSettings>, ui_font: Res<UiFont>) {
+fn spawn_overlay(
+    mut commands: Commands,
+    audio: Res<AudioSettings>,
+    ui_font: Res<UiFont>,
+    panel_texture: Res<PanelTexture>,
+) {
     commands
         .spawn((
             SettingsOverlay,
@@ -230,12 +235,13 @@ fn spawn_overlay(mut commands: Commands, audio: Res<AudioSettings>, ui_font: Res
                 align_items: AlignItems::Center,
                 ..default()
             },
-            BackgroundColor(SCRIM),
+            BackgroundColor(SCRIM_HEAVY),
             GlobalZIndex(20),
         ))
         .with_children(|parent| {
             parent
-                .spawn((
+                .spawn(panel_bundle(
+                    &panel_texture,
                     Node {
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
@@ -243,7 +249,6 @@ fn spawn_overlay(mut commands: Commands, audio: Res<AudioSettings>, ui_font: Res
                         padding: UiRect::all(Val::Px(28.0)),
                         ..default()
                     },
-                    BackgroundColor(NIGHT_BLACK),
                 ))
                 .with_children(|panel| {
                     panel.spawn((

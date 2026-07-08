@@ -17,6 +17,7 @@ pub mod roster;
 pub mod save;
 pub mod settings;
 pub mod shop;
+pub mod theme;
 pub mod ui_widgets;
 
 use bevy::prelude::*;

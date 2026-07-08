@@ -24,6 +24,21 @@ pending replacement by bespoke final art.
 | `sprites/zmeu.png` | Zmeu | self-generated | CC0 1.0 |
 | `sprites/zmeul_zmeilor.png` | Zmeul Zmeilor | self-generated | CC0 1.0 |
 
+## UI panel border (`assets/ui/`)
+
+The embroidery-motif 9-slice panel border below is **self-generated
+placeholder art** produced by `scripts/generate-ui-panel.py` for this
+project (issue #28: UI reskin), following `docs/art-direction.md` — a
+geometric cross-stitch (ii) diamond motif in gold on a deep-red band, framed
+by black corners, around a dark translucent center. It is dedicated to the
+public domain (**CC0 1.0**,
+<https://creativecommons.org/publicdomain/zero/1.0/>) and is pending
+replacement by bespoke final art.
+
+| File | Depicts | Source | License |
+| --- | --- | --- | --- |
+| `ui/panel_border.png` | 9-slice embroidery panel border | self-generated | CC0 1.0 |
+
 ## Arena backgrounds (`assets/backgrounds/`)
 
 All parallax background layers below are **self-generated placeholder art**

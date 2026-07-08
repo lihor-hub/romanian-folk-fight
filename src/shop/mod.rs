@@ -13,12 +13,13 @@ use crate::character::{Attributes, PlayerFighter, stats};
 use crate::core::{GameState, UiFont, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::items::{CATALOG, Equipment, Item, ItemId, Slot};
-use crate::menu::{
-    BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, DisabledButton,
-    NIGHT_BLACK, TEXT_DISABLED,
-};
+use crate::menu::DisabledButton;
 use crate::progression::Wallet;
 use crate::save::SaveRequested;
+use crate::theme::{
+    BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK,
+    PanelTexture, TEXT_DISABLED, panel_bundle,
+};
 use crate::ui_widgets::wide_button;
 
 /// The items bought this run: a set of catalog ids. Persists across fights
@@ -238,6 +239,7 @@ fn spawn_shop_screen(
     equipment: Res<PlayerEquipment>,
     player: Option<Res<PlayerCharacter>>,
     ui_font: Res<UiFont>,
+    panel_texture: Res<PanelTexture>,
 ) {
     let attributes = player_attributes(player);
     commands
@@ -286,7 +288,7 @@ fn spawn_shop_screen(
                 ));
                 for item in CATALOG.iter().filter(|item| item.slot == slot) {
                     let state = ItemButtonState::of(item.id, &wallet, &owned, &equipment);
-                    spawn_item_row(parent, item, state, &ui_font);
+                    spawn_item_row(parent, item, state, &ui_font, &panel_texture);
                 }
             }
             // Live stat summary: purchases visibly matter.
@@ -332,13 +334,19 @@ fn spawn_item_row(
     item: &Item,
     state: ItemButtonState,
     ui_font: &UiFont,
+    panel_texture: &PanelTexture,
 ) {
     parent
-        .spawn(Node {
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(12.0),
-            ..default()
-        })
+        .spawn(panel_bundle(
+            panel_texture,
+            Node {
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(12.0),
+                padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                margin: UiRect::vertical(Val::Px(2.0)),
+                ..default()
+            },
+        ))
         .with_children(|row| {
             row.spawn((
                 column(220.0),
