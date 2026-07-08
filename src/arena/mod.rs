@@ -15,6 +15,9 @@ use crate::character::{Attributes, EnemyFighter, PlayerFighter, spawn_fighter};
 use crate::combat::AiProfile;
 use crate::core::{GameState, UiFont, despawn_screen};
 use crate::creation::PlayerCharacter;
+use crate::cutout::{
+    CutoutRig, CutoutRigTemplate, enemy_template, human_template, spawn_cutout_rig,
+};
 use crate::items::{Equipment, GearMotion, ItemId, Slot, item_visual};
 use crate::roster::{Boss, LadderProgress};
 use crate::theme::{BOSS_LABEL_COLOR, CREAM, GROUND_COLOR};
@@ -94,7 +97,14 @@ fn spawn_arena(
         // fighters to exist.
         return;
     }
-    spawn_scene(commands, &player, ladder, &sheets, &backgrounds, &ui_font);
+    spawn_scene(
+        commands,
+        &player,
+        ladder,
+        &backgrounds,
+        &ui_font,
+        asset_server.as_deref(),
+    );
 }
 
 /// The loading-guard retry: once the sheets finish loading mid-fight-screen,
@@ -117,7 +127,14 @@ fn spawn_arena_when_ready(
     if !spawned.is_empty() || !sheets.ready(asset_server.as_deref()) {
         return;
     }
-    spawn_scene(commands, &player, ladder, &sheets, &backgrounds, &ui_font);
+    spawn_scene(
+        commands,
+        &player,
+        ladder,
+        &backgrounds,
+        &ui_font,
+        asset_server.as_deref(),
+    );
 }
 
 /// Builds the whole fight scene: scenery quads, the player's fighter, and
@@ -128,9 +145,9 @@ fn spawn_scene(
     mut commands: Commands,
     player: &PlayerCharacter,
     ladder: Option<Res<LadderProgress>>,
-    sheets: &FighterSpriteSheets,
     backgrounds: &ArenaBackgrounds,
     ui_font: &UiFont,
+    asset_server: Option<&AssetServer>,
 ) {
     let ladder = ladder.map(|ladder| *ladder).unwrap_or_default();
     let opponent = ladder.opponent();
@@ -142,10 +159,11 @@ fn spawn_scene(
         player.attributes,
         PlayerFighter,
         PLAYER_ANCHOR,
-        // The player faces right, towards the opponent.
-        fighter_sprite(sheets.player.clone(), sheets, false),
+        human_template(),
+        false,
         CREAM,
         ui_font,
+        asset_server,
     );
     let enemy = spawn_arena_fighter(
         &mut commands,
@@ -158,14 +176,15 @@ fn spawn_scene(
             },
         ),
         ENEMY_ANCHOR,
-        // The opponent faces left, back towards the player.
-        fighter_sprite(sheets.opponent(ladder.0), sheets, true),
+        enemy_template(),
+        true,
         if opponent.is_boss {
             BOSS_LABEL_COLOR
         } else {
             CREAM
         },
         ui_font,
+        asset_server,
     );
     let mut equipment = Equipment::default();
     for &id in opponent.equipment {
@@ -189,22 +208,6 @@ fn spawn_scenery(commands: &mut Commands) {
     ));
 }
 
-/// The animated sprite of one fighter: its sheet over the shared atlas
-/// layout, opened on the first idle frame. `flip_x` mirrors the
-/// right-facing art for the opponent side.
-fn fighter_sprite(sheet: Handle<Image>, sheets: &FighterSpriteSheets, flip_x: bool) -> Sprite {
-    Sprite {
-        flip_x,
-        ..Sprite::from_atlas_image(
-            sheet,
-            TextureAtlas {
-                layout: sheets.layout.clone(),
-                index: FighterClip::Idle.animation().first,
-            },
-        )
-    }
-}
-
 /// Spawns one fighter through the shared [`spawn_fighter`] (so it carries the
 /// #8 components and full pools), then dresses it with the arena visuals: its
 /// animated sprite at its anchor (starting on the idle loop) and a
@@ -219,9 +222,11 @@ fn spawn_arena_fighter(
     attrs: Attributes,
     marker: impl Bundle,
     anchor: Transform,
-    sprite: Sprite,
+    template: CutoutRigTemplate,
+    flip_x: bool,
     label_color: Color,
     ui_font: &UiFont,
+    asset_server: Option<&AssetServer>,
 ) -> Entity {
     let name = name.into();
     let label = name.clone();
@@ -230,7 +235,6 @@ fn spawn_arena_fighter(
         .entity(fighter)
         .insert((
             ArenaScreen,
-            sprite,
             FighterClip::Idle,
             FighterClip::Idle.animation(),
             anchor,
@@ -243,6 +247,7 @@ fn spawn_arena_fighter(
                 Transform::from_xyz(0.0, LABEL_OFFSET_Y, 0.1),
             ));
         });
+    spawn_cutout_rig(commands, fighter, template, asset_server, flip_x);
     fighter
 }
 
@@ -339,7 +344,12 @@ fn gear_sprite(asset_path: &'static str, asset_server: Option<&AssetServer>) -> 
 /// and applies a small local transform so static overlay art feels attached
 /// to hands, shield arm, head, torso, or feet during each clip.
 fn sync_gear_visual_layers(
-    fighters: Query<(&FighterClip, &Sprite)>,
+    fighters: Query<(
+        &FighterClip,
+        &animation::SpriteAnimation,
+        Option<&Sprite>,
+        Option<&CutoutRig>,
+    )>,
     mut layers: Query<(
         &GearVisualLayer,
         &ChildOf,
@@ -348,22 +358,19 @@ fn sync_gear_visual_layers(
     )>,
 ) {
     for (layer, child_of, mut state, mut transform) in &mut layers {
-        let Ok((clip, fighter_sprite)) = fighters.get(child_of.parent()) else {
+        let Ok((clip, anim, sprite, rig)) = fighters.get(child_of.parent()) else {
             continue;
         };
-        let frame = fighter_sprite
-            .texture_atlas
+        let frame = sprite
+            .and_then(|sprite| sprite.texture_atlas.as_ref())
             .as_ref()
             .map(|atlas| atlas.index)
-            .unwrap_or_else(|| clip.animation().first);
+            .unwrap_or_else(|| anim.current_frame());
+        let flip_x = sprite
+            .map(|sprite| sprite.flip_x)
+            .unwrap_or_else(|| rig.map(|rig| rig.flip_x).unwrap_or(false));
         *state = GearAnimationState { clip: *clip, frame };
-        *transform = gear_local_transform(
-            layer.motion,
-            *clip,
-            frame,
-            layer.z_offset,
-            fighter_sprite.flip_x,
-        );
+        *transform = gear_local_transform(layer.motion, *clip, frame, layer.z_offset, flip_x);
     }
 }
 
@@ -465,6 +472,9 @@ mod tests {
     use super::*;
     use crate::character::{Fighter, FighterName, Health, Stamina, stats};
     use crate::core::CorePlugin;
+    use crate::cutout::{
+        CutoutPartMarker, CutoutRig, CutoutTemplate, enemy_template, human_template,
+    };
     use crate::items::{ItemId, Slot};
     use crate::roster::LADDER;
     use bevy::state::app::StatesPlugin;
@@ -614,6 +624,54 @@ mod tests {
         assert_eq!(player, PLAYER_ANCHOR.translation);
         assert_eq!(enemy, ENEMY_ANCHOR.translation);
         assert!(player.x < 0.0 && enemy.x > 0.0, "opposite sides");
+    }
+
+    fn cutout_child_count(app: &mut App, root: Entity) -> usize {
+        let children = app
+            .world()
+            .get::<Children>(root)
+            .expect("fighter has cutout children")
+            .to_vec();
+        children
+            .into_iter()
+            .filter(|child| app.world().get::<CutoutPartMarker>(*child).is_some())
+            .count()
+    }
+
+    #[test]
+    fn arena_fighters_spawn_cutout_rigs_instead_of_root_body_sprites() {
+        let mut app = test_app();
+        let (player, player_rig, player_has_sprite) = app
+            .world_mut()
+            .query_filtered::<(Entity, &CutoutRig, Has<Sprite>), With<PlayerFighter>>()
+            .single(app.world())
+            .expect("player fighter has a cutout rig");
+        assert_eq!(player_rig.template, CutoutTemplate::Human);
+        assert!(!player_rig.flip_x);
+        assert!(
+            !player_has_sprite,
+            "the body is rendered by cutout children, not a root sprite sheet"
+        );
+        assert_eq!(
+            cutout_child_count(&mut app, player),
+            human_template().parts.len()
+        );
+
+        let (enemy, enemy_rig, enemy_has_sprite) = app
+            .world_mut()
+            .query_filtered::<(Entity, &CutoutRig, Has<Sprite>), With<EnemyFighter>>()
+            .single(app.world())
+            .expect("enemy fighter has a cutout rig");
+        assert_eq!(enemy_rig.template, CutoutTemplate::Enemy);
+        assert!(
+            enemy_rig.flip_x,
+            "enemy source art is mirrored in the arena"
+        );
+        assert!(!enemy_has_sprite);
+        assert_eq!(
+            cutout_child_count(&mut app, enemy),
+            enemy_template().parts.len()
+        );
     }
 
     #[test]
@@ -867,21 +925,13 @@ mod tests {
 
     fn set_player_clip(app: &mut App, clip: FighterClip, frame: usize) {
         let world = app.world_mut();
-        let (mut current, mut animation, mut sprite) = world
-            .query_filtered::<(
-                &mut FighterClip,
-                &mut animation::SpriteAnimation,
-                &mut Sprite,
-            ), With<PlayerFighter>>()
+        let (mut current, mut animation) = world
+            .query_filtered::<(&mut FighterClip, &mut animation::SpriteAnimation), With<PlayerFighter>>()
             .single_mut(world)
             .expect("player fighter exists");
         *current = clip;
         *animation = clip.animation();
-        sprite
-            .texture_atlas
-            .as_mut()
-            .expect("fighter has a texture atlas")
-            .index = frame;
+        animation.set_current_frame(frame);
     }
 
     #[test]

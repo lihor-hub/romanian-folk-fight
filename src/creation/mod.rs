@@ -12,6 +12,7 @@ pub use draft::{AttributeKind, CharacterDraft, FOLK_NAMES, FREE_POINTS};
 
 use crate::character::{Attributes, stats};
 use crate::core::{GameState, UiFont, despawn_screen};
+use crate::cutout::{human_template, spawn_cutout_rig};
 use crate::menu::DisabledButton;
 use crate::theme::{
     BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK,
@@ -86,7 +87,18 @@ impl Plugin for CreationPlugin {
     }
 }
 
-fn spawn_creation_screen(mut commands: Commands, draft: Res<CharacterDraft>, ui_font: Res<UiFont>) {
+fn spawn_creation_screen(
+    mut commands: Commands,
+    draft: Res<CharacterDraft>,
+    ui_font: Res<UiFont>,
+    asset_server: Option<Res<AssetServer>>,
+) {
+    commands.spawn((
+        CreationScreen,
+        Sprite::from_color(NIGHT_BLACK, Vec2::new(800.0, 600.0)),
+        Transform::from_xyz(0.0, 0.0, -40.0),
+    ));
+
     commands
         .spawn((
             CreationScreen,
@@ -103,7 +115,6 @@ fn spawn_creation_screen(mut commands: Commands, draft: Res<CharacterDraft>, ui_
                 overflow: Overflow::scroll_y(),
                 ..default()
             },
-            BackgroundColor(NIGHT_BLACK),
             ScrollPosition::default(),
             crate::ui_widgets::Scrollable,
         ))
@@ -185,6 +196,20 @@ fn spawn_creation_screen(mut commands: Commands, draft: Res<CharacterDraft>, ui_
             ));
             parent.spawn((wide_button("Înapoi", &ui_font), CreationAction::Back));
         });
+
+    let preview = commands
+        .spawn((
+            CreationScreen,
+            Transform::from_xyz(255.0, 5.0, 25.0).with_scale(Vec3::splat(0.82)),
+        ))
+        .id();
+    spawn_cutout_rig(
+        &mut commands,
+        preview,
+        human_template(),
+        asset_server.as_deref(),
+        false,
+    );
 }
 
 /// The "points remaining" label text.
@@ -328,6 +353,7 @@ fn update_labels(draft: Res<CharacterDraft>, mut labels: Query<(&mut Text, &Crea
 mod tests {
     use super::*;
     use crate::core::CorePlugin;
+    use crate::cutout::{CutoutPartMarker, CutoutRig, human_template};
     use bevy::state::app::StatesPlugin;
 
     /// Headless app already sitting on the creation screen.
@@ -378,7 +404,7 @@ mod tests {
         let mut app = test_app();
         let roots = app
             .world_mut()
-            .query_filtered::<(), With<CreationScreen>>()
+            .query_filtered::<(), (With<CreationScreen>, With<Node>)>()
             .iter(app.world())
             .count();
         assert_eq!(roots, 1, "creation screen root spawned");
@@ -389,6 +415,26 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(buttons, 12);
+    }
+
+    #[test]
+    fn entering_creation_spawns_a_cutout_preview() {
+        let mut app = test_app();
+        let preview = app
+            .world_mut()
+            .query_filtered::<Entity, (With<CreationScreen>, With<CutoutRig>)>()
+            .single(app.world())
+            .expect("one cutout preview root exists");
+        let children = app
+            .world()
+            .get::<Children>(preview)
+            .expect("preview has rig children")
+            .to_vec();
+        let parts = children
+            .into_iter()
+            .filter(|child| app.world().get::<CutoutPartMarker>(*child).is_some())
+            .count();
+        assert_eq!(parts, human_template().parts.len());
     }
 
     #[test]

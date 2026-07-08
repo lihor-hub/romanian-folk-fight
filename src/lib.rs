@@ -10,6 +10,7 @@ pub mod character;
 pub mod combat;
 pub mod core;
 pub mod creation;
+pub mod cutout;
 pub mod items;
 pub mod menu;
 pub mod progression;
@@ -29,6 +30,7 @@ impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(core::CorePlugin);
         app.add_plugins(character::CharacterPlugin);
+        app.add_plugins(cutout::CutoutRigPlugin);
         app.add_plugins(menu::MenuPlugin);
         app.add_plugins(creation::CreationPlugin);
         app.add_plugins(items::ItemsPlugin);
