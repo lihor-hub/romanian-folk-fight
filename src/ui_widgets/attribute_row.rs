@@ -24,6 +24,21 @@ pub fn spawn_attribute_row(
     increase: impl Bundle,
     value_label: impl Bundle,
 ) {
+    spawn_stepper_row(parent, kind.label(), value, decrease, increase, value_label);
+}
+
+/// The generic `-` / value / `+` stepper row behind [`spawn_attribute_row`],
+/// reused by the settings overlay's volume steppers (#30): any label, a `-`
+/// button carrying `decrease`, the current `value` carrying `value_label`,
+/// and a `+` button carrying `increase`.
+pub fn spawn_stepper_row(
+    parent: &mut ChildSpawnerCommands,
+    label: &str,
+    value: u32,
+    decrease: impl Bundle,
+    increase: impl Bundle,
+    value_label: impl Bundle,
+) {
     parent
         .spawn(Node {
             flex_direction: FlexDirection::Row,
@@ -38,7 +53,7 @@ pub fn spawn_attribute_row(
             })
             .with_children(|slot| {
                 slot.spawn((
-                    Text::new(kind.label()),
+                    Text::new(label),
                     TextFont {
                         font_size: FontSize::Px(24.0),
                         ..default()

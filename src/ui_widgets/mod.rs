@@ -19,8 +19,27 @@ pub fn wide_button(label: &str) -> impl Bundle {
     button_bundle(label, Val::Px(260.0), Val::Px(56.0), 24.0)
 }
 
+/// A [`wide_button`] whose label text additionally carries `text_marker`, for
+/// callers that update the label at runtime (e.g. the settings overlay's mute
+/// toggle).
+pub fn wide_button_labeled(label: &str, text_marker: impl Bundle) -> impl Bundle {
+    labeled_button_bundle(label, Val::Px(260.0), Val::Px(56.0), 24.0, text_marker)
+}
+
 /// A button with a centered text label, mirroring the main-menu buttons.
 pub fn button_bundle(label: &str, width: Val, height: Val, font_size: f32) -> impl Bundle {
+    labeled_button_bundle(label, width, height, font_size, ())
+}
+
+/// The shared shape behind every button helper: the label text carries
+/// `text_marker` (`()` when the caller never touches the label again).
+pub fn labeled_button_bundle(
+    label: &str,
+    width: Val,
+    height: Val,
+    font_size: f32,
+    text_marker: impl Bundle,
+) -> impl Bundle {
     (
         Button,
         Node {
@@ -38,6 +57,7 @@ pub fn button_bundle(label: &str, width: Val, height: Val, font_size: f32) -> im
                 ..default()
             },
             TextColor(CREAM),
+            text_marker,
         )],
     )
 }

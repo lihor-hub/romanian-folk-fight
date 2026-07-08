@@ -268,8 +268,24 @@ impl SaveStore {
 
 impl Default for SaveStore {
     fn default() -> Self {
-        Self(Box::new(platform::PlatformBackend))
+        Self(Box::new(platform_backend("save.json", STORAGE_KEY)))
     }
+}
+
+/// The platform backend at a custom location: a file named `file_name` under
+/// the game's data directory on native, the `storage_key` entry of
+/// `localStorage` on wasm. Lets other persisted blobs (e.g. the audio
+/// settings, #30) reuse the same storage machinery under their own key.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn platform_backend(file_name: &'static str, _storage_key: &'static str) -> impl SaveBackend {
+    platform::PlatformBackend { file_name }
+}
+
+/// See the native `platform_backend`; on wasm the `storage_key` selects the
+/// `localStorage` entry and the file name is unused.
+#[cfg(target_arch = "wasm32")]
+pub fn platform_backend(_file_name: &'static str, storage_key: &'static str) -> impl SaveBackend {
+    platform::PlatformBackend { storage_key }
 }
 
 /// Loads and validates the stored save. A snapshot that fails validation
@@ -294,20 +310,26 @@ mod platform {
 
     use super::SaveBackend;
 
-    pub struct PlatformBackend;
+    pub struct PlatformBackend {
+        /// File name under the game's data directory (e.g. `save.json`).
+        pub file_name: &'static str,
+    }
 
-    /// The save file path; `None` when the platform has no data directory.
-    fn save_path() -> Option<PathBuf> {
-        Some(
-            dirs::data_dir()?
-                .join("romanian-folk-fight")
-                .join("save.json"),
-        )
+    impl PlatformBackend {
+        /// The backing file path; `None` when the platform has no data
+        /// directory.
+        fn path(&self) -> Option<PathBuf> {
+            Some(
+                dirs::data_dir()?
+                    .join("romanian-folk-fight")
+                    .join(self.file_name),
+            )
+        }
     }
 
     impl SaveBackend for PlatformBackend {
         fn store(&self, json: &str) {
-            let Some(path) = save_path() else {
+            let Some(path) = self.path() else {
                 warn!("no platform data directory; save not written");
                 return;
             };
@@ -323,11 +345,11 @@ mod platform {
         }
 
         fn load(&self) -> Option<String> {
-            std::fs::read_to_string(save_path()?).ok()
+            std::fs::read_to_string(self.path()?).ok()
         }
 
         fn clear(&self) {
-            if let Some(path) = save_path() {
+            if let Some(path) = self.path() {
                 // A missing file is already "cleared"; other errors leave a
                 // stale save behind, which the version/validation guard on
                 // load keeps harmless.
@@ -342,9 +364,12 @@ mod platform {
 mod platform {
     use bevy::prelude::warn;
 
-    use super::{STORAGE_KEY, SaveBackend};
+    use super::SaveBackend;
 
-    pub struct PlatformBackend;
+    pub struct PlatformBackend {
+        /// The `localStorage` key this backend reads and writes.
+        pub storage_key: &'static str,
+    }
 
     /// The window's local storage; `None` when unavailable (e.g. blocked by
     /// the browser).
@@ -356,7 +381,7 @@ mod platform {
         fn store(&self, json: &str) {
             match local_storage() {
                 Some(storage) => {
-                    if storage.set_item(STORAGE_KEY, json).is_err() {
+                    if storage.set_item(self.storage_key, json).is_err() {
                         warn!("could not write save to localStorage");
                     }
                 }
@@ -365,12 +390,12 @@ mod platform {
         }
 
         fn load(&self) -> Option<String> {
-            local_storage()?.get_item(STORAGE_KEY).ok().flatten()
+            local_storage()?.get_item(self.storage_key).ok().flatten()
         }
 
         fn clear(&self) {
             if let Some(storage) = local_storage() {
-                let _ = storage.remove_item(STORAGE_KEY);
+                let _ = storage.remove_item(self.storage_key);
             }
         }
     }
