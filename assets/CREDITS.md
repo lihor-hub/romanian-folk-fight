@@ -4,15 +4,31 @@ Every asset file in `assets/` is listed here with its source and license.
 
 ## Fighter cutout source sheets (`assets/fighters/`)
 
-The fighter cutout source sheet below was generated for this project with
-OpenAI image generation from the prompt documented in
-`docs/superpowers/plans/2026-07-08-first-pixel-art-assets.md`, then locally
-post-processed only to remove the chroma-key background. It is project-owned
+The fighter cutout source sheets below were generated for this project with
+OpenAI image generation from prompt briefs documented in
+`docs/superpowers/plans/`, then locally post-processed only to remove
+chroma-key backgrounds and resize the resulting PNGs. They are project-owned
 generated art and may be replaced by cleaned artist-authored parts.
 
 | File | Depicts | Source | License |
 | --- | --- | --- | --- |
 | `fighters/human/source/human_cutout_parts_v1.png` | Human/player pixel-art cutout body-part source sheet | OpenAI-generated for this project | Same as project assets unless superseded |
+| `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Starter gear pixel-art cutout source sheet | OpenAI-generated for this project | Same as project assets unless superseded |
+| `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Strigoi enemy pixel-art cutout body-part source sheet | OpenAI-generated for this project | Same as project assets unless superseded |
+| `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Zmeu boss pixel-art cutout body-part source sheet | OpenAI-generated for this project | Same as project assets unless superseded |
+
+## UI presentation source sheets (`assets/ui/source/`)
+
+The UI presentation source sheet below was generated for this project with
+OpenAI image generation from the prompt brief documented in
+`docs/superpowers/plans/2026-07-08-1554-next-pixel-art-asset-batch.md`, then
+locally post-processed only to remove the chroma-key background and resize the
+resulting PNG. It is project-owned generated art and may be replaced by cleaned
+artist-authored parts.
+
+| File | Depicts | Source | License |
+| --- | --- | --- | --- |
+| `ui/source/ui_presentation_motifs_v1.png` | Pixel-art UI presentation motifs and HUD frame source sheet | OpenAI-generated for this project | Same as project assets unless superseded |
 
 ## Sprites (`assets/sprites/`)
 
