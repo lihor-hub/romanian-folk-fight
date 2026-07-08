@@ -528,6 +528,7 @@ mod tests {
                 build: crate::character::BodyBuild::Sturdy,
                 hair: crate::character::HairStyle::Tied,
                 accent: crate::character::AccentColor::Gold,
+                ..PlayerAppearance::default()
             },
         };
         let level = Level {
@@ -581,6 +582,7 @@ mod tests {
                 build: crate::character::BodyBuild::Sturdy,
                 hair: crate::character::HairStyle::Tied,
                 accent: crate::character::AccentColor::Gold,
+                ..PlayerAppearance::default()
             }
         );
         assert_eq!(save.level, 4);
@@ -661,6 +663,48 @@ mod tests {
     }
 
     #[test]
+    fn a_v1_save_with_pre_taxonomy_appearance_defaults_new_fields() {
+        // A v1 save written before the CostumeStyle/HeadFeature/HairVariant
+        // taxonomy landed still carries only the original four appearance
+        // fields. It must load, keeping the authored quad and defaulting each
+        // missing dimension.
+        let json = r#"{"version":1,"name":"Făt-Frumos","attrs":{"putere":5,"agilitate":3,"vitalitate":7,"noroc":2},"appearance":{"skin_tone":"olive","build":"sturdy","hair":"tied","accent":"gold"},"level":4,"xp":120,"unspent_points":3,"wallet":365,"owned_items":["BataCiobaneasca","Palos","ScutDeLemn"],"equipped":["Palos","ScutDeLemn"],"ladder_progress":12,"lap":2}"#;
+        let save = SaveGame::from_json(json).expect("pre-taxonomy v1 save still loads");
+        assert_eq!(save.appearance.skin_tone, crate::character::SkinTone::Olive);
+        assert_eq!(save.appearance.build, crate::character::BodyBuild::Sturdy);
+        assert_eq!(save.appearance.hair, crate::character::HairStyle::Tied);
+        assert_eq!(save.appearance.accent, crate::character::AccentColor::Gold);
+        assert_eq!(
+            save.appearance.costume,
+            crate::character::CostumeStyle::default()
+        );
+        assert_eq!(
+            save.appearance.head_feature,
+            crate::character::HeadFeature::default()
+        );
+        assert_eq!(
+            save.appearance.hair_variant,
+            crate::character::HairVariant::default()
+        );
+    }
+
+    #[test]
+    fn preset_appearance_round_trips_new_taxonomy_fields() {
+        // Snapshot a run using an authored preset with a full taxonomy
+        // bundle, then confirm the JSON round-trip preserves every new
+        // field including CostumeStyle / HeadFeature / HairVariant.
+        use crate::creation::draft::HeroPreset;
+        let preset = HeroPreset::UceniculSolomonar;
+        let (mut player, level, wallet, owned, equipment, ladder) = sample_run();
+        player.appearance = preset.appearance();
+        let save = SaveGame::capture(&player, &level, &wallet, &owned, &equipment, &ladder);
+        assert_eq!(save.appearance, preset.appearance());
+        let json = save.to_json().expect("plain data serializes");
+        let restored = SaveGame::from_json(&json).expect("round-trip loads");
+        assert_eq!(restored.appearance, preset.appearance());
+    }
+
+    #[test]
     fn an_unknown_item_name_discards_the_save() {
         let mut save = sample_save();
         save.owned_items.push("SabiaLuiStefan".to_string());
@@ -734,6 +778,7 @@ mod tests {
                 build: crate::character::BodyBuild::Balanced,
                 hair: crate::character::HairStyle::Braided,
                 accent: crate::character::AccentColor::Storm,
+                ..PlayerAppearance::default()
             },
         });
         app.update();

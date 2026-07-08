@@ -688,6 +688,7 @@ mod tests {
             build: BodyBuild::Powerful,
             hair: HairStyle::Tied,
             accent: AccentColor::Storm,
+            ..PlayerAppearance::default()
         };
         let mut app = test_app_with(
             PlayerCharacter {

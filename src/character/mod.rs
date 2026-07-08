@@ -91,6 +91,11 @@ impl AttributeKind {
 }
 
 /// Stable, save-friendly appearance of the player hero.
+///
+/// New taxonomy fields (`costume`, `head_feature`, `hair_variant`) are marked
+/// `#[serde(default)]` so v1 saves written before those fields existed still
+/// deserialize cleanly, filling the missing dimensions from
+/// [`PlayerAppearance::default`].
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PlayerAppearance {
@@ -98,6 +103,12 @@ pub struct PlayerAppearance {
     pub build: BodyBuild,
     pub hair: HairStyle,
     pub accent: AccentColor,
+    #[serde(default)]
+    pub costume: CostumeStyle,
+    #[serde(default)]
+    pub head_feature: HeadFeature,
+    #[serde(default)]
+    pub hair_variant: HairVariant,
 }
 
 impl Default for PlayerAppearance {
@@ -107,6 +118,9 @@ impl Default for PlayerAppearance {
             build: BodyBuild::Balanced,
             hair: HairStyle::Braided,
             accent: AccentColor::Crimson,
+            costume: CostumeStyle::default(),
+            head_feature: HeadFeature::default(),
+            hair_variant: HairVariant::default(),
         }
     }
 }
@@ -199,6 +213,85 @@ impl AccentColor {
             Self::Forest => "Verde",
             Self::Gold => "Auriu",
             Self::Storm => "Cenușiu",
+        }
+    }
+}
+
+/// Preset-first costume silhouette worn over the base body. First-pass Wave 2
+/// taxonomy: one variant per predefined hero archetype so preset selection
+/// can resolve to a distinct authored outfit once art wiring lands. Kept as a
+/// stable, save-friendly enum with `snake_case` serialization.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CostumeStyle {
+    #[default]
+    HaiducCoat,
+    VoinicTunic,
+    CiobanCojoc,
+    SolomonarRobe,
+}
+
+impl CostumeStyle {
+    pub const ALL: [Self; 4] = [
+        Self::HaiducCoat,
+        Self::VoinicTunic,
+        Self::CiobanCojoc,
+        Self::SolomonarRobe,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::HaiducCoat => "Suman de haiduc",
+            Self::VoinicTunic => "Tunică de voinic",
+            Self::CiobanCojoc => "Cojoc ciobănesc",
+            Self::SolomonarRobe => "Robă solomonară",
+        }
+    }
+}
+
+/// Facial-hair choice layered on the head. Adds silhouette-level identity to
+/// preset heroes without doubling the hair/costume axes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeadFeature {
+    #[default]
+    Clean,
+    Moustache,
+    Beard,
+}
+
+impl HeadFeature {
+    pub const ALL: [Self; 3] = [Self::Clean, Self::Moustache, Self::Beard];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Clean => "Bărbierit",
+            Self::Moustache => "Mustață",
+            Self::Beard => "Barbă",
+        }
+    }
+}
+
+/// Per-style silhouette variant, so multiple "Long" or "Braided" cuts can
+/// coexist without doubling [`HairStyle`] cardinality. Individual asset
+/// bundles are wired up in a follow-up task.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HairVariant {
+    #[default]
+    Primary,
+    Alternate,
+    Ornate,
+}
+
+impl HairVariant {
+    pub const ALL: [Self; 3] = [Self::Primary, Self::Alternate, Self::Ornate];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Primary => "Standard",
+            Self::Alternate => "Alternativă",
+            Self::Ornate => "Ornat",
         }
     }
 }

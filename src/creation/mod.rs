@@ -804,7 +804,10 @@ mod tests {
     use super::*;
     use crate::character::{AccentColor, BodyBuild, HairStyle, SkinTone};
     use crate::core::CorePlugin;
-    use crate::cutout::{CutoutPartKind, CutoutPartMarker, GearVisualLayer, human_template};
+    use crate::cutout::{
+        CutoutPartKind, CutoutPartMarker, GearVisualLayer, human_template,
+        player_appearance_palette,
+    };
     use crate::items::ItemId;
     use crate::save::{SaveGame, SavePlugin, SaveStore};
     use bevy::state::app::StatesPlugin;
@@ -1138,6 +1141,7 @@ mod tests {
                 build: BodyBuild::Sturdy,
                 hair: HairStyle::Long,
                 accent: AccentColor::Forest,
+                ..PlayerAppearance::default()
             }
         );
         assert_eq!(
@@ -1268,5 +1272,86 @@ mod tests {
             label_text(&mut app, CreationLabel::Appearance(AppearanceField::Accent)),
             "Verde"
         );
+    }
+
+    fn preview_part_color(app: &mut App, kind: CutoutPartKind) -> Color {
+        app.world_mut()
+            .query::<(&CutoutPartMarker, &Sprite)>()
+            .iter(app.world())
+            .find(|(marker, _)| marker.kind == kind)
+            .map(|(_, sprite)| sprite.color)
+            .unwrap_or_else(|| panic!("preview part {kind:?} exists"))
+    }
+
+    #[test]
+    fn selecting_each_preset_paints_the_preview_with_its_bundle_palette() {
+        for preset in HeroPreset::ALL {
+            let mut app = test_app();
+            press(
+                &mut app,
+                CreationAction::SelectChoice(HeroChoice::Preset(preset)),
+            );
+            let palette = player_appearance_palette(preset.appearance());
+            assert_eq!(
+                preview_part_color(&mut app, CutoutPartKind::Torso),
+                palette.garment,
+                "{} torso reflects its accent color",
+                preset.name()
+            );
+            assert_eq!(
+                preview_part_color(&mut app, CutoutPartKind::Head),
+                palette.skin,
+                "{} head reflects its skin tone",
+                preset.name()
+            );
+            assert_eq!(
+                preview_part_color(&mut app, CutoutPartKind::Hair),
+                palette.hair,
+                "{} hair reflects its hair style color",
+                preset.name()
+            );
+            assert_eq!(
+                preview_part_color(&mut app, CutoutPartKind::FootFront),
+                palette.boot,
+                "{} boots use the shared boot color",
+                preset.name()
+            );
+            assert_eq!(
+                preview_part_color(&mut app, CutoutPartKind::UpperArmFront),
+                palette.cloth,
+                "{} sleeve limb-cloth follows the accent",
+                preset.name()
+            );
+        }
+    }
+
+    #[test]
+    fn switching_between_presets_repaints_the_preview_bundle() {
+        let mut app = test_app();
+        press(
+            &mut app,
+            CreationAction::SelectChoice(HeroChoice::Preset(HeroPreset::Haiducul)),
+        );
+        let haiducul_torso = preview_part_color(&mut app, CutoutPartKind::Torso);
+        let haiducul_head = preview_part_color(&mut app, CutoutPartKind::Head);
+
+        press(
+            &mut app,
+            CreationAction::SelectChoice(HeroChoice::Preset(HeroPreset::UceniculSolomonar)),
+        );
+        let solomonar_torso = preview_part_color(&mut app, CutoutPartKind::Torso);
+        let solomonar_head = preview_part_color(&mut app, CutoutPartKind::Head);
+
+        assert_ne!(
+            haiducul_torso, solomonar_torso,
+            "switching presets repaints the torso to the new accent"
+        );
+        assert_ne!(
+            haiducul_head, solomonar_head,
+            "switching presets repaints the head to the new skin tone"
+        );
+        let expected = player_appearance_palette(HeroPreset::UceniculSolomonar.appearance());
+        assert_eq!(solomonar_torso, expected.garment);
+        assert_eq!(solomonar_head, expected.skin);
     }
 }

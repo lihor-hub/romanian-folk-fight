@@ -783,6 +783,30 @@ fn apply_build(part: &mut CutoutPart, build: BodyBuild) {
     }
 }
 
+/// Resolved sprite colors for one saved [`PlayerAppearance`]. Exposed so
+/// creator preview tests can assert per-preset preview rig colors without
+/// duplicating the palette lookup tables.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlayerAppearancePalette {
+    pub skin: Color,
+    pub garment: Color,
+    pub cloth: Color,
+    pub hair: Color,
+    pub boot: Color,
+}
+
+/// Returns the sprite palette [`human_template_for`] paints onto each body
+/// part for `appearance`.
+pub fn player_appearance_palette(appearance: PlayerAppearance) -> PlayerAppearancePalette {
+    PlayerAppearancePalette {
+        skin: skin_color(appearance.skin_tone),
+        garment: accent_color(appearance.accent),
+        cloth: limb_cloth_color(appearance.accent),
+        hair: hair_color(appearance.hair),
+        boot: boot_color(),
+    }
+}
+
 fn skin_color(tone: SkinTone) -> Color {
     match tone {
         SkinTone::Fair => Color::srgb(0.92, 0.79, 0.66),

@@ -6,7 +6,10 @@
 
 use bevy::prelude::*;
 
-use crate::character::{AccentColor, Attributes, BodyBuild, HairStyle, PlayerAppearance, SkinTone};
+use crate::character::{
+    AccentColor, Attributes, BodyBuild, CostumeStyle, HairStyle, HairVariant, HeadFeature,
+    PlayerAppearance, SkinTone,
+};
 use crate::items::ItemId;
 // Re-exported so existing `creation::AttributeKind` users keep working after
 // the enum moved to `character` (its canonical home, next to `Attributes`).
@@ -127,24 +130,36 @@ impl HeroPreset {
                 build: BodyBuild::Lean,
                 hair: HairStyle::Long,
                 accent: AccentColor::Forest,
+                costume: CostumeStyle::HaiducCoat,
+                head_feature: HeadFeature::Moustache,
+                hair_variant: HairVariant::Primary,
             },
             Self::Voinicul => PlayerAppearance {
                 skin_tone: SkinTone::Warm,
                 build: BodyBuild::Powerful,
                 hair: HairStyle::Short,
                 accent: AccentColor::Crimson,
+                costume: CostumeStyle::VoinicTunic,
+                head_feature: HeadFeature::Clean,
+                hair_variant: HairVariant::Primary,
             },
             Self::Ciobanul => PlayerAppearance {
                 skin_tone: SkinTone::Fair,
                 build: BodyBuild::Sturdy,
                 hair: HairStyle::Tied,
                 accent: AccentColor::Gold,
+                costume: CostumeStyle::CiobanCojoc,
+                head_feature: HeadFeature::Beard,
+                hair_variant: HairVariant::Alternate,
             },
             Self::UceniculSolomonar => PlayerAppearance {
                 skin_tone: SkinTone::Deep,
                 build: BodyBuild::Balanced,
                 hair: HairStyle::Braided,
                 accent: AccentColor::Storm,
+                costume: CostumeStyle::SolomonarRobe,
+                head_feature: HeadFeature::Beard,
+                hair_variant: HairVariant::Ornate,
             },
         }
     }
@@ -360,6 +375,42 @@ impl CharacterDraft {
         cycle_previous(&mut self.appearance.accent, &AccentColor::ALL);
     }
 
+    pub fn costume(&self) -> CostumeStyle {
+        self.appearance.costume
+    }
+
+    pub fn next_costume(&mut self) {
+        cycle_next(&mut self.appearance.costume, &CostumeStyle::ALL);
+    }
+
+    pub fn previous_costume(&mut self) {
+        cycle_previous(&mut self.appearance.costume, &CostumeStyle::ALL);
+    }
+
+    pub fn head_feature(&self) -> HeadFeature {
+        self.appearance.head_feature
+    }
+
+    pub fn next_head_feature(&mut self) {
+        cycle_next(&mut self.appearance.head_feature, &HeadFeature::ALL);
+    }
+
+    pub fn previous_head_feature(&mut self) {
+        cycle_previous(&mut self.appearance.head_feature, &HeadFeature::ALL);
+    }
+
+    pub fn hair_variant(&self) -> HairVariant {
+        self.appearance.hair_variant
+    }
+
+    pub fn next_hair_variant(&mut self) {
+        cycle_next(&mut self.appearance.hair_variant, &HairVariant::ALL);
+    }
+
+    pub fn previous_hair_variant(&mut self) {
+        cycle_previous(&mut self.appearance.hair_variant, &HairVariant::ALL);
+    }
+
     /// Confirm is allowed only when all free points are spent.
     pub fn is_complete(&self) -> bool {
         self.points_remaining() == 0
@@ -566,5 +617,219 @@ mod tests {
         draft.reset();
         assert_eq!(draft, CharacterDraft::default());
         assert_eq!(draft.points_remaining(), FREE_POINTS);
+    }
+
+    #[test]
+    fn each_preset_resolves_to_its_authored_appearance_bundle() {
+        for (preset, expected) in [
+            (
+                HeroPreset::Haiducul,
+                PlayerAppearance {
+                    skin_tone: SkinTone::Olive,
+                    build: BodyBuild::Lean,
+                    hair: HairStyle::Long,
+                    accent: AccentColor::Forest,
+                    costume: CostumeStyle::HaiducCoat,
+                    head_feature: HeadFeature::Moustache,
+                    hair_variant: HairVariant::Primary,
+                },
+            ),
+            (
+                HeroPreset::Voinicul,
+                PlayerAppearance {
+                    skin_tone: SkinTone::Warm,
+                    build: BodyBuild::Powerful,
+                    hair: HairStyle::Short,
+                    accent: AccentColor::Crimson,
+                    costume: CostumeStyle::VoinicTunic,
+                    head_feature: HeadFeature::Clean,
+                    hair_variant: HairVariant::Primary,
+                },
+            ),
+            (
+                HeroPreset::Ciobanul,
+                PlayerAppearance {
+                    skin_tone: SkinTone::Fair,
+                    build: BodyBuild::Sturdy,
+                    hair: HairStyle::Tied,
+                    accent: AccentColor::Gold,
+                    costume: CostumeStyle::CiobanCojoc,
+                    head_feature: HeadFeature::Beard,
+                    hair_variant: HairVariant::Alternate,
+                },
+            ),
+            (
+                HeroPreset::UceniculSolomonar,
+                PlayerAppearance {
+                    skin_tone: SkinTone::Deep,
+                    build: BodyBuild::Balanced,
+                    hair: HairStyle::Braided,
+                    accent: AccentColor::Storm,
+                    costume: CostumeStyle::SolomonarRobe,
+                    head_feature: HeadFeature::Beard,
+                    hair_variant: HairVariant::Ornate,
+                },
+            ),
+        ] {
+            assert_eq!(
+                preset.appearance(),
+                expected,
+                "{} keeps its curated appearance bundle",
+                preset.name()
+            );
+        }
+    }
+
+    #[test]
+    fn preset_appearances_are_pairwise_distinct_across_every_field() {
+        let bundles: Vec<PlayerAppearance> =
+            HeroPreset::ALL.iter().map(|p| p.appearance()).collect();
+        for i in 0..bundles.len() {
+            for j in (i + 1)..bundles.len() {
+                let (a, b) = (bundles[i], bundles[j]);
+                assert_ne!(
+                    a.skin_tone,
+                    b.skin_tone,
+                    "presets {} and {} share a skin tone",
+                    HeroPreset::ALL[i].name(),
+                    HeroPreset::ALL[j].name()
+                );
+                assert_ne!(
+                    a.build,
+                    b.build,
+                    "presets {} and {} share a build",
+                    HeroPreset::ALL[i].name(),
+                    HeroPreset::ALL[j].name()
+                );
+                assert_ne!(
+                    a.hair,
+                    b.hair,
+                    "presets {} and {} share a hair style",
+                    HeroPreset::ALL[i].name(),
+                    HeroPreset::ALL[j].name()
+                );
+                assert_ne!(
+                    a.accent,
+                    b.accent,
+                    "presets {} and {} share an accent color",
+                    HeroPreset::ALL[i].name(),
+                    HeroPreset::ALL[j].name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn selecting_each_preset_repopulates_the_draft_appearance() {
+        for preset in HeroPreset::ALL {
+            let mut draft = CharacterDraft::default();
+            draft.select_choice(HeroChoice::Preset(preset));
+            assert_eq!(
+                draft.appearance(),
+                preset.appearance(),
+                "{} draft appearance matches the preset bundle",
+                preset.name()
+            );
+            assert_eq!(draft.attributes(), preset.attributes());
+            assert_eq!(draft.name(), preset.name());
+        }
+    }
+
+    #[test]
+    fn default_appearance_seeds_new_taxonomy_fields() {
+        let appearance = PlayerAppearance::default();
+        assert_eq!(appearance.costume, CostumeStyle::default());
+        assert_eq!(appearance.head_feature, HeadFeature::default());
+        assert_eq!(appearance.hair_variant, HairVariant::default());
+    }
+
+    #[test]
+    fn each_preset_binds_a_distinct_costume_style() {
+        let costumes: Vec<CostumeStyle> = HeroPreset::ALL
+            .iter()
+            .map(|p| p.appearance().costume)
+            .collect();
+        for i in 0..costumes.len() {
+            for j in (i + 1)..costumes.len() {
+                assert_ne!(
+                    costumes[i],
+                    costumes[j],
+                    "presets {} and {} share a costume style",
+                    HeroPreset::ALL[i].name(),
+                    HeroPreset::ALL[j].name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preset_head_feature_and_hair_variant_are_authored() {
+        for (preset, expected_feature, expected_variant) in [
+            (
+                HeroPreset::Haiducul,
+                HeadFeature::Moustache,
+                HairVariant::Primary,
+            ),
+            (
+                HeroPreset::Voinicul,
+                HeadFeature::Clean,
+                HairVariant::Primary,
+            ),
+            (
+                HeroPreset::Ciobanul,
+                HeadFeature::Beard,
+                HairVariant::Alternate,
+            ),
+            (
+                HeroPreset::UceniculSolomonar,
+                HeadFeature::Beard,
+                HairVariant::Ornate,
+            ),
+        ] {
+            let bundle = preset.appearance();
+            assert_eq!(
+                bundle.head_feature,
+                expected_feature,
+                "{} keeps its authored head feature",
+                preset.name()
+            );
+            assert_eq!(
+                bundle.hair_variant,
+                expected_variant,
+                "{} keeps its authored hair variant",
+                preset.name()
+            );
+        }
+    }
+
+    #[test]
+    fn appearance_cycles_wrap_for_new_taxonomy_fields() {
+        let mut draft = CharacterDraft::default();
+
+        draft.previous_costume();
+        assert_eq!(draft.costume(), CostumeStyle::SolomonarRobe);
+        draft.next_costume();
+        assert_eq!(draft.costume(), CostumeStyle::HaiducCoat);
+
+        draft.previous_head_feature();
+        assert_eq!(draft.head_feature(), HeadFeature::Beard);
+        draft.next_head_feature();
+        assert_eq!(draft.head_feature(), HeadFeature::Clean);
+
+        draft.previous_hair_variant();
+        assert_eq!(draft.hair_variant(), HairVariant::Ornate);
+        draft.next_hair_variant();
+        assert_eq!(draft.hair_variant(), HairVariant::Primary);
+    }
+
+    #[test]
+    fn switching_back_to_custom_restores_new_taxonomy_defaults() {
+        let mut draft = CharacterDraft::default();
+        draft.select_choice(HeroChoice::Preset(HeroPreset::Ciobanul));
+        assert_ne!(draft.costume(), CostumeStyle::default());
+        draft.select_choice(HeroChoice::Custom);
+        assert_eq!(draft.costume(), CostumeStyle::default());
+        assert_eq!(draft.head_feature(), HeadFeature::default());
+        assert_eq!(draft.hair_variant(), HairVariant::default());
     }
 }
