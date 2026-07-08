@@ -43,6 +43,28 @@ shop, and arena flows without introducing a new production generator pipeline.
 | `fighters/human/runtime/upper_arm_back.png` | Derived runtime human cutout part (upper arm back) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
 | `fighters/human/runtime/upper_arm_front.png` | Derived runtime human cutout part (upper arm front) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
 
+The preset-first hero part variants below are **self-generated placeholder
+art** produced by `scripts/generate-hero-preset-parts.py` for this project,
+following `docs/art-direction.md`. They give preset selection distinct
+`asset_path` values (and distinct opaque-pixel silhouettes, not just
+palette swaps) for the appearance-driven torso, head, and hair slots while
+the OpenAI-authored preset bundles land. Each of the four predefined heroes
+(Haiducul, Voinicul, Ciobanul, Ucenicul Solomonar) resolves to a dedicated
+`torso_*.png`; the neutral `torso.png` is reserved for the non-preset base
+rig. They are dedicated to the public domain (**CC0 1.0**,
+<https://creativecommons.org/publicdomain/zero/1.0/>).
+
+| File | Depicts | Source | License |
+| --- | --- | --- | --- |
+| `fighters/human/runtime/torso_haiduc_coat.png` | Haiduc coat costume torso variant | self-generated | CC0 1.0 |
+| `fighters/human/runtime/torso_voinic_tunic.png` | Voinic tunic costume torso variant | self-generated | CC0 1.0 |
+| `fighters/human/runtime/torso_cioban_cojoc.png` | Cioban cojoc costume torso variant | self-generated | CC0 1.0 |
+| `fighters/human/runtime/torso_solomonar_robe.png` | Solomonar robe costume torso variant | self-generated | CC0 1.0 |
+| `fighters/human/runtime/head_moustache.png` | Head silhouette with moustache head-feature | self-generated | CC0 1.0 |
+| `fighters/human/runtime/head_beard.png` | Head silhouette with beard head-feature | self-generated | CC0 1.0 |
+| `fighters/human/runtime/hair_alternate.png` | Alternate hair-variant silhouette | self-generated | CC0 1.0 |
+| `fighters/human/runtime/hair_ornate.png` | Ornate hair-variant silhouette | self-generated | CC0 1.0 |
+
 ### Strigoi runtime parts
 
 | File | Depicts | Source | License |

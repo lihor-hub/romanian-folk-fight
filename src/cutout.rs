@@ -5,7 +5,10 @@
 
 use bevy::prelude::*;
 
-use crate::character::{AccentColor, BodyBuild, HairStyle, PlayerAppearance, SkinTone};
+use crate::character::{
+    AccentColor, BodyBuild, CostumeStyle, HairStyle, HairVariant, HeadFeature, PlayerAppearance,
+    SkinTone,
+};
 use crate::items::{Equipment, GearAttachment, GearMotion, ItemId, ItemVisual, Slot, item_visual};
 
 /// Registers cutout-rig support. The first implementation is spawn-helper
@@ -671,9 +674,17 @@ fn apply_player_appearance(parts: &mut [CutoutPart], appearance: PlayerAppearanc
             CutoutPartKind::Hair => {
                 apply_hair_style(part, appearance.hair);
                 part.color = hair;
+                part.asset_path = Some(hair_variant_asset_path(appearance.hair_variant));
             }
-            CutoutPartKind::Torso => part.color = garment,
-            CutoutPartKind::Head | CutoutPartKind::HandBack | CutoutPartKind::HandFront => {
+            CutoutPartKind::Torso => {
+                part.color = garment;
+                part.asset_path = Some(costume_torso_asset_path(appearance.costume));
+            }
+            CutoutPartKind::Head => {
+                part.color = skin;
+                part.asset_path = Some(head_feature_asset_path(appearance.head_feature));
+            }
+            CutoutPartKind::HandBack | CutoutPartKind::HandFront => {
                 part.color = skin;
             }
             CutoutPartKind::FootBack | CutoutPartKind::FootFront => {
@@ -682,6 +693,44 @@ fn apply_player_appearance(parts: &mut [CutoutPart], appearance: PlayerAppearanc
             _ => part.color = cloth,
         }
         apply_build(part, appearance.build);
+    }
+}
+
+/// Runtime PNG for the costume torso variant carried by
+/// [`PlayerAppearance::costume`]. Every preset costume owns a distinct
+/// silhouette PNG so preset identity reads at the sprite layer beyond
+/// palette alone; the shared `torso.png` is reserved for the neutral
+/// non-preset base rig and is never selected by a preset.
+fn costume_torso_asset_path(costume: CostumeStyle) -> &'static str {
+    match costume {
+        CostumeStyle::HaiducCoat => "fighters/human/runtime/torso_haiduc_coat.png",
+        CostumeStyle::VoinicTunic => "fighters/human/runtime/torso_voinic_tunic.png",
+        CostumeStyle::CiobanCojoc => "fighters/human/runtime/torso_cioban_cojoc.png",
+        CostumeStyle::SolomonarRobe => "fighters/human/runtime/torso_solomonar_robe.png",
+    }
+}
+
+/// Runtime PNG for the head silhouette carried by
+/// [`PlayerAppearance::head_feature`]. `Clean` reuses the base `head.png`;
+/// `Moustache` / `Beard` layer the appropriate facial hair into the head
+/// sprite so silhouettes differ between preset heroes.
+fn head_feature_asset_path(feature: HeadFeature) -> &'static str {
+    match feature {
+        HeadFeature::Clean => "fighters/human/runtime/head.png",
+        HeadFeature::Moustache => "fighters/human/runtime/head_moustache.png",
+        HeadFeature::Beard => "fighters/human/runtime/head_beard.png",
+    }
+}
+
+/// Runtime PNG for the hair silhouette carried by
+/// [`PlayerAppearance::hair_variant`]. `Primary` keeps the shared
+/// `hair.png`; alternate/ornate variants swap in distinct hair shapes so
+/// presets with the same [`HairStyle`] can still differ visually.
+fn hair_variant_asset_path(variant: HairVariant) -> &'static str {
+    match variant {
+        HairVariant::Primary => "fighters/human/runtime/hair.png",
+        HairVariant::Alternate => "fighters/human/runtime/hair_alternate.png",
+        HairVariant::Ornate => "fighters/human/runtime/hair_ornate.png",
     }
 }
 
@@ -1039,7 +1088,13 @@ mod tests {
                 &[
                     (CutoutPartKind::Hair, "fighters/human/runtime/hair.png"),
                     (CutoutPartKind::Head, "fighters/human/runtime/head.png"),
-                    (CutoutPartKind::Torso, "fighters/human/runtime/torso.png"),
+                    // The default [`PlayerAppearance`] carries
+                    // `CostumeStyle::HaiducCoat`, which resolves to the
+                    // preset-specific `torso_haiduc_coat.png` silhouette.
+                    (
+                        CutoutPartKind::Torso,
+                        "fighters/human/runtime/torso_haiduc_coat.png",
+                    ),
                     (
                         CutoutPartKind::UpperArmBack,
                         "fighters/human/runtime/upper_arm_back.png",
@@ -1220,5 +1275,136 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn find_part(template: &CutoutRigTemplate, kind: CutoutPartKind) -> &CutoutPart {
+        template
+            .parts
+            .iter()
+            .find(|part| part.kind == kind)
+            .unwrap_or_else(|| panic!("template missing {kind:?}"))
+    }
+
+    #[test]
+    fn preset_appearance_resolves_costume_head_and_hair_to_distinct_pngs() {
+        // Every preset combination should pick real transparent PNG paths for
+        // the three appearance-driven parts (torso, head, hair) so preset
+        // selection reads visually at the sprite layer, not only via tinting.
+        let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        for costume in CostumeStyle::ALL {
+            for feature in HeadFeature::ALL {
+                for variant in HairVariant::ALL {
+                    let appearance = PlayerAppearance {
+                        costume,
+                        head_feature: feature,
+                        hair_variant: variant,
+                        ..PlayerAppearance::default()
+                    };
+                    let template = human_template_for(appearance);
+                    let torso = find_part(&template, CutoutPartKind::Torso).asset_path;
+                    let head = find_part(&template, CutoutPartKind::Head).asset_path;
+                    let hair = find_part(&template, CutoutPartKind::Hair).asset_path;
+                    for (label, path) in [("torso", torso), ("head", head), ("hair", hair)] {
+                        let path = path.unwrap_or_else(|| {
+                            panic!("{label} for {costume:?}/{feature:?}/{variant:?} missing path")
+                        });
+                        assert!(
+                            assets.join(path).is_file(),
+                            "{label} asset missing at {}",
+                            assets.join(path).display()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn all_four_hero_presets_produce_distinct_costume_torso_asset_paths() {
+        // Wave 2 assigns each of the four predefined heroes a distinct
+        // costume style; the rig must translate that into a different torso
+        // PNG per preset so silhouette identity is not only palette-based.
+        // Each preset must also avoid the neutral base `torso.png`, which is
+        // reserved for the non-preset rig used by generic human enemies.
+        use crate::creation::draft::HeroPreset;
+        let torsos: Vec<&'static str> = HeroPreset::ALL
+            .iter()
+            .map(|preset| {
+                let template = human_template_for(preset.appearance());
+                find_part(&template, CutoutPartKind::Torso)
+                    .asset_path
+                    .unwrap_or_else(|| panic!("{} torso missing asset_path", preset.name()))
+            })
+            .collect();
+        for (preset, torso) in HeroPreset::ALL.iter().zip(torsos.iter()) {
+            assert_ne!(
+                *torso,
+                "fighters/human/runtime/torso.png",
+                "preset {} must not reuse the neutral base torso.png",
+                preset.name()
+            );
+        }
+        for i in 0..torsos.len() {
+            for j in (i + 1)..torsos.len() {
+                assert_ne!(
+                    torsos[i],
+                    torsos[j],
+                    "presets {} and {} share a torso PNG",
+                    HeroPreset::ALL[i].name(),
+                    HeroPreset::ALL[j].name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preset_head_feature_and_hair_variant_paths_reflect_taxonomy() {
+        // Each preset carries a specific HeadFeature and HairVariant, and the
+        // rig must resolve those to the matching runtime PNGs so preset
+        // identity survives into the actual rendered sprites.
+        use crate::creation::draft::HeroPreset;
+        for preset in HeroPreset::ALL {
+            let appearance = preset.appearance();
+            let template = human_template_for(appearance);
+            let head = find_part(&template, CutoutPartKind::Head).asset_path;
+            let hair = find_part(&template, CutoutPartKind::Hair).asset_path;
+            let expected_head = match appearance.head_feature {
+                HeadFeature::Clean => "fighters/human/runtime/head.png",
+                HeadFeature::Moustache => "fighters/human/runtime/head_moustache.png",
+                HeadFeature::Beard => "fighters/human/runtime/head_beard.png",
+            };
+            let expected_hair = match appearance.hair_variant {
+                HairVariant::Primary => "fighters/human/runtime/hair.png",
+                HairVariant::Alternate => "fighters/human/runtime/hair_alternate.png",
+                HairVariant::Ornate => "fighters/human/runtime/hair_ornate.png",
+            };
+            assert_eq!(head, Some(expected_head), "{} head", preset.name());
+            assert_eq!(hair, Some(expected_hair), "{} hair", preset.name());
+        }
+    }
+
+    #[test]
+    fn part_sprite_falls_back_to_color_when_asset_server_is_missing() {
+        // Headless tests without an AssetServer must still get a valid Sprite
+        // even when asset_path is Some(...), so the color fallback path
+        // documented in [`part_sprite`] stays exercised.
+        let mut parts = human_parts(1.0);
+        apply_player_appearance(
+            &mut parts,
+            PlayerAppearance {
+                costume: CostumeStyle::VoinicTunic,
+                head_feature: HeadFeature::Beard,
+                hair_variant: HairVariant::Ornate,
+                ..PlayerAppearance::default()
+            },
+        );
+        let torso = parts
+            .iter()
+            .find(|p| p.kind == CutoutPartKind::Torso)
+            .unwrap();
+        assert!(torso.asset_path.is_some(), "torso now has an asset path");
+        let sprite = part_sprite(torso, None);
+        assert_eq!(sprite.custom_size, Some(torso.size));
+        assert_eq!(sprite.color, torso.color);
     }
 }
