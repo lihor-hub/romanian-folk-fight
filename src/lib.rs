@@ -43,3 +43,16 @@ impl Plugin for GamePlugin {
         app.add_plugins(shop::ShopPlugin);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::state::app::StatesPlugin;
+
+    #[test]
+    fn game_plugin_builds_without_duplicate_plugins() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.add_plugins(GamePlugin);
+    }
+}
