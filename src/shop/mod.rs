@@ -10,9 +10,10 @@ use std::collections::HashSet;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use crate::character::{Attributes, PlayerFighter, stats};
+use crate::character::{Attributes, PlayerAppearance, PlayerFighter, stats};
 use crate::core::{GameState, UiFont, despawn_screen};
 use crate::creation::PlayerCharacter;
+use crate::cutout::{CutoutRig, human_template_for, spawn_cutout_rig_with_gear};
 use crate::items::{CATALOG, Equipment, Item, ItemId, Slot};
 use crate::menu::DisabledButton;
 use crate::progression::Wallet;
@@ -64,6 +65,9 @@ pub fn try_buy(wallet: &mut Wallet, owned: &mut OwnedItems, id: ItemId) -> Resul
 /// `OnExit(GameState::Shop)`.
 #[derive(Component)]
 pub struct ShopScreen;
+
+#[derive(Component)]
+struct ShopPreview;
 
 /// What a shop button does when pressed.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,6 +205,7 @@ impl Plugin for ShopPlugin {
                             .or_else(resource_changed::<OwnedItems>)
                             .or_else(resource_changed::<PlayerEquipment>),
                     ),
+                    refresh_shop_preview_rig.run_if(resource_changed::<PlayerEquipment>),
                     crate::ui_widgets::scroll_with_wheel_and_touch,
                 )
                     .chain()
@@ -302,7 +307,7 @@ fn health_text(attributes: &Attributes) -> String {
 
 /// The player's confirmed attributes, or the default build (with a warning)
 /// if the flow was driven into the shop without a character.
-fn player_attributes(player: Option<Res<PlayerCharacter>>) -> Attributes {
+fn player_attributes(player: Option<&PlayerCharacter>) -> Attributes {
     match player {
         Some(player) => player.attributes,
         None => {
@@ -312,11 +317,16 @@ fn player_attributes(player: Option<Res<PlayerCharacter>>) -> Attributes {
     }
 }
 
+fn player_appearance(player: Option<&PlayerCharacter>) -> PlayerAppearance {
+    player.map(|player| player.appearance).unwrap_or_default()
+}
+
 #[derive(SystemParam)]
 struct ShopScreenAssets<'w> {
     ui_font: Res<'w, UiFont>,
     panel_texture: Res<'w, PanelTexture>,
     icons: Res<'w, ShopIcons>,
+    asset_server: Option<Res<'w, AssetServer>>,
 }
 
 /// Spawns the shop screen: header with the wallet top-right, the catalog
@@ -332,7 +342,8 @@ fn spawn_shop_screen(
     let ui_font = &*assets.ui_font;
     let panel_texture = &*assets.panel_texture;
     let icons = &*assets.icons;
-    let attributes = player_attributes(player);
+    let appearance = player_appearance(player.as_deref());
+    let attributes = player_attributes(player.as_deref());
     commands
         .spawn((
             ShopScreen,
@@ -421,6 +432,35 @@ fn spawn_shop_screen(
                 ShopAction::BackToArena,
             ));
         });
+    spawn_shop_preview(
+        &mut commands,
+        &equipment.0,
+        appearance,
+        assets.asset_server.as_deref(),
+    );
+}
+
+fn spawn_shop_preview(
+    commands: &mut Commands,
+    equipment: &Equipment,
+    appearance: PlayerAppearance,
+    asset_server: Option<&AssetServer>,
+) {
+    let preview = commands
+        .spawn((
+            ShopScreen,
+            ShopPreview,
+            Transform::from_xyz(286.0, -84.0, 25.0).with_scale(Vec3::splat(0.7)),
+        ))
+        .id();
+    spawn_cutout_rig_with_gear(
+        commands,
+        preview,
+        human_template_for(appearance),
+        asset_server,
+        false,
+        equipment,
+    );
 }
 
 /// A cream text line of the given font size.
@@ -652,7 +692,7 @@ fn refresh_shop_ui(
             commands.entity(entity).insert(DisabledButton);
         }
     }
-    let attributes = player_attributes(player);
+    let attributes = player_attributes(player.as_deref());
     for (mut text, mut color, label) in &mut labels {
         let new = match *label {
             ShopLabel::Wallet => wallet_text(&wallet),
@@ -672,6 +712,32 @@ fn refresh_shop_ui(
     }
 }
 
+fn refresh_shop_preview_rig(
+    equipment: Res<PlayerEquipment>,
+    player: Option<Res<PlayerCharacter>>,
+    mut commands: Commands,
+    previews: Query<(Entity, Option<&Children>), With<ShopPreview>>,
+    asset_server: Option<Res<AssetServer>>,
+) {
+    let appearance = player_appearance(player.as_deref());
+    for (preview, children) in &previews {
+        if let Some(children) = children {
+            for child in children.iter() {
+                commands.entity(child).despawn();
+            }
+        }
+        commands.entity(preview).remove::<CutoutRig>();
+        spawn_cutout_rig_with_gear(
+            &mut commands,
+            preview,
+            human_template_for(appearance),
+            asset_server.as_deref(),
+            false,
+            &equipment.0,
+        );
+    }
+}
+
 /// Hover/pressed background feedback for enabled shop buttons; disabled
 /// buttons keep the greyed-out background [`refresh_shop_ui`] gave them.
 fn update_button_backgrounds(
@@ -687,15 +753,17 @@ fn update_button_backgrounds(
 }
 
 /// Copies the persistent [`PlayerEquipment`] loadout onto the player fighter
-/// freshly spawned by the arena, so purchases show up in the next fight's
-/// damage/armor numbers without the shop touching arena code. `Added` keeps
-/// it a one-shot per spawn.
+/// whenever the arena has one, so purchases show up in the next fight's
+/// damage/armor numbers and test-driven loadout changes can refresh a live
+/// fighter without arena-specific shop code.
 fn dress_player_fighter(
     loadout: Res<PlayerEquipment>,
-    mut fighters: Query<&mut Equipment, (With<PlayerFighter>, Added<Equipment>)>,
+    mut fighters: Query<&mut Equipment, With<PlayerFighter>>,
 ) {
     for mut equipment in &mut fighters {
-        *equipment = loadout.0.clone();
+        if *equipment != loadout.0 {
+            *equipment = loadout.0.clone();
+        }
     }
 }
 
@@ -705,6 +773,7 @@ mod tests {
     use crate::arena::ArenaPlugin;
     use crate::combat::CombatLogEvent;
     use crate::core::CorePlugin;
+    use crate::cutout::{CutoutPartKind, CutoutPartMarker, GearVisualLayer};
     use crate::progression::{ProgressionPlugin, STARTING_GALBENI, result_ui::GameOverAction};
     use bevy::state::app::StatesPlugin;
 
@@ -846,6 +915,28 @@ mod tests {
         app.world().resource::<PlayerEquipment>().0.equipped(slot)
     }
 
+    fn gear_layers_for_owner(app: &mut App, owner: Entity) -> Vec<(ItemId, Slot, CutoutPartKind)> {
+        let part_info: Vec<(Entity, Entity, CutoutPartKind)> = app
+            .world_mut()
+            .query::<(Entity, &CutoutPartMarker, &ChildOf)>()
+            .iter(app.world())
+            .map(|(part, marker, child_of)| (part, child_of.parent(), marker.kind))
+            .collect();
+        let mut layers: Vec<(ItemId, Slot, CutoutPartKind)> = app
+            .world_mut()
+            .query::<(&GearVisualLayer, &ChildOf)>()
+            .iter(app.world())
+            .filter_map(|(layer, child_of)| {
+                let (_, part_owner, kind) = part_info
+                    .iter()
+                    .find(|(part, _, _)| *part == child_of.parent())?;
+                (*part_owner == owner).then_some((layer.item, layer.slot, *kind))
+            })
+            .collect();
+        layers.sort_by_key(|(item, _, _)| *item as usize);
+        layers
+    }
+
     fn texts(app: &mut App) -> Vec<String> {
         app.world_mut()
             .query::<&Text>()
@@ -964,6 +1055,36 @@ mod tests {
             count::<ShopIcon>(&mut app),
             shop_icon_kinds().len() + Slot::ALL.len(),
             "wallet, slot headers, and loadout preview all show icons"
+        );
+    }
+
+    #[test]
+    fn equipment_changes_refresh_the_shop_cutout_preview() {
+        let mut app = test_app();
+        set_state(&mut app, GameState::Shop);
+
+        let preview = app
+            .world_mut()
+            .query_filtered::<Entity, With<ShopPreview>>()
+            .single(app.world())
+            .expect("shop cutout preview exists");
+        assert!(
+            gear_layers_for_owner(&mut app, preview).is_empty(),
+            "default shop loadout starts visually bare"
+        );
+
+        let mut loadout = Equipment::default();
+        loadout.equip(ItemId::Palos);
+        loadout.equip(ItemId::CoifDeOstean);
+        app.insert_resource(PlayerEquipment(loadout));
+        app.update();
+
+        assert_eq!(
+            gear_layers_for_owner(&mut app, preview),
+            vec![
+                (ItemId::Palos, Slot::Weapon, CutoutPartKind::HandFront),
+                (ItemId::CoifDeOstean, Slot::Head, CutoutPartKind::Head),
+            ]
         );
     }
 
@@ -1165,6 +1286,53 @@ mod tests {
             *enemy_equipment,
             Equipment::default(),
             "only the player is dressed"
+        );
+    }
+
+    #[test]
+    fn equipment_changes_refresh_a_live_arena_player_fighter() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin));
+        app.add_plugins((ArenaPlugin, ShopPlugin));
+        app.insert_resource(player_character());
+        app.update();
+
+        set_state(&mut app, GameState::Fight);
+        app.update();
+
+        let player = app
+            .world_mut()
+            .query_filtered::<Entity, With<PlayerFighter>>()
+            .single(app.world())
+            .expect("player fighter exists");
+        assert!(
+            gear_layers_for_owner(&mut app, player).is_empty(),
+            "player starts bare before the loadout changes"
+        );
+
+        let mut loadout = Equipment::default();
+        loadout.equip(ItemId::Palos);
+        loadout.equip(ItemId::ScutFerecat);
+        app.insert_resource(PlayerEquipment(loadout.clone()));
+        app.update();
+        app.update();
+
+        let player_equipment = app
+            .world_mut()
+            .query_filtered::<&Equipment, With<PlayerFighter>>()
+            .single(app.world())
+            .expect("player fighter exists");
+        assert_eq!(*player_equipment, loadout);
+        assert_eq!(
+            gear_layers_for_owner(&mut app, player),
+            vec![
+                (ItemId::Palos, Slot::Weapon, CutoutPartKind::HandFront),
+                (
+                    ItemId::ScutFerecat,
+                    Slot::Shield,
+                    CutoutPartKind::ForearmBack
+                ),
+            ]
         );
     }
 

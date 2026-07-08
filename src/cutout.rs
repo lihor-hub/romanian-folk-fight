@@ -6,6 +6,9 @@
 use bevy::prelude::*;
 
 use crate::character::{AccentColor, BodyBuild, HairStyle, PlayerAppearance, SkinTone};
+use crate::items::{Equipment, GearAttachment, GearMotion, ItemId, ItemVisual, Slot, item_visual};
+
+const GEAR_LAYER_SIZE: Vec2 = Vec2::new(128.0, 128.0);
 
 /// Registers cutout-rig support. The first implementation is spawn-helper
 /// driven, so the plugin currently documents ownership without scheduling
@@ -77,6 +80,21 @@ pub struct CutoutPartMarker {
     pub kind: CutoutPartKind,
 }
 
+/// One visible equipment layer attached to a cutout body part.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct GearVisualLayer {
+    /// Catalog item shown by this layer.
+    pub item: ItemId,
+    /// Equipment slot this layer occupies.
+    pub slot: Slot,
+    /// Rig body part this layer follows.
+    pub attachment: GearAttachment,
+    /// Motion profile used by arena animation synchronizers.
+    pub motion: GearMotion,
+    /// Stable draw order relative to the owning body part.
+    pub z_offset: f32,
+}
+
 /// Human/player neutral pose.
 pub fn human_template() -> CutoutRigTemplate {
     human_template_for(PlayerAppearance::default())
@@ -132,6 +150,123 @@ pub fn spawn_cutout_rig(
             ));
         }
     });
+}
+
+/// Attaches a cutout rig and its currently equipped gear to `root`.
+pub fn spawn_cutout_rig_with_gear(
+    commands: &mut Commands,
+    root: Entity,
+    template: CutoutRigTemplate,
+    asset_server: Option<&AssetServer>,
+    flip_x: bool,
+    equipment: &Equipment,
+) {
+    commands.entity(root).insert(CutoutRig {
+        template: template.template,
+        flip_x,
+    });
+    commands.entity(root).with_children(|body| {
+        for part in template.parts {
+            body.spawn((
+                CutoutPartMarker { kind: part.kind },
+                part_sprite(&part, asset_server),
+                part_transform(&part, flip_x),
+            ))
+            .with_children(|part_children| {
+                spawn_gear_children_for_part(
+                    part_children,
+                    part.kind,
+                    equipment,
+                    asset_server,
+                    &mut |_| (),
+                );
+            });
+        }
+    });
+}
+
+/// Spawns equipped gear under already-existing cutout body part entities.
+pub fn spawn_gear_attachment_layers<B: Bundle>(
+    commands: &mut Commands,
+    equipment: &Equipment,
+    asset_server: Option<&AssetServer>,
+    mut part_entity: impl FnMut(CutoutPartKind) -> Option<Entity>,
+    mut extra_bundle: impl FnMut(&ItemVisual) -> B,
+) {
+    for slot in Slot::ALL {
+        let Some(item) = equipment.equipped(slot) else {
+            continue;
+        };
+        let Some(visual) = item_visual(item) else {
+            continue;
+        };
+        let Some(part) = part_entity(visual.attachment.part) else {
+            continue;
+        };
+        commands.entity(part).with_children(|body| {
+            body.spawn((
+                gear_layer_bundle(item, visual, asset_server),
+                extra_bundle(visual),
+            ));
+        });
+    }
+}
+
+fn spawn_gear_children_for_part<B: Bundle>(
+    parent: &mut ChildSpawnerCommands,
+    part: CutoutPartKind,
+    equipment: &Equipment,
+    asset_server: Option<&AssetServer>,
+    extra_bundle: &mut impl FnMut(&ItemVisual) -> B,
+) {
+    for slot in Slot::ALL {
+        let Some(item) = equipment.equipped(slot) else {
+            continue;
+        };
+        let Some(visual) = item_visual(item) else {
+            continue;
+        };
+        if visual.attachment.part != part {
+            continue;
+        }
+        parent.spawn((
+            gear_layer_bundle(item, visual, asset_server),
+            extra_bundle(visual),
+        ));
+    }
+}
+
+fn gear_layer_bundle(
+    item: ItemId,
+    visual: &ItemVisual,
+    asset_server: Option<&AssetServer>,
+) -> (GearVisualLayer, Sprite, Transform) {
+    (
+        GearVisualLayer {
+            item,
+            slot: visual.slot,
+            attachment: visual.attachment,
+            motion: visual.motion,
+            z_offset: visual.z_offset,
+        },
+        gear_sprite(visual.fallback_asset_path(), asset_server),
+        gear_attachment_transform(visual.z_offset),
+    )
+}
+
+/// Runtime uses generated transparent PNGs; headless tests without an
+/// [`AssetServer`] spawn a harmless placeholder sprite so ECS behavior stays
+/// testable.
+pub fn gear_sprite(asset_path: &'static str, asset_server: Option<&AssetServer>) -> Sprite {
+    if let Some(asset_server) = asset_server {
+        Sprite::from_image(asset_server.load(asset_path))
+    } else {
+        Sprite::from_color(Color::srgba(1.0, 1.0, 1.0, 0.35), GEAR_LAYER_SIZE)
+    }
+}
+
+pub fn gear_attachment_transform(z_offset: f32) -> Transform {
+    Transform::from_xyz(0.0, 0.0, z_offset)
 }
 
 fn part_sprite(part: &CutoutPart, asset_server: Option<&AssetServer>) -> Sprite {

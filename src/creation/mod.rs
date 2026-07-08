@@ -13,7 +13,7 @@ pub use draft::{AttributeKind, CharacterDraft, FOLK_NAMES, FREE_POINTS, HeroChoi
 
 use crate::character::{Attributes, PlayerAppearance, stats};
 use crate::core::{GameState, UiFont, despawn_screen};
-use crate::cutout::{CutoutRig, human_template_for, spawn_cutout_rig};
+use crate::cutout::{CutoutRig, human_template_for, spawn_cutout_rig_with_gear};
 use crate::items::Equipment;
 use crate::menu::DisabledButton;
 use crate::save::SaveRequested;
@@ -288,12 +288,14 @@ fn spawn_creation_screen(
             Transform::from_xyz(255.0, 5.0, 25.0).with_scale(Vec3::splat(0.82)),
         ))
         .id();
-    spawn_cutout_rig(
+    let equipment = equipment_from_items(draft.starter_items());
+    spawn_cutout_rig_with_gear(
         &mut commands,
         preview,
         human_template_for(draft.appearance()),
         asset_server.as_deref(),
         false,
+        &equipment,
     );
 }
 
@@ -368,6 +370,14 @@ fn preview_text(draft: &CharacterDraft) -> String {
     )
 }
 
+fn equipment_from_items(items: &[crate::items::ItemId]) -> Equipment {
+    let mut equipment = Equipment::default();
+    for &item in items {
+        equipment.equip(item);
+    }
+    equipment
+}
+
 fn appearance_text(draft: &CharacterDraft, field: AppearanceField) -> String {
     match field {
         AppearanceField::SkinTone => draft.skin_tone().label().to_string(),
@@ -427,10 +437,7 @@ fn handle_creation_actions(
                         attributes: draft.attributes(),
                         appearance: draft.appearance(),
                     });
-                    let mut equipment = Equipment::default();
-                    for &item in draft.starter_items() {
-                        equipment.equip(item);
-                    }
+                    let equipment = equipment_from_items(draft.starter_items());
                     commands.insert_resource(OwnedItems(
                         draft.starter_items().iter().copied().collect(),
                     ));
@@ -558,12 +565,14 @@ fn refresh_preview_rig(
             }
         }
         commands.entity(preview).remove::<CutoutRig>();
-        spawn_cutout_rig(
+        let equipment = equipment_from_items(draft.starter_items());
+        spawn_cutout_rig_with_gear(
             &mut commands,
             preview,
             human_template_for(draft.appearance()),
             asset_server.as_deref(),
             false,
+            &equipment,
         );
     }
 }
@@ -573,7 +582,7 @@ mod tests {
     use super::*;
     use crate::character::{AccentColor, BodyBuild, HairStyle, SkinTone};
     use crate::core::CorePlugin;
-    use crate::cutout::{CutoutPartMarker, human_template};
+    use crate::cutout::{CutoutPartKind, CutoutPartMarker, GearVisualLayer, human_template};
     use crate::items::ItemId;
     use crate::save::{SaveGame, SavePlugin, SaveStore};
     use bevy::state::app::StatesPlugin;
@@ -680,6 +689,48 @@ mod tests {
             .filter(|child| app.world().get::<CutoutPartMarker>(*child).is_some())
             .count();
         assert_eq!(parts, human_template().parts.len());
+    }
+
+    #[test]
+    fn preset_starter_items_attach_to_the_creation_preview_rig() {
+        let mut app = test_app();
+        press(
+            &mut app,
+            CreationAction::SelectChoice(HeroChoice::Preset(HeroPreset::Ciobanul)),
+        );
+
+        let preview = app
+            .world_mut()
+            .query_filtered::<Entity, (With<CreationPreview>, With<CutoutRig>)>()
+            .single(app.world())
+            .expect("one cutout preview root exists");
+        let part_info: Vec<(Entity, Entity, CutoutPartKind)> = app
+            .world_mut()
+            .query::<(Entity, &CutoutPartMarker, &ChildOf)>()
+            .iter(app.world())
+            .map(|(part, marker, child_of)| (part, child_of.parent(), marker.kind))
+            .collect();
+        let mut layers: Vec<(ItemId, CutoutPartKind)> = app
+            .world_mut()
+            .query::<(&GearVisualLayer, &ChildOf)>()
+            .iter(app.world())
+            .filter_map(|(layer, child_of)| {
+                let (_, owner, kind) = part_info
+                    .iter()
+                    .find(|(part, _, _)| *part == child_of.parent())?;
+                (*owner == preview).then_some((layer.item, *kind))
+            })
+            .collect();
+        layers.sort_by_key(|(item, _)| *item as usize);
+
+        assert_eq!(
+            layers,
+            vec![
+                (ItemId::BataCiobaneasca, CutoutPartKind::HandFront),
+                (ItemId::CojocGros, CutoutPartKind::Torso),
+                (ItemId::CaciulaDeOaie, CutoutPartKind::Head),
+            ]
+        );
     }
 
     #[test]
