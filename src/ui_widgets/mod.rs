@@ -23,6 +23,10 @@ impl Plugin for ScrollInputPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<MouseWheel>().init_resource::<Touches>();
     }
+
+    fn is_unique(&self) -> bool {
+        false
+    }
 }
 
 /// Marker for a scrollable `Node` (must also carry `Overflow::scroll_y()`
