@@ -169,18 +169,24 @@
       </p>
     </div>
     <canvas id="game-canvas"></canvas>
-    <script type="module">
+    <!-- Classic (non-module) script: Trunk appends its wasm init to module
+         scripts, which would delay these listeners until after a successful
+         init. As a classic script it runs first, before the init module. -->
+    <script>
       // Trunk fires this once the wasm app has started; drop the loading screen.
-      addEventListener("TrunkApplicationStarted", () => {
-        document.getElementById("loading")?.remove();
+      addEventListener("TrunkApplicationStarted", function () {
+        var loading = document.getElementById("loading");
+        if (loading) loading.remove();
       });
-      // If wasm init fails (old browser, blocked download, no WebGL2), show a
-      // plain-language message instead of an eternal spinner.
-      const fail = () => document.getElementById("loading")?.classList.add("failed");
-      addEventListener("error", (e) => {
-        if (typeof e.filename === "string" && /\.(wasm|js)($|\?)/.test(e.filename)) fail();
-      });
-      addEventListener("unhandledrejection", () => fail());
+      // If wasm init fails (old browser, blocked download, no WebGL2), the init
+      // module's top-level await rejects; show a plain-language message instead
+      // of an eternal spinner. Only acts while the loading screen is still up.
+      function trunkLoadFailed() {
+        var loading = document.getElementById("loading");
+        if (loading) loading.classList.add("failed");
+      }
+      addEventListener("error", trunkLoadFailed);
+      addEventListener("unhandledrejection", trunkLoadFailed);
     </script>
   </body>
 </html>
