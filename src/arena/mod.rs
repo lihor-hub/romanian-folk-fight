@@ -50,6 +50,11 @@ pub const ENEMY_ANCHOR: Transform = Transform::from_xyz(220.0, FIGHTER_Y, 0.0);
 /// Vertical offset of the name label above a fighter's body center.
 const LABEL_OFFSET_Y: f32 = FIGHTER_SIZE.y / 2.0 + 24.0;
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ArenaSet {
+    GearRefresh,
+}
+
 /// Marker for every arena entity; all of them despawn on
 /// `OnExit(GameState::Fight)` via [`despawn_screen`].
 #[derive(Component)]
@@ -65,7 +70,7 @@ impl Plugin for ArenaPlugin {
                 Update,
                 (
                     spawn_arena_when_ready,
-                    spawn_equipped_gear_layers,
+                    spawn_equipped_gear_layers.in_set(ArenaSet::GearRefresh),
                     sync_gear_visual_layers,
                 )
                     .chain()
@@ -1009,6 +1014,7 @@ mod tests {
         loadout.equip(ItemId::Palos);
         loadout.equip(ItemId::ScutFerecat);
         loadout.equip(ItemId::CaciulaDeOaie);
+        loadout.equip(ItemId::CizmeDeVoinic);
 
         let mut app = player_with_loadout(loadout);
         app.update();
@@ -1040,6 +1046,8 @@ mod tests {
                 (Slot::Weapon, CutoutPartKind::HandFront),
                 (Slot::Shield, CutoutPartKind::ForearmBack),
                 (Slot::Head, CutoutPartKind::Head),
+                (Slot::Feet, CutoutPartKind::FootBack),
+                (Slot::Feet, CutoutPartKind::FootFront),
             ]
         );
     }

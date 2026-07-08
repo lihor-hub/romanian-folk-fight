@@ -214,7 +214,9 @@ impl Plugin for ShopPlugin {
             .add_systems(OnExit(GameState::Shop), despawn_screen::<ShopScreen>)
             .add_systems(
                 Update,
-                dress_player_fighter.run_if(in_state(GameState::Fight)),
+                dress_player_fighter
+                    .before(crate::arena::ArenaSet::GearRefresh)
+                    .run_if(in_state(GameState::Fight)),
             );
     }
 }
@@ -1314,7 +1316,6 @@ mod tests {
         loadout.equip(ItemId::Palos);
         loadout.equip(ItemId::ScutFerecat);
         app.insert_resource(PlayerEquipment(loadout.clone()));
-        app.update();
         app.update();
 
         let player_equipment = app

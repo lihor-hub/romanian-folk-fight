@@ -200,15 +200,17 @@ pub fn spawn_gear_attachment_layers<B: Bundle>(
         let Some(visual) = item_visual(item) else {
             continue;
         };
-        let Some(part) = part_entity(visual.attachment.part) else {
-            continue;
-        };
-        commands.entity(part).with_children(|body| {
-            body.spawn((
-                gear_layer_bundle(item, visual, asset_server),
-                extra_bundle(visual),
-            ));
-        });
+        for &attachment_part in visual.attachment.parts {
+            let Some(part) = part_entity(attachment_part) else {
+                continue;
+            };
+            commands.entity(part).with_children(|body| {
+                body.spawn((
+                    gear_layer_bundle(item, visual, asset_server),
+                    extra_bundle(visual),
+                ));
+            });
+        }
     }
 }
 
@@ -226,7 +228,7 @@ fn spawn_gear_children_for_part<B: Bundle>(
         let Some(visual) = item_visual(item) else {
             continue;
         };
-        if visual.attachment.part != part {
+        if !visual.attachment.parts.contains(&part) {
             continue;
         }
         parent.spawn((

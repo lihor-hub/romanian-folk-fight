@@ -24,12 +24,12 @@ pub enum GearMotion {
 /// Body-part attachment point for one visible equipment layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GearAttachment {
-    pub part: CutoutPartKind,
+    pub parts: &'static [CutoutPartKind],
 }
 
 impl GearAttachment {
-    pub const fn new(part: CutoutPartKind) -> Self {
-        Self { part }
+    pub const fn new(parts: &'static [CutoutPartKind]) -> Self {
+        Self { parts }
     }
 }
 
@@ -79,13 +79,19 @@ const fn visual(
     }
 }
 
+const WEAPON_ATTACHMENT: [CutoutPartKind; 1] = [CutoutPartKind::HandFront];
+const SHIELD_ATTACHMENT: [CutoutPartKind; 1] = [CutoutPartKind::ForearmBack];
+const TORSO_ATTACHMENT: [CutoutPartKind; 1] = [CutoutPartKind::Torso];
+const HEAD_ATTACHMENT: [CutoutPartKind; 1] = [CutoutPartKind::Head];
+const FEET_ATTACHMENT: [CutoutPartKind; 2] = [CutoutPartKind::FootBack, CutoutPartKind::FootFront];
+
 pub const fn attachment_for_slot(slot: Slot) -> GearAttachment {
     match slot {
-        Slot::Weapon => GearAttachment::new(CutoutPartKind::HandFront),
-        Slot::Shield => GearAttachment::new(CutoutPartKind::ForearmBack),
-        Slot::Torso => GearAttachment::new(CutoutPartKind::Torso),
-        Slot::Head => GearAttachment::new(CutoutPartKind::Head),
-        Slot::Feet => GearAttachment::new(CutoutPartKind::FootFront),
+        Slot::Weapon => GearAttachment::new(&WEAPON_ATTACHMENT),
+        Slot::Shield => GearAttachment::new(&SHIELD_ATTACHMENT),
+        Slot::Torso => GearAttachment::new(&TORSO_ATTACHMENT),
+        Slot::Head => GearAttachment::new(&HEAD_ATTACHMENT),
+        Slot::Feet => GearAttachment::new(&FEET_ATTACHMENT),
     }
 }
 
@@ -210,14 +216,14 @@ mod tests {
                 Slot::Feet => GearMotion::Feet,
             };
             assert_eq!(visual.motion, expected_motion);
-            let expected_attachment = match id.item().slot {
-                Slot::Weapon => CutoutPartKind::HandFront,
-                Slot::Shield => CutoutPartKind::ForearmBack,
-                Slot::Torso => CutoutPartKind::Torso,
-                Slot::Head => CutoutPartKind::Head,
-                Slot::Feet => CutoutPartKind::FootFront,
+            let expected_attachment: &[CutoutPartKind] = match id.item().slot {
+                Slot::Weapon => &[CutoutPartKind::HandFront],
+                Slot::Shield => &[CutoutPartKind::ForearmBack],
+                Slot::Torso => &[CutoutPartKind::Torso],
+                Slot::Head => &[CutoutPartKind::Head],
+                Slot::Feet => &[CutoutPartKind::FootBack, CutoutPartKind::FootFront],
             };
-            assert_eq!(visual.attachment.part, expected_attachment);
+            assert_eq!(visual.attachment.parts, expected_attachment);
         }
     }
 
