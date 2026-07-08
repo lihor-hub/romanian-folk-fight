@@ -39,6 +39,22 @@ replacement by bespoke final art.
 | --- | --- | --- | --- |
 | `ui/panel_border.png` | 9-slice embroidery panel border | self-generated | CC0 1.0 |
 
+## Shop icons (`assets/ui/`)
+
+The shop icon sprites below are **self-generated placeholder art** produced
+by `scripts/generate-shop-icons.py` for this project (issue #73), following
+`docs/art-direction.md`. They are dedicated to the public domain
+(**CC0 1.0**, <https://creativecommons.org/publicdomain/zero/1.0/>).
+
+| File | Depicts | Source | License |
+| --- | --- | --- | --- |
+| `ui/icon_coin.png` | Galbeni / wallet icon | self-generated | CC0 1.0 |
+| `ui/icon_weapon.png` | Weapon slot icon | self-generated | CC0 1.0 |
+| `ui/icon_shield.png` | Shield slot icon | self-generated | CC0 1.0 |
+| `ui/icon_torso.png` | Torso armor slot icon | self-generated | CC0 1.0 |
+| `ui/icon_head.png` | Head armor slot icon | self-generated | CC0 1.0 |
+| `ui/icon_feet.png` | Feet armor slot icon | self-generated | CC0 1.0 |
+
 ## Equipment overlays (`assets/gear/`)
 
 All equipment overlay sprites below are **self-generated placeholder art**
