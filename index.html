@@ -4,6 +4,45 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Romanian Folk Fight</title>
+    <meta
+      name="description"
+      content="Un beat 'em up folcloric românesc — luptă cu buzduganul prin creaturi din basmele românești. A Romanian folklore beat 'em up, playable in the browser."
+    />
+    <meta name="theme-color" content="#7a1f1f" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Romanian Folk Fight" />
+    <meta
+      property="og:description"
+      content="Un beat 'em up folcloric românesc — a Romanian folklore beat 'em up, playable in the browser."
+    />
+    <meta property="og:url" content="https://lihor-hub.github.io/romanian-folk-fight/" />
+    <meta
+      property="og:image"
+      content="https://lihor-hub.github.io/romanian-folk-fight/assets/web/og-image.png"
+    />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:locale" content="ro_RO" />
+
+    <!-- Twitter card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Romanian Folk Fight" />
+    <meta
+      name="twitter:description"
+      content="Un beat 'em up folcloric românesc — a Romanian folklore beat 'em up, playable in the browser."
+    />
+    <meta
+      name="twitter:image"
+      content="https://lihor-hub.github.io/romanian-folk-fight/assets/web/og-image.png"
+    />
+
+    <!-- Favicons (relative paths keep this subpath-safe on GitHub Pages) -->
+    <link rel="icon" type="image/svg+xml" href="assets/web/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/web/favicon-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/web/apple-touch-icon.png" />
+
     <link data-trunk rel="rust" data-wasm-opt="z" />
     <link data-trunk rel="copy-dir" href="assets" />
     <style>
@@ -25,24 +64,123 @@
       #loading {
         position: absolute;
         inset: 0;
+        z-index: 10;
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
+        gap: 1.25rem;
+        background: #1a1214;
         color: #e8dcc8;
-        font-family: Georgia, serif;
-        font-size: 1.5rem;
-        pointer-events: none;
+        font-family: Georgia, "Times New Roman", serif;
+        text-align: center;
+        padding: 1rem;
+      }
+      #loading h1 {
+        margin: 0;
+        font-size: clamp(2rem, 6vw, 3.5rem);
+        color: #e8dcc8;
+        letter-spacing: 0.02em;
+      }
+      /* Folk-motif divider: a row of gold cross-stitches, pure CSS. */
+      .divider {
+        display: flex;
+        gap: 0.9rem;
+      }
+      .divider span {
+        position: relative;
+        width: 1rem;
+        height: 1rem;
+      }
+      .divider span::before,
+      .divider span::after {
+        content: "";
+        position: absolute;
+        inset: 0 45%;
+        background: #c9a227;
+        border-radius: 2px;
+      }
+      .divider span::before {
+        transform: rotate(45deg);
+      }
+      .divider span::after {
+        transform: rotate(-45deg);
+      }
+      #loading .status {
+        margin: 0;
+        font-size: 1.25rem;
+        font-style: italic;
+        color: #c9a227;
+      }
+      /* Indeterminate progress bar in the folk palette. */
+      .progress {
+        width: min(18rem, 70vw);
+        height: 6px;
+        border: 1px solid #7a1f1f;
+        border-radius: 3px;
+        overflow: hidden;
+        background: #2a1c1e;
+      }
+      .progress::before {
+        content: "";
+        display: block;
+        width: 40%;
+        height: 100%;
+        background: linear-gradient(90deg, #7a1f1f, #c9a227, #7a1f1f);
+        animation: slide 1.4s ease-in-out infinite;
+      }
+      @keyframes slide {
+        0% {
+          transform: translateX(-100%);
+        }
+        100% {
+          transform: translateX(250%);
+        }
+      }
+      #loading.failed .progress,
+      #loading.failed .status {
+        display: none;
+      }
+      #loading .error {
+        display: none;
+        margin: 0;
+        max-width: 34rem;
+        font-size: 1.05rem;
+        line-height: 1.5;
+        color: #e8dcc8;
+      }
+      #loading.failed .error {
+        display: block;
       }
     </style>
   </head>
   <body>
-    <div id="loading">Se încarcă…</div>
+    <div id="loading">
+      <h1>Romanian Folk Fight</h1>
+      <div class="divider" aria-hidden="true">
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+      <div class="progress" role="progressbar" aria-label="Se încarcă"></div>
+      <p class="status">Se încarcă…</p>
+      <p class="error">
+        Jocul nu a putut fi încărcat. / The game failed to load. Your browser may not
+        support WebAssembly or WebGL2 — please try a recent version of Firefox, Chrome,
+        Safari, or Edge, then reload the page.
+      </p>
+    </div>
     <canvas id="game-canvas"></canvas>
     <script type="module">
-      // Trunk fires this once the wasm app has started; drop the loading text.
+      // Trunk fires this once the wasm app has started; drop the loading screen.
       addEventListener("TrunkApplicationStarted", () => {
         document.getElementById("loading")?.remove();
       });
+      // If wasm init fails (old browser, blocked download, no WebGL2), show a
+      // plain-language message instead of an eternal spinner.
+      const fail = () => document.getElementById("loading")?.classList.add("failed");
+      addEventListener("error", (e) => {
+        if (typeof e.filename === "string" && /\.(wasm|js)($|\?)/.test(e.filename)) fail();
+      });
+      addEventListener("unhandledrejection", () => fail());
     </script>
   </body>
 </html>
