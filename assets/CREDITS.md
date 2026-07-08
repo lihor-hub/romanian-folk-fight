@@ -39,6 +39,30 @@ replacement by bespoke final art.
 | --- | --- | --- | --- |
 | `ui/panel_border.png` | 9-slice embroidery panel border | self-generated | CC0 1.0 |
 
+## Equipment overlays (`assets/gear/`)
+
+All equipment overlay sprites below are **self-generated placeholder art**
+produced by `scripts/generate-gear-visuals.py` for this project (issue #72),
+following `docs/art-direction.md`. They are transparent 128x128 layers aligned
+to the fighter frame and dedicated to the public domain (**CC0 1.0**,
+<https://creativecommons.org/publicdomain/zero/1.0/>).
+
+| File | Depicts | Source | License |
+| --- | --- | --- | --- |
+| `gear/bata_ciobaneasca.png` | Bâtă ciobănească equipment overlay | self-generated | CC0 1.0 |
+| `gear/topor_de_padurar.png` | Topor de pădurar equipment overlay | self-generated | CC0 1.0 |
+| `gear/palos.png` | Paloș equipment overlay | self-generated | CC0 1.0 |
+| `gear/buzdugan_cu_trei_peceti.png` | Buzdugan cu trei peceți equipment overlay | self-generated | CC0 1.0 |
+| `gear/scut_de_lemn.png` | Scut de lemn equipment overlay | self-generated | CC0 1.0 |
+| `gear/scut_ferecat.png` | Scut ferecat equipment overlay | self-generated | CC0 1.0 |
+| `gear/ie_descantata.png` | Ie descântată equipment overlay | self-generated | CC0 1.0 |
+| `gear/cojoc_gros.png` | Cojoc gros equipment overlay | self-generated | CC0 1.0 |
+| `gear/camasa_de_zale.png` | Cămașă de zale equipment overlay | self-generated | CC0 1.0 |
+| `gear/caciula_de_oaie.png` | Căciulă de oaie equipment overlay | self-generated | CC0 1.0 |
+| `gear/coif_de_ostean.png` | Coif de oștean equipment overlay | self-generated | CC0 1.0 |
+| `gear/opinci_iuti.png` | Opinci iuți equipment overlay | self-generated | CC0 1.0 |
+| `gear/cizme_de_voinic.png` | Cizme de voinic equipment overlay | self-generated | CC0 1.0 |
+
 ## Arena backgrounds (`assets/backgrounds/`)
 
 All parallax background layers below are **self-generated placeholder art**
