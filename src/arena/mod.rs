@@ -17,7 +17,7 @@ use crate::core::{GameState, UiFont, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::cutout::{
     CutoutRig, CutoutRigTemplate, CutoutTemplate, boss_template, enemy_template, human_template,
-    spawn_cutout_rig,
+    human_template_for, spawn_cutout_rig,
 };
 use crate::items::{Equipment, GearMotion, ItemId, Slot, item_visual};
 use crate::roster::{Boss, LadderProgress, Opponent};
@@ -154,18 +154,19 @@ fn spawn_scene(
     let opponent = ladder.opponent();
     spawn_background(&mut commands, backgrounds, background_tier(ladder));
     spawn_scenery(&mut commands);
-    spawn_arena_fighter(
+    let player_fighter = spawn_arena_fighter(
         &mut commands,
         player.name.clone(),
         player.attributes,
         PlayerFighter,
         PLAYER_ANCHOR,
-        human_template(),
+        human_template_for(player.appearance),
         false,
         CREAM,
         ui_font,
         asset_server,
     );
+    commands.entity(player_fighter).insert(player.appearance);
     let enemy = spawn_arena_fighter(
         &mut commands,
         ladder.display_name(),
@@ -479,7 +480,10 @@ fn idle_bob(frame: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::character::{Fighter, FighterName, Health, Stamina, stats};
+    use crate::character::{
+        AccentColor, BodyBuild, Fighter, FighterName, HairStyle, Health, PlayerAppearance,
+        SkinTone, Stamina, stats,
+    };
     use crate::core::CorePlugin;
     use crate::cutout::{
         CutoutPartMarker, CutoutRig, CutoutTemplate, boss_template, enemy_template, human_template,
@@ -499,6 +503,7 @@ mod tests {
         PlayerCharacter {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
+            appearance: crate::character::PlayerAppearance::default(),
         }
     }
 
@@ -511,9 +516,13 @@ mod tests {
     /// Headless app already inside the fight arena, at `progress` on the
     /// ladder.
     fn test_app_at(progress: LadderProgress) -> App {
+        test_app_with(player_character(), progress)
+    }
+
+    fn test_app_with(player: PlayerCharacter, progress: LadderProgress) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, ArenaPlugin));
-        app.insert_resource(player_character());
+        app.insert_resource(player);
         app.insert_resource(progress);
         app.update();
         app.world_mut()
@@ -686,10 +695,36 @@ mod tests {
             "enemy source art is mirrored in the arena"
         );
         assert!(!enemy_has_sprite);
+        let enemy_template = enemy_rig.template;
         assert_eq!(
             cutout_child_count(&mut app, enemy),
             template_part_count(enemy_template)
         );
+    }
+
+    #[test]
+    fn player_fighter_carries_the_confirmed_appearance_component() {
+        let appearance = PlayerAppearance {
+            skin_tone: SkinTone::Deep,
+            build: BodyBuild::Powerful,
+            hair: HairStyle::Tied,
+            accent: AccentColor::Storm,
+        };
+        let mut app = test_app_with(
+            PlayerCharacter {
+                name: "Făt-Frumos".to_string(),
+                attributes: PLAYER_ATTRIBUTES,
+                appearance,
+            },
+            LadderProgress::default(),
+        );
+
+        let stored = app
+            .world_mut()
+            .query_filtered::<&PlayerAppearance, With<PlayerFighter>>()
+            .single(app.world())
+            .expect("player fighter carries appearance");
+        assert_eq!(*stored, appearance);
     }
 
     #[test]

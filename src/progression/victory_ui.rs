@@ -214,6 +214,7 @@ mod tests {
         app.insert_resource(PlayerCharacter {
             name: "Făt-Frumos".to_string(),
             attributes: Attributes::default(),
+            appearance: crate::character::PlayerAppearance::default(),
         });
         app.insert_resource(LadderProgress(9));
         app.insert_resource(LifetimeEarnings(500));

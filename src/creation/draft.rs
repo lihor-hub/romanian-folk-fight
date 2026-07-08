@@ -1,20 +1,20 @@
-//! Pure point-allocation rules for the character creation screen.
+//! Pure hero-creation rules for the character creation screen.
 //!
 //! No ECS systems here: [`CharacterDraft`] is a plain value type (registered
-//! as a `Resource` by the plugin) so the allocation invariants — total spent
-//! never exceeds [`FREE_POINTS`], every attribute stays at or above
-//! [`BASE_VALUE`] — are unit-testable without a `World`.
+//! as a `Resource` by the plugin) so the allocation invariants, preset data,
+//! and appearance cycling remain unit-testable without a `World`.
 
 use bevy::prelude::*;
 
-use crate::character::Attributes;
+use crate::character::{AccentColor, Attributes, BodyBuild, HairStyle, PlayerAppearance, SkinTone};
+use crate::items::ItemId;
 // Re-exported so existing `creation::AttributeKind` users keep working after
 // the enum moved to `character` (its canonical home, next to `Attributes`).
 pub use crate::character::AttributeKind;
 
 /// Curated cycling list of Romanian folk hero names. Free-text name entry is
 /// out of scope (Bevy UI has no text-input widget, notably in the browser
-/// build), so the player cycles through this list with arrows instead.
+/// build), so the custom hero cycles through this list with arrows instead.
 pub const FOLK_NAMES: &[&str] = &[
     "Făt-Frumos",
     "Greuceanu",
@@ -30,34 +30,241 @@ pub const FREE_POINTS: u32 = 10;
 /// Every attribute starts at this value and can never drop below it.
 pub const BASE_VALUE: u32 = 1;
 
+/// The five starting points on the hero-creation path chooser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeroChoice {
+    Custom,
+    Preset(HeroPreset),
+}
+
+impl HeroChoice {
+    pub const ALL: [Self; 5] = [
+        Self::Custom,
+        Self::Preset(HeroPreset::Haiducul),
+        Self::Preset(HeroPreset::Voinicul),
+        Self::Preset(HeroPreset::Ciobanul),
+        Self::Preset(HeroPreset::UceniculSolomonar),
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Custom => "Personalizat",
+            Self::Preset(preset) => preset.name(),
+        }
+    }
+}
+
+/// The four folklore-inspired starter hero templates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeroPreset {
+    Haiducul,
+    Voinicul,
+    Ciobanul,
+    UceniculSolomonar,
+}
+
+impl HeroPreset {
+    pub const ALL: [Self; 4] = [
+        Self::Haiducul,
+        Self::Voinicul,
+        Self::Ciobanul,
+        Self::UceniculSolomonar,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Haiducul => "Haiducul",
+            Self::Voinicul => "Voinicul",
+            Self::Ciobanul => "Ciobanul",
+            Self::UceniculSolomonar => "Ucenicul Solomonar",
+        }
+    }
+
+    pub fn flavor(self) -> &'static str {
+        match self {
+            Self::Haiducul => "Iute, norocos și mereu gata să lovească din mișcare.",
+            Self::Voinicul => "Erou echilibrat, cu putere și rezistență de drum lung.",
+            Self::Ciobanul => "Statornic și greu de clintit, crescut printre munți și furtuni.",
+            Self::UceniculSolomonar => {
+                "Sprijină lupta pe noroc, răbdare și o minte umblată prin taine."
+            }
+        }
+    }
+
+    pub fn attributes(self) -> Attributes {
+        match self {
+            Self::Haiducul => Attributes {
+                putere: 2,
+                agilitate: 5,
+                vitalitate: 2,
+                noroc: 5,
+            },
+            Self::Voinicul => Attributes {
+                putere: 4,
+                agilitate: 3,
+                vitalitate: 4,
+                noroc: 3,
+            },
+            Self::Ciobanul => Attributes {
+                putere: 3,
+                agilitate: 2,
+                vitalitate: 6,
+                noroc: 3,
+            },
+            Self::UceniculSolomonar => Attributes {
+                putere: 2,
+                agilitate: 2,
+                vitalitate: 5,
+                noroc: 5,
+            },
+        }
+    }
+
+    pub fn appearance(self) -> PlayerAppearance {
+        match self {
+            Self::Haiducul => PlayerAppearance {
+                skin_tone: SkinTone::Olive,
+                build: BodyBuild::Lean,
+                hair: HairStyle::Long,
+                accent: AccentColor::Forest,
+            },
+            Self::Voinicul => PlayerAppearance {
+                skin_tone: SkinTone::Warm,
+                build: BodyBuild::Powerful,
+                hair: HairStyle::Short,
+                accent: AccentColor::Crimson,
+            },
+            Self::Ciobanul => PlayerAppearance {
+                skin_tone: SkinTone::Fair,
+                build: BodyBuild::Sturdy,
+                hair: HairStyle::Tied,
+                accent: AccentColor::Gold,
+            },
+            Self::UceniculSolomonar => PlayerAppearance {
+                skin_tone: SkinTone::Deep,
+                build: BodyBuild::Balanced,
+                hair: HairStyle::Braided,
+                accent: AccentColor::Storm,
+            },
+        }
+    }
+
+    pub fn starter_items(self) -> &'static [ItemId] {
+        match self {
+            Self::Haiducul => &[ItemId::ToporDePadurar, ItemId::OpinciIuti],
+            Self::Voinicul => &[ItemId::BataCiobaneasca, ItemId::ScutDeLemn],
+            Self::Ciobanul => &[
+                ItemId::BataCiobaneasca,
+                ItemId::CaciulaDeOaie,
+                ItemId::CojocGros,
+            ],
+            Self::UceniculSolomonar => &[
+                ItemId::BataCiobaneasca,
+                ItemId::IeDescantata,
+                ItemId::CaciulaDeOaie,
+            ],
+        }
+    }
+}
+
 /// The in-progress character build on the creation screen. Fields are private
-/// so every mutation goes through methods that uphold the invariants. The
-/// default is the fresh draft: first name, base attributes, nothing spent.
-#[derive(Resource, Debug, Clone, PartialEq, Eq, Default)]
+/// so every mutation goes through methods that uphold the invariants.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
 pub struct CharacterDraft {
-    name_index: usize,
+    choice: HeroChoice,
+    custom_name_index: usize,
     attributes: Attributes,
+    appearance: PlayerAppearance,
+}
+
+impl Default for CharacterDraft {
+    fn default() -> Self {
+        Self {
+            choice: HeroChoice::Custom,
+            custom_name_index: 0,
+            attributes: Attributes::default(),
+            appearance: PlayerAppearance::default(),
+        }
+    }
 }
 
 impl CharacterDraft {
-    /// The currently selected folk hero name.
+    /// The currently selected hero choice.
+    pub fn choice(&self) -> HeroChoice {
+        self.choice
+    }
+
+    /// Apply one starter choice, resetting stats and appearance to that
+    /// template while keeping the draft editable afterward.
+    pub fn select_choice(&mut self, choice: HeroChoice) {
+        self.choice = choice;
+        match choice {
+            HeroChoice::Custom => {
+                self.attributes = Attributes::default();
+                self.appearance = PlayerAppearance::default();
+            }
+            HeroChoice::Preset(preset) => {
+                self.attributes = preset.attributes();
+                self.appearance = preset.appearance();
+            }
+        }
+    }
+
+    /// The name shown on the screen and confirmed into the player resource.
     pub fn name(&self) -> &'static str {
-        FOLK_NAMES[self.name_index]
+        match self.choice {
+            HeroChoice::Custom => FOLK_NAMES[self.custom_name_index],
+            HeroChoice::Preset(preset) => preset.name(),
+        }
     }
 
-    /// Cycles to the next name, wrapping at the end of the list.
+    /// Short flavor copy for the selected path.
+    pub fn description(&self) -> &'static str {
+        match self.choice {
+            HeroChoice::Custom => {
+                "Punctele și înfățișarea pornesc de la zero. Tu îți croiești eroul."
+            }
+            HeroChoice::Preset(preset) => preset.flavor(),
+        }
+    }
+
+    /// The starter items seeded into the persistent loadout on confirm.
+    pub fn starter_items(&self) -> &'static [ItemId] {
+        match self.choice {
+            HeroChoice::Custom => &[],
+            HeroChoice::Preset(preset) => preset.starter_items(),
+        }
+    }
+
+    /// Whether the current path uses curated name cycling.
+    pub fn can_cycle_name(&self) -> bool {
+        matches!(self.choice, HeroChoice::Custom)
+    }
+
+    /// Cycles to the next custom name, wrapping at the end of the list.
     pub fn next_name(&mut self) {
-        self.name_index = (self.name_index + 1) % FOLK_NAMES.len();
+        if !self.can_cycle_name() {
+            return;
+        }
+        self.custom_name_index = (self.custom_name_index + 1) % FOLK_NAMES.len();
     }
 
-    /// Cycles to the previous name, wrapping at the start of the list.
+    /// Cycles to the previous custom name, wrapping at the start of the list.
     pub fn previous_name(&mut self) {
-        self.name_index = (self.name_index + FOLK_NAMES.len() - 1) % FOLK_NAMES.len();
+        if !self.can_cycle_name() {
+            return;
+        }
+        self.custom_name_index = (self.custom_name_index + FOLK_NAMES.len() - 1) % FOLK_NAMES.len();
     }
 
     /// The attributes as allocated so far.
     pub fn attributes(&self) -> Attributes {
         self.attributes
+    }
+
+    /// The appearance as configured so far.
+    pub fn appearance(&self) -> PlayerAppearance {
+        self.appearance
     }
 
     /// Current value of one attribute.
@@ -105,16 +312,79 @@ impl CharacterDraft {
         true
     }
 
+    pub fn skin_tone(&self) -> SkinTone {
+        self.appearance.skin_tone
+    }
+
+    pub fn next_skin_tone(&mut self) {
+        cycle_next(&mut self.appearance.skin_tone, &SkinTone::ALL);
+    }
+
+    pub fn previous_skin_tone(&mut self) {
+        cycle_previous(&mut self.appearance.skin_tone, &SkinTone::ALL);
+    }
+
+    pub fn build(&self) -> BodyBuild {
+        self.appearance.build
+    }
+
+    pub fn next_build(&mut self) {
+        cycle_next(&mut self.appearance.build, &BodyBuild::ALL);
+    }
+
+    pub fn previous_build(&mut self) {
+        cycle_previous(&mut self.appearance.build, &BodyBuild::ALL);
+    }
+
+    pub fn hair(&self) -> HairStyle {
+        self.appearance.hair
+    }
+
+    pub fn next_hair(&mut self) {
+        cycle_next(&mut self.appearance.hair, &HairStyle::ALL);
+    }
+
+    pub fn previous_hair(&mut self) {
+        cycle_previous(&mut self.appearance.hair, &HairStyle::ALL);
+    }
+
+    pub fn accent(&self) -> AccentColor {
+        self.appearance.accent
+    }
+
+    pub fn next_accent(&mut self) {
+        cycle_next(&mut self.appearance.accent, &AccentColor::ALL);
+    }
+
+    pub fn previous_accent(&mut self) {
+        cycle_previous(&mut self.appearance.accent, &AccentColor::ALL);
+    }
+
     /// Confirm is allowed only when all free points are spent.
     pub fn is_complete(&self) -> bool {
         self.points_remaining() == 0
     }
 
-    /// Restores the fresh-draft state: first name, base attributes, all
-    /// [`FREE_POINTS`] unspent.
+    /// Restores the fresh custom-draft state.
     pub fn reset(&mut self) {
         *self = Self::default();
     }
+}
+
+fn cycle_next<T: Copy + Eq>(value: &mut T, all: &[T]) {
+    let index = all
+        .iter()
+        .position(|candidate| *candidate == *value)
+        .expect("current enum value exists in its ALL table");
+    *value = all[(index + 1) % all.len()];
+}
+
+fn cycle_previous<T: Copy + Eq>(value: &mut T, all: &[T]) {
+    let index = all
+        .iter()
+        .position(|candidate| *candidate == *value)
+        .expect("current enum value exists in its ALL table");
+    *value = all[(index + all.len() - 1) % all.len()];
 }
 
 #[cfg(test)]
@@ -122,13 +392,61 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fresh_draft_has_base_attributes_and_all_points_free() {
+    fn fresh_draft_is_custom_with_base_attributes_and_default_appearance() {
         let draft = CharacterDraft::default();
+        assert_eq!(draft.choice(), HeroChoice::Custom);
         assert_eq!(draft.attributes(), Attributes::default());
+        assert_eq!(draft.appearance(), PlayerAppearance::default());
         assert_eq!(draft.points_spent(), 0);
         assert_eq!(draft.points_remaining(), FREE_POINTS);
         assert_eq!(draft.name(), FOLK_NAMES[0]);
+        assert!(draft.can_cycle_name());
         assert!(!draft.is_complete());
+        assert!(draft.starter_items().is_empty());
+    }
+
+    #[test]
+    fn presets_have_unique_names_and_equal_point_budgets() {
+        let mut names = std::collections::BTreeSet::new();
+        for preset in HeroPreset::ALL {
+            assert!(names.insert(preset.name()), "preset names stay unique");
+            let attrs = preset.attributes();
+            let points = attrs.putere + attrs.agilitate + attrs.vitalitate + attrs.noroc;
+            assert_eq!(
+                points,
+                AttributeKind::ALL.len() as u32 * BASE_VALUE + FREE_POINTS,
+                "{} uses the same point budget as custom heroes",
+                preset.name()
+            );
+        }
+    }
+
+    #[test]
+    fn selecting_a_preset_populates_name_attributes_appearance_and_loadout() {
+        let mut draft = CharacterDraft::default();
+        draft.select_choice(HeroChoice::Preset(HeroPreset::Ciobanul));
+        assert_eq!(draft.choice(), HeroChoice::Preset(HeroPreset::Ciobanul));
+        assert_eq!(draft.name(), "Ciobanul");
+        assert_eq!(draft.attributes(), HeroPreset::Ciobanul.attributes());
+        assert_eq!(draft.appearance(), HeroPreset::Ciobanul.appearance());
+        assert_eq!(draft.starter_items(), HeroPreset::Ciobanul.starter_items());
+        assert!(
+            draft.is_complete(),
+            "presets start as fully allocated builds"
+        );
+        assert!(!draft.can_cycle_name(), "preset names stay fixed");
+    }
+
+    #[test]
+    fn switching_back_to_custom_restores_the_custom_baseline() {
+        let mut draft = CharacterDraft::default();
+        draft.select_choice(HeroChoice::Preset(HeroPreset::Voinicul));
+        draft.select_choice(HeroChoice::Custom);
+        assert_eq!(draft.choice(), HeroChoice::Custom);
+        assert_eq!(draft.attributes(), Attributes::default());
+        assert_eq!(draft.appearance(), PlayerAppearance::default());
+        assert_eq!(draft.name(), FOLK_NAMES[0]);
+        assert_eq!(draft.points_remaining(), FREE_POINTS);
     }
 
     #[test]
@@ -181,7 +499,6 @@ mod tests {
             draft.increase(kind);
             draft.increase(kind);
         }
-        // 8 spent so far.
         assert!(!draft.is_complete());
         draft.increase(AttributeKind::Putere);
         assert!(!draft.is_complete(), "9 of 10 spent");
@@ -192,19 +509,32 @@ mod tests {
     }
 
     #[test]
-    fn reset_restores_the_fresh_draft() {
+    fn appearance_cycles_wrap_for_every_field() {
         let mut draft = CharacterDraft::default();
-        draft.next_name();
-        for _ in 0..5 {
-            draft.increase(AttributeKind::Putere);
-        }
-        draft.reset();
-        assert_eq!(draft, CharacterDraft::default());
-        assert_eq!(draft.points_remaining(), FREE_POINTS);
+
+        draft.previous_skin_tone();
+        assert_eq!(draft.skin_tone(), SkinTone::Fair);
+        draft.next_skin_tone();
+        assert_eq!(draft.skin_tone(), SkinTone::Warm);
+
+        draft.previous_build();
+        assert_eq!(draft.build(), BodyBuild::Lean);
+        draft.next_build();
+        assert_eq!(draft.build(), BodyBuild::Balanced);
+
+        draft.previous_hair();
+        assert_eq!(draft.hair(), HairStyle::Tied);
+        draft.next_hair();
+        assert_eq!(draft.hair(), HairStyle::Braided);
+
+        draft.previous_accent();
+        assert_eq!(draft.accent(), AccentColor::Storm);
+        draft.next_accent();
+        assert_eq!(draft.accent(), AccentColor::Crimson);
     }
 
     #[test]
-    fn name_cycles_forward_and_wraps() {
+    fn custom_name_cycles_forward_and_wraps() {
         let mut draft = CharacterDraft::default();
         for expected in FOLK_NAMES.iter().skip(1) {
             draft.next_name();
@@ -215,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    fn name_cycles_backward_and_wraps() {
+    fn custom_name_cycles_backward_and_wraps() {
         let mut draft = CharacterDraft::default();
         draft.previous_name();
         assert_eq!(
@@ -225,5 +555,16 @@ mod tests {
         );
         draft.previous_name();
         assert_eq!(draft.name(), FOLK_NAMES[FOLK_NAMES.len() - 2]);
+    }
+
+    #[test]
+    fn reset_restores_the_fresh_custom_draft() {
+        let mut draft = CharacterDraft::default();
+        draft.select_choice(HeroChoice::Preset(HeroPreset::Haiducul));
+        draft.previous_accent();
+        draft.decrease(AttributeKind::Noroc);
+        draft.reset();
+        assert_eq!(draft, CharacterDraft::default());
+        assert_eq!(draft.points_remaining(), FREE_POINTS);
     }
 }

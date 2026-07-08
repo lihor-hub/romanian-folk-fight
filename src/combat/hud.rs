@@ -817,6 +817,7 @@ mod tests {
         app.insert_resource(PlayerCharacter {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
+            appearance: crate::character::PlayerAppearance::default(),
         });
         app.insert_resource(CombatRng(strikes_rng(4)));
         app.update();
@@ -1226,6 +1227,7 @@ mod tests {
         app.insert_resource(PlayerCharacter {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
+            appearance: crate::character::PlayerAppearance::default(),
         });
         app.insert_resource(CombatRng(strikes_rng(4)));
         app.insert_resource(Level {

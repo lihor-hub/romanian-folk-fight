@@ -4,6 +4,7 @@
 pub mod stats;
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::items::Equipment;
 
@@ -85,6 +86,119 @@ impl AttributeKind {
             AttributeKind::Agilitate => "Agilitate",
             AttributeKind::Vitalitate => "Vitalitate",
             AttributeKind::Noroc => "Noroc",
+        }
+    }
+}
+
+/// Stable, save-friendly appearance of the player hero.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PlayerAppearance {
+    pub skin_tone: SkinTone,
+    pub build: BodyBuild,
+    pub hair: HairStyle,
+    pub accent: AccentColor,
+}
+
+impl Default for PlayerAppearance {
+    fn default() -> Self {
+        Self {
+            skin_tone: SkinTone::Warm,
+            build: BodyBuild::Balanced,
+            hair: HairStyle::Braided,
+            accent: AccentColor::Crimson,
+        }
+    }
+}
+
+/// Selectable skin tone for the player's cutout rig.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkinTone {
+    Fair,
+    Warm,
+    Olive,
+    Deep,
+}
+
+impl SkinTone {
+    pub const ALL: [Self; 4] = [Self::Fair, Self::Warm, Self::Olive, Self::Deep];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fair => "Deschis",
+            Self::Warm => "Miere",
+            Self::Olive => "Măsliniu",
+            Self::Deep => "Brun",
+        }
+    }
+}
+
+/// Broad body silhouette choice for the player's cutout rig.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BodyBuild {
+    Lean,
+    Balanced,
+    Sturdy,
+    Powerful,
+}
+
+impl BodyBuild {
+    pub const ALL: [Self; 4] = [Self::Lean, Self::Balanced, Self::Sturdy, Self::Powerful];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Lean => "Sprinten",
+            Self::Balanced => "Echilibrat",
+            Self::Sturdy => "Solid",
+            Self::Powerful => "Vânjos",
+        }
+    }
+}
+
+/// Hairstyle choice for the player's cutout rig.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HairStyle {
+    Braided,
+    Long,
+    Short,
+    Tied,
+}
+
+impl HairStyle {
+    pub const ALL: [Self; 4] = [Self::Braided, Self::Long, Self::Short, Self::Tied];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Braided => "Împletit",
+            Self::Long => "Plete",
+            Self::Short => "Scurt",
+            Self::Tied => "Prins",
+        }
+    }
+}
+
+/// Clothing accent palette for the player's cutout rig.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccentColor {
+    Crimson,
+    Forest,
+    Gold,
+    Storm,
+}
+
+impl AccentColor {
+    pub const ALL: [Self; 4] = [Self::Crimson, Self::Forest, Self::Gold, Self::Storm];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Crimson => "Roșu",
+            Self::Forest => "Verde",
+            Self::Gold => "Auriu",
+            Self::Storm => "Cenușiu",
         }
     }
 }

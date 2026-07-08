@@ -810,6 +810,7 @@ mod tests {
         PlayerCharacter {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
+            appearance: crate::character::PlayerAppearance::default(),
         }
     }
 
