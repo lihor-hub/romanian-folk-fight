@@ -7,7 +7,7 @@ pub mod attribute_row;
 use bevy::prelude::*;
 
 use crate::core::UiFont;
-use crate::menu::{BUTTON_NORMAL, CREAM};
+use crate::theme::{BUTTON_NORMAL, CREAM};
 
 /// A small square button (name arrows, `-` / `+`).
 pub fn small_button(label: &str, ui_font: &UiFont) -> impl Bundle {

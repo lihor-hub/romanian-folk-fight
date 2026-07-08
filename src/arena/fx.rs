@@ -11,8 +11,8 @@ use bevy::prelude::*;
 use crate::character::{EnemyFighter, PlayerFighter};
 use crate::combat::{CombatAction, CombatEvent, CombatLogEvent, CombatSide};
 use crate::core::{GameState, UiFont};
-use crate::menu::CREAM;
 use crate::roster::LadderProgress;
+use crate::theme::{BLOCKED_GRAY, CREAM, CRIT_GOLD};
 
 use super::{ARENA_HEIGHT, ArenaScreen, FIGHTER_SIZE};
 
@@ -156,10 +156,6 @@ const DAMAGE_TEXT_RISE_SPEED: f32 = 70.0;
 pub const DAMAGE_FONT_SIZE: f32 = 26.0;
 /// Font size of a crit number — visibly bigger.
 pub const CRIT_FONT_SIZE: f32 = 40.0;
-/// Gold crit color (docs/art-direction.md `#c9a227`).
-pub const CRIT_GOLD: Color = Color::srgb(0.788, 0.635, 0.153);
-/// Muted color for blocked chip damage.
-const BLOCKED_GRAY: Color = Color::srgb(0.62, 0.60, 0.58);
 /// The floating text shown when a strike misses.
 pub const MISS_TEXT: &str = "Ratat!";
 

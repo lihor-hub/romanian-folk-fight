@@ -13,11 +13,12 @@ use bevy::prelude::*;
 
 use crate::character::{EnemyFighter, FighterName, Health, PlayerFighter, Stamina};
 use crate::core::UiFont;
-use crate::menu::{
-    BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, DisabledButton,
-    TEXT_DISABLED,
-};
+use crate::menu::DisabledButton;
 use crate::progression::Level;
+use crate::theme::{
+    BAR_TRACK, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, HP_FILL,
+    PanelTexture, STAMINA_FILL, TEXT_DISABLED, panel_bundle,
+};
 
 use super::engine::{CombatAction, CombatEvent, REST_RESTORE};
 use super::systems::{CombatLogEvent, CombatSide, CombatTurn, PlayerActionEvent};
@@ -27,10 +28,6 @@ pub const LOG_CAPACITY: usize = 8;
 
 const PANEL_WIDTH: f32 = 240.0;
 const BAR_HEIGHT: f32 = 16.0;
-const HP_FILL: Color = Color::srgb(0.78, 0.16, 0.14);
-const STAMINA_FILL: Color = Color::srgb(0.88, 0.74, 0.22);
-const BAR_TRACK: Color = Color::srgb(0.16, 0.14, 0.13);
-const PANEL_BACKGROUND: Color = Color::srgba(0.0, 0.0, 0.0, 0.55);
 
 /// Marker for the HUD root; everything under it despawns on
 /// `OnExit(GameState::Fight)`.
@@ -156,7 +153,11 @@ pub fn log_line(actor: &str, opponent: &str, event: CombatEvent) -> String {
 }
 
 /// Spawns the HUD overlay and a fresh [`CombatLog`] on entering the fight.
-pub(super) fn spawn_hud(mut commands: Commands, ui_font: Res<UiFont>) {
+pub(super) fn spawn_hud(
+    mut commands: Commands,
+    ui_font: Res<UiFont>,
+    panel_texture: Res<PanelTexture>,
+) {
     commands.insert_resource(CombatLog::default());
     commands.spawn((
         HudScreen,
@@ -167,10 +168,10 @@ pub(super) fn spawn_hud(mut commands: Commands, ui_font: Res<UiFont>) {
             ..default()
         },
         children![
-            fighter_panel(CombatSide::Player, &ui_font),
-            fighter_panel(CombatSide::Enemy, &ui_font),
+            fighter_panel(CombatSide::Player, &ui_font, &panel_texture),
+            fighter_panel(CombatSide::Enemy, &ui_font, &panel_texture),
             pause_button(&ui_font),
-            log_panel(&ui_font),
+            log_panel(&ui_font, &panel_texture),
             action_bar(&ui_font),
         ],
     ));
@@ -211,7 +212,7 @@ pub(super) fn teardown_hud(mut commands: Commands) {
 }
 
 /// One fighter's status panel in a top corner: name, HP bar, stamina bar.
-fn fighter_panel(side: CombatSide, ui_font: &UiFont) -> impl Bundle {
+fn fighter_panel(side: CombatSide, ui_font: &UiFont, panel_texture: &PanelTexture) -> impl Bundle {
     let mut node = Node {
         position_type: PositionType::Absolute,
         top: Val::Px(12.0),
@@ -226,8 +227,7 @@ fn fighter_panel(side: CombatSide, ui_font: &UiFont) -> impl Bundle {
         CombatSide::Enemy => node.right = Val::Px(12.0),
     }
     (
-        node,
-        BackgroundColor(PANEL_BACKGROUND),
+        panel_bundle(panel_texture, node),
         children![
             (
                 Text::new(""),
@@ -241,7 +241,11 @@ fn fighter_panel(side: CombatSide, ui_font: &UiFont) -> impl Bundle {
     )
 }
 
-/// One bar row: a dark track with a colored fill, and a `current/max` label.
+/// A thin gold edge, per the palette, drawn on carved-wood bar tracks.
+const BAR_EDGE: Color = crate::theme::GOLD;
+
+/// One bar row: a carved-wood track with a thin gold edge and a colored
+/// fill, plus a `current/max` label.
 fn bar(side: CombatSide, pool: Pool, fill_color: Color, ui_font: &UiFont) -> impl Bundle {
     (
         Node {
@@ -256,9 +260,11 @@ fn bar(side: CombatSide, pool: Pool, fill_color: Color, ui_font: &UiFont) -> imp
                 Node {
                     flex_grow: 1.0,
                     height: Val::Px(BAR_HEIGHT),
+                    border: UiRect::all(Val::Px(1.5)),
                     ..default()
                 },
                 BackgroundColor(BAR_TRACK),
+                BorderColor::all(BAR_EDGE),
                 children![(
                     Node {
                         width: Val::Percent(100.0),
@@ -280,17 +286,19 @@ fn bar(side: CombatSide, pool: Pool, fill_color: Color, ui_font: &UiFont) -> imp
 }
 
 /// The right-side combat-log panel with a single multi-line text node.
-fn log_panel(ui_font: &UiFont) -> impl Bundle {
+fn log_panel(ui_font: &UiFont, panel_texture: &PanelTexture) -> impl Bundle {
     (
-        Node {
-            position_type: PositionType::Absolute,
-            right: Val::Px(12.0),
-            top: Val::Px(120.0),
-            width: Val::Px(300.0),
-            padding: UiRect::all(Val::Px(8.0)),
-            ..default()
-        },
-        BackgroundColor(PANEL_BACKGROUND),
+        panel_bundle(
+            panel_texture,
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(12.0),
+                top: Val::Px(120.0),
+                width: Val::Px(300.0),
+                padding: UiRect::all(Val::Px(8.0)),
+                ..default()
+            },
+        ),
         children![(
             Text::new(""),
             ui_font.text_font(15.0),

@@ -10,7 +10,7 @@ use bevy::prelude::*;
 
 use crate::character::AttributeKind;
 use crate::core::UiFont;
-use crate::menu::CREAM;
+use crate::theme::CREAM;
 
 use super::small_button;
 

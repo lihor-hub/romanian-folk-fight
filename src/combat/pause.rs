@@ -10,8 +10,11 @@
 use bevy::prelude::*;
 
 use crate::core::{GameState, UiFont, despawn_screen};
-use crate::menu::{BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, DisabledButton};
+use crate::menu::DisabledButton;
 use crate::settings::SettingsOpen;
+use crate::theme::{
+    BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, PanelTexture, SCRIM, panel_bundle,
+};
 
 /// Whether the running fight is paused. Exists only inside
 /// `GameState::Fight`; leaving the fight drops it (and the overlay with it).
@@ -44,9 +47,6 @@ pub(super) enum PauseAction {
     /// autosave, and the fight restarts fresh on return.
     Abandon,
 }
-
-const SCRIM: Color = Color::srgba(0.0, 0.0, 0.0, 0.65);
-const PANEL_BACKGROUND: Color = Color::srgb(0.12, 0.10, 0.09);
 
 pub(super) struct PausePlugin;
 
@@ -144,7 +144,7 @@ fn update_button_backgrounds(
 }
 
 /// Spawns the semi-transparent scrim and the pause panel.
-fn spawn_overlay(mut commands: Commands, ui_font: Res<UiFont>) {
+fn spawn_overlay(mut commands: Commands, ui_font: Res<UiFont>, panel_texture: Res<PanelTexture>) {
     commands.spawn((
         PauseOverlay,
         Node {
@@ -159,14 +159,16 @@ fn spawn_overlay(mut commands: Commands, ui_font: Res<UiFont>) {
         // Above the HUD, and the scrim swallows clicks aimed at it.
         GlobalZIndex(10),
         children![(
-            Node {
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                row_gap: Val::Px(14.0),
-                padding: UiRect::all(Val::Px(28.0)),
-                ..default()
-            },
-            BackgroundColor(PANEL_BACKGROUND),
+            panel_bundle(
+                &panel_texture,
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    row_gap: Val::Px(14.0),
+                    padding: UiRect::all(Val::Px(28.0)),
+                    ..default()
+                },
+            ),
             children![
                 (
                     Text::new("Pauză"),

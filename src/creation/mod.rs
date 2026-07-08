@@ -12,9 +12,10 @@ pub use draft::{AttributeKind, CharacterDraft, FOLK_NAMES, FREE_POINTS};
 
 use crate::character::{Attributes, stats};
 use crate::core::{GameState, UiFont, despawn_screen};
-use crate::menu::{
-    BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, DisabledButton,
-    NIGHT_BLACK, TEXT_DISABLED,
+use crate::menu::DisabledButton;
+use crate::theme::{
+    BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK,
+    TEXT_DISABLED,
 };
 use crate::ui_widgets::{attribute_row::spawn_attribute_row, small_button, wide_button};
 

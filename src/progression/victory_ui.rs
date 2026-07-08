@@ -12,14 +12,11 @@ use crate::announcer::{
 };
 use crate::core::{GameState, UiFont};
 use crate::creation::PlayerCharacter;
-use crate::menu::{CREAM, NIGHT_BLACK};
 use crate::roster::{LADDER, LadderProgress};
+use crate::theme::{CREAM, CREDITS_GRAY, NIGHT_BLACK, PanelTexture, panel_bundle};
 use crate::ui_widgets::wide_button;
 
 use super::{Level, LifetimeEarnings, result_ui::ChangedButton};
-
-/// Muted tone for the credits block, so it reads as a footnote.
-const CREDITS_GRAY: Color = Color::srgb(0.55, 0.52, 0.48);
 
 /// Marker for the victory-screen root; despawned by
 /// [`crate::core::despawn_screen`] on `OnExit(GameState::Victory)`.
@@ -57,38 +54,52 @@ pub(super) fn spawn_victory_screen(
     earnings: Res<LifetimeEarnings>,
     ladder: Option<Res<LadderProgress>>,
     ui_font: Res<UiFont>,
+    panel_texture: Res<PanelTexture>,
 ) {
     let hero = player.map_or_else(|| "Voinicul".to_string(), |player| player.name.clone());
     let fights_won = ladder.map_or(LADDER.len(), |ladder| ladder.0);
     let line = victory_line(&hero, earnings.0);
     commands
         .spawn((screen_root(), VictoryScreen))
-        .with_children(|parent| {
-            parent.spawn(hero_name(&hero, &ui_font));
-            parent.spawn(screen_title("Ai învins!", &ui_font));
-            parent.spawn(screen_line(
-                "Legenda ta se va cânta la șezători.".to_string(),
-                &ui_font,
-            ));
-            parent.spawn(screen_line(line, &ui_font));
-            parent.spawn(screen_line(
-                format!("Lupte câștigate: {fights_won}"),
-                &ui_font,
-            ));
-            parent.spawn(screen_line(
-                format!("Nivel atins: {}", level.level),
-                &ui_font,
-            ));
-            parent.spawn(screen_line(
-                format!("Galbeni câștigați: {}", earnings.0),
-                &ui_font,
-            ));
-            parent.spawn((wide_button("Turul 2", &ui_font), VictoryAction::NextLap));
-            parent.spawn((
-                wide_button("Înapoi la menu", &ui_font),
-                VictoryAction::BackToMenu,
-            ));
-            spawn_credits(parent, &ui_font);
+        .with_children(|screen| {
+            screen
+                .spawn(panel_bundle(
+                    &panel_texture,
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        row_gap: Val::Px(12.0),
+                        padding: UiRect::all(Val::Px(28.0)),
+                        ..default()
+                    },
+                ))
+                .with_children(|parent| {
+                    parent.spawn(hero_name(&hero, &ui_font));
+                    parent.spawn(screen_title("Ai învins!", &ui_font));
+                    parent.spawn(screen_line(
+                        "Legenda ta se va cânta la șezători.".to_string(),
+                        &ui_font,
+                    ));
+                    parent.spawn(screen_line(line, &ui_font));
+                    parent.spawn(screen_line(
+                        format!("Lupte câștigate: {fights_won}"),
+                        &ui_font,
+                    ));
+                    parent.spawn(screen_line(
+                        format!("Nivel atins: {}", level.level),
+                        &ui_font,
+                    ));
+                    parent.spawn(screen_line(
+                        format!("Galbeni câștigați: {}", earnings.0),
+                        &ui_font,
+                    ));
+                    parent.spawn((wide_button("Turul 2", &ui_font), VictoryAction::NextLap));
+                    parent.spawn((
+                        wide_button("Înapoi la menu", &ui_font),
+                        VictoryAction::BackToMenu,
+                    ));
+                    spawn_credits(parent, &ui_font);
+                });
         });
 }
 

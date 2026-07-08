@@ -17,8 +17,8 @@ use rand::{Rng, RngExt as _};
 use crate::character::{EnemyFighter, FighterName, PlayerFighter};
 use crate::combat::{CombatEvent, CombatLogEvent, CombatRng, CombatSide};
 use crate::core::{GameState, UiFont, despawn_screen};
-use crate::menu::CREAM;
 use crate::roster::Boss;
+use crate::theme::{BANNER_BACKGROUND, CREAM};
 
 pub use lines::LineKey;
 
@@ -27,7 +27,6 @@ pub const BANNER_SECONDS: f32 = 2.5;
 /// The tail of the banner's life over which it fades out.
 const FADE_SECONDS: f32 = 0.4;
 
-const BANNER_BACKGROUND: Color = Color::srgba(0.0, 0.0, 0.0, 0.72);
 const BANNER_TOP: f32 = 64.0;
 
 /// Marker for the banner strip root; despawns on `OnExit(GameState::Fight)`.

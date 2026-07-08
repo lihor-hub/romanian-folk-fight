@@ -16,8 +16,8 @@ use crate::combat::AiProfile;
 use crate::core::{GameState, UiFont, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::items::Equipment;
-use crate::menu::CREAM;
 use crate::roster::{Boss, LadderProgress};
+use crate::theme::{BOSS_LABEL_COLOR, CREAM, GROUND_COLOR};
 use animation::{FighterClip, FighterSpriteSheets};
 use fx::{ArenaBackgrounds, background_tier, spawn_background};
 
@@ -42,14 +42,8 @@ pub const PLAYER_ANCHOR: Transform = Transform::from_xyz(-220.0, FIGHTER_Y, 0.0)
 /// Where the opponent stands, facing left; mirrors [`PLAYER_ANCHOR`].
 pub const ENEMY_ANCHOR: Transform = Transform::from_xyz(220.0, FIGHTER_Y, 0.0);
 
-/// Ground-strip color under the tiered parallax backgrounds (#23).
-const GROUND_COLOR: Color = Color::srgb(0.30, 0.22, 0.14);
-
 /// Vertical offset of the name label above a fighter's body center.
 const LABEL_OFFSET_Y: f32 = FIGHTER_SIZE.y / 2.0 + 24.0;
-
-/// Name-label color for boss opponents; regular fighters use [`CREAM`].
-pub const BOSS_LABEL_COLOR: Color = Color::srgb(0.95, 0.45, 0.20);
 
 /// Marker for every arena entity; all of them despawn on
 /// `OnExit(GameState::Fight)` via [`despawn_screen`].

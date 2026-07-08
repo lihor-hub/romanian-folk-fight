@@ -71,7 +71,11 @@ impl Plugin for CorePlugin {
         app.init_state::<GameState>()
             .init_resource::<UiFont>()
             .add_systems(PreStartup, load_ui_font)
-            .add_systems(Startup, spawn_camera);
+            .add_systems(Startup, spawn_camera)
+            // Every screen consumes the theme module's palette, spacing, and
+            // panel texture, so it rides along with the other core resources
+            // instead of every test app wiring it up separately.
+            .add_plugins(crate::theme::ThemePlugin);
     }
 }
 
