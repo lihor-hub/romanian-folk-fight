@@ -3,6 +3,8 @@
 //! the AI-driven enemy reply, and the write-back of
 //! [`engine::resolve_action`] results onto `Health` and `Stamina` components.
 
+use std::time::Duration;
+
 use bevy::prelude::*;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -15,6 +17,10 @@ use super::ai::{self, AiProfile};
 use super::engine::{self, CombatAction, CombatEvent, DuelDistance};
 use super::hud;
 use super::pause::{self, PauseState};
+
+/// Unity-style combat cooldown: slightly longer than the current 0.4s attack
+/// clip, so a readable pose lands before the next fighter acts.
+pub const PRESENTATION_DELAY_SECONDS: f32 = 0.5;
 
 /// The two sides of a duel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +65,38 @@ pub struct CombatTurn {
 #[derive(Resource, Debug, Clone)]
 pub struct CombatRng(pub ChaCha8Rng);
 
+/// Presentation gate between resolved combat actions.
+#[derive(Resource, Debug, Clone, Default)]
+pub struct CombatPresentation {
+    timer: Option<Timer>,
+}
+
+impl CombatPresentation {
+    fn start(&mut self) {
+        self.timer = Some(Timer::new(
+            Duration::from_secs_f32(PRESENTATION_DELAY_SECONDS),
+            TimerMode::Once,
+        ));
+    }
+
+    /// Whether the presentation window is still blocking the next action.
+    pub fn is_busy(&self) -> bool {
+        self.timer
+            .as_ref()
+            .is_some_and(|timer| !timer.is_finished())
+    }
+
+    fn tick(&mut self, delta: Duration) {
+        let Some(timer) = self.timer.as_mut() else {
+            return;
+        };
+        timer.tick(delta);
+        if timer.is_finished() {
+            self.timer = None;
+        }
+    }
+}
+
 /// The player's chosen action for this turn. Written by the HUD action
 /// buttons (and, in debug builds, the 1–4 keyboard mapping).
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +139,7 @@ impl Plugin for CombatPlugin {
                     // (run condition, not per-system ifs); the HUD display
                     // systems below keep running under the overlay.
                     (
+                        tick_presentation,
                         hud::handle_action_buttons,
                         resolve_player_action,
                         enemy_turn,
@@ -126,6 +165,7 @@ impl Plugin for CombatPlugin {
             Update,
             player_input
                 .after(init_turn)
+                .after(tick_presentation)
                 .before(resolve_player_action)
                 .run_if(in_state(GameState::Fight))
                 .run_if(in_state(PauseState::Running)),
@@ -156,12 +196,22 @@ fn setup_combat(mut commands: Commands, time: Res<Time>, rng: Option<Res<CombatR
             time.elapsed().as_micros() as u64,
         )));
     }
+    commands.init_resource::<CombatPresentation>();
 }
 
 /// Drops the duel state so the next fight starts fresh.
 fn teardown_combat(mut commands: Commands) {
     commands.remove_resource::<CombatTurn>();
     commands.remove_resource::<CombatRng>();
+    commands.remove_resource::<CombatPresentation>();
+}
+
+/// Advances the presentation gate before action systems decide whether the
+/// next fighter may act.
+fn tick_presentation(time: Res<Time>, presentation: Option<ResMut<CombatPresentation>>) {
+    if let Some(mut presentation) = presentation {
+        presentation.tick(time.delta());
+    }
 }
 
 /// Inserts [`CombatTurn`] once both fighters exist (they are spawned by the
@@ -200,11 +250,18 @@ fn init_turn(
 fn player_input(
     keys: Res<ButtonInput<KeyCode>>,
     turn: Option<Res<CombatTurn>>,
+    presentation: Option<Res<CombatPresentation>>,
     mut actions: MessageWriter<PlayerActionEvent>,
 ) {
     let Some(turn) = turn else {
         return;
     };
+    if presentation
+        .as_deref()
+        .is_some_and(CombatPresentation::is_busy)
+    {
+        return;
+    }
     if turn.side != CombatSide::Player || turn.over {
         return;
     }
@@ -231,6 +288,7 @@ fn resolve_player_action(
     mut actions: MessageReader<PlayerActionEvent>,
     turn: Option<ResMut<CombatTurn>>,
     rng: Option<ResMut<CombatRng>>,
+    presentation: Option<ResMut<CombatPresentation>>,
     mut log: MessageWriter<CombatLogEvent>,
     mut player: PlayerQuery,
     mut enemy: EnemyQuery,
@@ -238,6 +296,14 @@ fn resolve_player_action(
     let (Some(mut turn), Some(mut rng)) = (turn, rng) else {
         return;
     };
+    let mut presentation = presentation;
+    if presentation
+        .as_deref()
+        .is_some_and(CombatPresentation::is_busy)
+    {
+        for _ in actions.read() {}
+        return;
+    }
     for PlayerActionEvent(action) in actions.read().copied() {
         if turn.side != CombatSide::Player || turn.over {
             continue;
@@ -254,16 +320,20 @@ fn resolve_player_action(
             &mut rng,
             &mut log,
         );
+        if let Some(presentation) = presentation.as_deref_mut() {
+            presentation.start();
+        }
     }
 }
 
 /// The enemy reply, chosen by [`ai::choose_action`] from snapshots of both
 /// fighters and the enemy's [`AiProfile`] (default aggression if the spawner
-/// did not attach one). Runs in the same frame right after the player
-/// resolves, drawing from the same seeded RNG as the resolver.
+/// did not attach one). Waits for the presentation gate after player actions,
+/// while drawing from the same seeded RNG as the resolver.
 fn enemy_turn(
     turn: Option<ResMut<CombatTurn>>,
     rng: Option<ResMut<CombatRng>>,
+    presentation: Option<ResMut<CombatPresentation>>,
     mut log: MessageWriter<CombatLogEvent>,
     mut player: PlayerQuery,
     mut enemy: EnemyQuery,
@@ -273,6 +343,13 @@ fn enemy_turn(
         return;
     };
     if turn.side != CombatSide::Enemy || turn.over {
+        return;
+    }
+    let mut presentation = presentation;
+    if presentation
+        .as_deref()
+        .is_some_and(CombatPresentation::is_busy)
+    {
         return;
     }
     let (Ok(player), Ok(enemy)) = (player.single_mut(), enemy.single_mut()) else {
@@ -294,6 +371,9 @@ fn enemy_turn(
         &mut rng,
         &mut log,
     );
+    if let Some(presentation) = presentation.as_deref_mut() {
+        presentation.start();
+    }
 }
 
 /// One side's components as yielded by a [`FighterComponents`] query.
@@ -374,6 +454,7 @@ fn apply_action(
 mod tests {
     use super::*;
     use crate::arena::ArenaPlugin;
+    use crate::arena::animation::FighterClip;
     use crate::character::stats::{CRIT_PERCENT_CAP, HIT_PERCENT_MIN};
     use crate::core::CorePlugin;
     use crate::creation::PlayerCharacter;
@@ -400,6 +481,9 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin));
         app.add_plugins((ArenaPlugin, CombatPlugin));
         app.init_resource::<ButtonInput<KeyCode>>();
+        app.world_mut()
+            .resource_mut::<Time<Virtual>>()
+            .set_max_delta(Duration::from_secs(10));
         app.insert_resource(PlayerCharacter {
             name: "Făt-Frumos".to_string(),
             attributes,
@@ -450,6 +534,20 @@ mod tests {
         *app.world().resource::<CombatTurn>()
     }
 
+    fn presentation_busy(app: &App) -> bool {
+        app.world().resource::<CombatPresentation>().is_busy()
+    }
+
+    fn advance_presentation(app: &mut App) {
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::from_secs_f32(PRESENTATION_DELAY_SECONDS + 0.1),
+        ));
+        app.update();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::ZERO,
+        ));
+    }
+
     fn player_pools(app: &mut App) -> (i32, i32) {
         pools::<PlayerFighter>(app)
     }
@@ -465,6 +563,13 @@ mod tests {
             .single(app.world())
             .expect("fighter exists");
         (health.current, stamina.current)
+    }
+
+    fn clip<M: Component>(app: &mut App) -> FighterClip {
+        *app.world_mut()
+            .query_filtered::<&FighterClip, With<M>>()
+            .single(app.world())
+            .expect("fighter exists")
     }
 
     /// Drains the enemy's stamina below the quick-strike cost, forcing the
@@ -487,6 +592,8 @@ mod tests {
     fn press_vs_resting_enemy(app: &mut App, key: KeyCode) {
         drain_enemy_stamina(app);
         press(app, key);
+        advance_presentation(app);
+        advance_presentation(app);
     }
 
     #[test]
@@ -530,6 +637,63 @@ mod tests {
         // Rest, +20 stamina. Turn is back with the player.
         assert_eq!(enemy_pools(&mut app), (64, 20));
         assert_eq!(player_pools(&mut app), (90, 45));
+        assert_eq!(turn(&app).side, CombatSide::Player);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn enemy_reply_waits_for_the_player_presentation_window() {
+        let mut app = test_app();
+        drain_enemy_stamina(&mut app);
+        press(&mut app, KeyCode::Digit1);
+        assert_eq!(enemy_pools(&mut app), (64, 0), "player hit resolved");
+        assert_eq!(player_pools(&mut app), (90, 45));
+        assert_eq!(turn(&app).side, CombatSide::Enemy);
+        assert!(presentation_busy(&app));
+
+        app.update();
+        assert_eq!(
+            enemy_pools(&mut app),
+            (64, 0),
+            "zero-length frames do not release the reply"
+        );
+        assert_eq!(
+            clip::<PlayerFighter>(&mut app),
+            FighterClip::Attack,
+            "the player attack is not overwritten by a same-frame reply"
+        );
+
+        advance_presentation(&mut app);
+        assert_eq!(enemy_pools(&mut app), (64, 20), "enemy rested after delay");
+        assert_eq!(turn(&app).side, CombatSide::Player);
+        assert!(
+            presentation_busy(&app),
+            "enemy action now owns presentation"
+        );
+    }
+
+    #[test]
+    fn queued_player_actions_during_presentation_are_discarded() {
+        let mut app = test_app();
+        drain_enemy_stamina(&mut app);
+        app.world_mut()
+            .write_message(PlayerActionEvent(CombatAction::QuickStrike));
+        app.update();
+        assert_eq!(turn(&app).side, CombatSide::Enemy);
+        assert!(presentation_busy(&app));
+        let player_after_first_action = player_pools(&mut app);
+
+        app.world_mut()
+            .write_message(PlayerActionEvent(CombatAction::HeavyStrike));
+        app.update();
+        advance_presentation(&mut app);
+        advance_presentation(&mut app);
+
+        assert_eq!(
+            player_pools(&mut app),
+            player_after_first_action,
+            "queued input during presentation never replays on the next player turn"
+        );
         assert_eq!(turn(&app).side, CombatSide::Player);
     }
 
@@ -604,6 +768,10 @@ mod tests {
     fn enemy_advances_back_after_the_player_opens_distance() {
         let mut app = test_app();
         press(&mut app, KeyCode::Digit6);
+        assert_eq!(turn(&app).distance, DuelDistance::NEAR);
+        assert_eq!(turn(&app).side, CombatSide::Enemy);
+
+        advance_presentation(&mut app);
         assert_eq!(
             turn(&app).distance,
             DuelDistance::CLOSE,
@@ -677,6 +845,7 @@ mod tests {
                 KeyCode::Digit4
             };
             press(&mut app, key);
+            advance_presentation(&mut app);
         }
         assert!(turn(&app).over, "duel ends");
         assert_eq!(enemy_pools(&mut app).0, 0, "enemy is defeated");

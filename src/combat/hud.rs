@@ -21,7 +21,9 @@ use crate::theme::{
 };
 
 use super::engine::{CombatAction, CombatEvent, DuelDistance, REST_RESTORE};
-use super::systems::{CombatLogEvent, CombatSide, CombatTurn, PlayerActionEvent};
+use super::systems::{
+    CombatLogEvent, CombatPresentation, CombatSide, CombatTurn, PlayerActionEvent,
+};
 
 /// How many log lines the combat log keeps and shows.
 pub const LOG_CAPACITY: usize = 8;
@@ -131,8 +133,13 @@ pub fn cost_label(action: CombatAction) -> String {
 /// exactly: it must be the player's turn in a running duel, and strikes are
 /// rejected below their stamina cost. Block and Rest never require stamina
 /// ([`super::engine::resolve_action`] saturates the block cost at zero).
-pub fn action_enabled(turn: &CombatTurn, stamina: i32, action: CombatAction) -> bool {
-    if turn.side != CombatSide::Player || turn.over {
+pub fn action_enabled(
+    turn: &CombatTurn,
+    stamina: i32,
+    presentation_busy: bool,
+    action: CombatAction,
+) -> bool {
+    if turn.side != CombatSide::Player || turn.over || presentation_busy {
         return false;
     }
     match action {
@@ -467,15 +474,19 @@ type AvailabilityControlled = (
 pub(super) fn update_action_buttons(
     mut commands: Commands,
     turn: Option<Res<CombatTurn>>,
+    presentation: Option<Res<CombatPresentation>>,
     player: Query<&Stamina, With<PlayerFighter>>,
     mut buttons: Query<AvailabilityControlled, With<Button>>,
     mut text_colors: Query<&mut TextColor>,
 ) {
     let stamina = player.single().map(|s| s.current).unwrap_or(0);
+    let presentation_busy = presentation
+        .as_deref()
+        .is_some_and(CombatPresentation::is_busy);
     for (entity, ActionButton(action), was_disabled, mut background, children) in &mut buttons {
         let enabled = turn
             .as_deref()
-            .is_some_and(|turn| action_enabled(turn, stamina, *action));
+            .is_some_and(|turn| action_enabled(turn, stamina, presentation_busy, *action));
         if enabled != was_disabled {
             // Already in the right state; leave hover feedback alone.
             continue;
@@ -601,6 +612,7 @@ mod tests {
     use bevy::state::app::StatesPlugin;
     use rand::{RngExt as _, SeedableRng};
     use rand_chacha::ChaCha8Rng;
+    use std::time::Duration;
 
     /// Same player build as the combat systems tests: putere 4 (damage 6),
     /// agilitate 2 (ties the Hoț de codru), vitalitate 4 (90 hp, 50 stamina).
@@ -626,6 +638,9 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin));
         app.add_plugins((ArenaPlugin, CombatPlugin));
         app.init_resource::<ButtonInput<KeyCode>>();
+        app.world_mut()
+            .resource_mut::<Time<Virtual>>()
+            .set_max_delta(Duration::from_secs(10));
         app.insert_resource(PlayerCharacter {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
@@ -672,6 +687,22 @@ mod tests {
             .entity_mut(button)
             .insert(Interaction::Pressed);
         app.update();
+    }
+
+    fn advance_presentation(app: &mut App) {
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::from_secs_f32(super::super::systems::PRESENTATION_DELAY_SECONDS + 0.1),
+        ));
+        app.update();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::ZERO,
+        ));
+    }
+
+    fn press_button_and_wait(app: &mut App, action: CombatAction) {
+        press_button(app, action);
+        advance_presentation(app);
+        advance_presentation(app);
     }
 
     fn turn(app: &App) -> CombatTurn {
@@ -864,8 +895,16 @@ mod tests {
             (over, 0, Rest, false, "nothing after the duel ends"),
         ];
         for (turn, stamina, action, expected, why) in cases {
-            assert_eq!(action_enabled(&turn, stamina, action), expected, "{why}");
+            assert_eq!(
+                action_enabled(&turn, stamina, false, action),
+                expected,
+                "{why}"
+            );
         }
+        assert!(
+            !action_enabled(&PLAYER_TURN, 50, true, QuickStrike),
+            "presentation busy disables otherwise-valid actions"
+        );
     }
 
     #[test]
@@ -1025,7 +1064,7 @@ mod tests {
     fn pressing_the_quick_strike_button_plays_the_action() {
         let mut app = test_app();
         drain_enemy_stamina(&mut app);
-        press_button(&mut app, CombatAction::QuickStrike);
+        press_button_and_wait(&mut app, CombatAction::QuickStrike);
         // Same expectations as the keyboard test in `systems`: a clean hit
         // for 6, the drained enemy rests, the turn returns to the player.
         assert_eq!(enemy_pools(&mut app), (64, 20));
@@ -1037,7 +1076,7 @@ mod tests {
     fn the_log_records_the_button_driven_exchange() {
         let mut app = test_app();
         drain_enemy_stamina(&mut app);
-        press_button(&mut app, CombatAction::QuickStrike);
+        press_button_and_wait(&mut app, CombatAction::QuickStrike);
         let lines: Vec<String> = app
             .world()
             .resource::<CombatLog>()
@@ -1128,7 +1167,7 @@ mod tests {
             } else {
                 CombatAction::Rest
             };
-            press_button(&mut app, action);
+            press_button_and_wait(&mut app, action);
         }
         assert!(turn(&app).over, "duel ends");
         assert_eq!(enemy_pools(&mut app).0, 0, "enemy is defeated");
