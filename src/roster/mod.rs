@@ -12,6 +12,7 @@
 use bevy::prelude::*;
 
 use crate::character::Attributes;
+use crate::cutout::CutoutTemplate;
 use crate::items::ItemId;
 
 /// Base attribute points every fighter starts from (1 per attribute).
@@ -39,6 +40,8 @@ pub struct Opponent {
     pub aggression: f32,
     /// Catalog items the opponent spawns equipped with.
     pub equipment: &'static [ItemId],
+    /// Which runtime cutout skeleton the arena should render for this entry.
+    pub cutout_template: CutoutTemplate,
     /// Bosses get a distinct label color, an announcer intro, and double XP.
     pub is_boss: bool,
     /// The announcer's intro line; only shown for bosses.
@@ -56,6 +59,7 @@ const fn opponent(
     noroc: u32,
     aggression: f32,
     equipment: &'static [ItemId],
+    cutout_template: CutoutTemplate,
     is_boss: bool,
     intro_line: &'static str,
 ) -> Opponent {
@@ -70,6 +74,7 @@ const fn opponent(
         },
         aggression,
         equipment,
+        cutout_template,
         is_boss,
         intro_line,
     }
@@ -87,6 +92,7 @@ pub static LADDER: [Opponent; 10] = [
         1,
         0.25,
         &[],
+        CutoutTemplate::Human,
         false,
         "Un hoț de codru pândește punga voinicului. Păzea!",
     ),
@@ -99,6 +105,7 @@ pub static LADDER: [Opponent; 10] = [
         2,
         0.5,
         &[],
+        CutoutTemplate::Enemy,
         false,
         "Strigoiul s-a sculat din mormânt cu chef de harță.",
     ),
@@ -111,6 +118,7 @@ pub static LADDER: [Opponent; 10] = [
         2,
         0.8,
         &[],
+        CutoutTemplate::Enemy,
         false,
         "Vârcolacul a mirosit sânge proaspăt în arenă.",
     ),
@@ -123,6 +131,7 @@ pub static LADDER: [Opponent; 10] = [
         2,
         0.6,
         &[],
+        CutoutTemplate::Enemy,
         false,
         "Căpcăunul n-a mai mâncat de aseară. Ghinion pentru cine-i iese în cale.",
     ),
@@ -135,6 +144,7 @@ pub static LADDER: [Opponent; 10] = [
         8,
         0.45,
         &[],
+        CutoutTemplate::Boss,
         true,
         "Se întunecă senin: Muma Pădurii iese din desiș, iar codrul tace!",
     ),
@@ -147,6 +157,7 @@ pub static LADDER: [Opponent; 10] = [
         4,
         0.55,
         &[],
+        CutoutTemplate::Enemy,
         false,
         "Ielele dansează în arenă — cine le calcă hora, pățește.",
     ),
@@ -159,6 +170,7 @@ pub static LADDER: [Opponent; 10] = [
         8,
         0.5,
         &[],
+        CutoutTemplate::Human,
         false,
         "Solomonarul a coborât de pe nori, cu grindina în traistă.",
     ),
@@ -171,6 +183,7 @@ pub static LADDER: [Opponent; 10] = [
         4,
         0.7,
         &[],
+        CutoutTemplate::Boss,
         false,
         "Trei capete, un singur gând: balaurul vrea prânzul.",
     ),
@@ -183,6 +196,7 @@ pub static LADDER: [Opponent; 10] = [
         6,
         0.85,
         &[ItemId::Palos],
+        CutoutTemplate::Boss,
         false,
         "Zmeul a furat soarele și acum vrea și arena.",
     ),
@@ -195,6 +209,7 @@ pub static LADDER: [Opponent; 10] = [
         10,
         0.75,
         &[ItemId::BuzduganCuTreiPeceti, ItemId::CamasaDeZale],
+        CutoutTemplate::Boss,
         true,
         "Cutremur în arenă: Zmeul Zmeilor, spaima voinicilor, intră cu buzduganul în mână!",
     ),
