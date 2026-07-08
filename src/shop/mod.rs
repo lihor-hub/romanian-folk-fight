@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::character::{Attributes, PlayerFighter, stats};
@@ -84,8 +85,23 @@ pub enum ShopLabel {
     Armor,
     /// The summary panel's max HP line.
     Health,
+    /// One line of the equipped-loadout preview.
+    Loadout(Slot),
     /// The label of one item's buy/equip button.
     ItemButton(ItemId),
+}
+
+/// Icon purpose in the shop UI.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShopIcon {
+    kind: ShopIconKind,
+}
+
+/// Stable icon keys for path mapping and UI tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopIconKind {
+    Wallet,
+    Slot(Slot),
 }
 
 /// Romanian section header of one equipment slot in the catalog listing.
@@ -99,6 +115,68 @@ fn slot_label(slot: Slot) -> &'static str {
     }
 }
 
+/// Every icon kind the shop loads.
+#[cfg(test)]
+fn shop_icon_kinds() -> [ShopIconKind; 6] {
+    [
+        ShopIconKind::Wallet,
+        ShopIconKind::Slot(Slot::Weapon),
+        ShopIconKind::Slot(Slot::Shield),
+        ShopIconKind::Slot(Slot::Torso),
+        ShopIconKind::Slot(Slot::Head),
+        ShopIconKind::Slot(Slot::Feet),
+    ]
+}
+
+/// Asset path under `assets/` for one shop icon.
+fn shop_icon_path(kind: ShopIconKind) -> &'static str {
+    match kind {
+        ShopIconKind::Wallet => "ui/icon_coin.png",
+        ShopIconKind::Slot(Slot::Weapon) => "ui/icon_weapon.png",
+        ShopIconKind::Slot(Slot::Shield) => "ui/icon_shield.png",
+        ShopIconKind::Slot(Slot::Torso) => "ui/icon_torso.png",
+        ShopIconKind::Slot(Slot::Head) => "ui/icon_head.png",
+        ShopIconKind::Slot(Slot::Feet) => "ui/icon_feet.png",
+    }
+}
+
+/// Loaded shop icon handles. Defaults keep headless tests working without an
+/// asset server.
+#[derive(Resource, Debug, Clone, Default)]
+struct ShopIcons {
+    wallet: Handle<Image>,
+    weapon: Handle<Image>,
+    shield: Handle<Image>,
+    torso: Handle<Image>,
+    head: Handle<Image>,
+    feet: Handle<Image>,
+}
+
+impl ShopIcons {
+    fn get(&self, kind: ShopIconKind) -> Handle<Image> {
+        match kind {
+            ShopIconKind::Wallet => self.wallet.clone(),
+            ShopIconKind::Slot(Slot::Weapon) => self.weapon.clone(),
+            ShopIconKind::Slot(Slot::Shield) => self.shield.clone(),
+            ShopIconKind::Slot(Slot::Torso) => self.torso.clone(),
+            ShopIconKind::Slot(Slot::Head) => self.head.clone(),
+            ShopIconKind::Slot(Slot::Feet) => self.feet.clone(),
+        }
+    }
+}
+
+fn load_shop_icons(mut icons: ResMut<ShopIcons>, asset_server: Option<Res<AssetServer>>) {
+    let Some(asset_server) = asset_server else {
+        return;
+    };
+    icons.wallet = asset_server.load(shop_icon_path(ShopIconKind::Wallet));
+    icons.weapon = asset_server.load(shop_icon_path(ShopIconKind::Slot(Slot::Weapon)));
+    icons.shield = asset_server.load(shop_icon_path(ShopIconKind::Slot(Slot::Shield)));
+    icons.torso = asset_server.load(shop_icon_path(ShopIconKind::Slot(Slot::Torso)));
+    icons.head = asset_server.load(shop_icon_path(ShopIconKind::Slot(Slot::Head)));
+    icons.feet = asset_server.load(shop_icon_path(ShopIconKind::Slot(Slot::Feet)));
+}
+
 pub struct ShopPlugin;
 
 impl Plugin for ShopPlugin {
@@ -108,7 +186,9 @@ impl Plugin for ShopPlugin {
         app.init_resource::<Wallet>()
             .init_resource::<OwnedItems>()
             .init_resource::<PlayerEquipment>()
+            .init_resource::<ShopIcons>()
             .add_message::<SaveRequested>()
+            .add_systems(PreStartup, load_shop_icons)
             .add_systems(OnEnter(GameState::Shop), spawn_shop_screen)
             .add_systems(
                 Update,
@@ -230,6 +310,13 @@ fn player_attributes(player: Option<Res<PlayerCharacter>>) -> Attributes {
     }
 }
 
+#[derive(SystemParam)]
+struct ShopScreenAssets<'w> {
+    ui_font: Res<'w, UiFont>,
+    panel_texture: Res<'w, PanelTexture>,
+    icons: Res<'w, ShopIcons>,
+}
+
 /// Spawns the shop screen: header with the wallet top-right, the catalog
 /// grouped by slot, the live stat summary, and the back-to-arena button.
 fn spawn_shop_screen(
@@ -238,9 +325,11 @@ fn spawn_shop_screen(
     owned: Res<OwnedItems>,
     equipment: Res<PlayerEquipment>,
     player: Option<Res<PlayerCharacter>>,
-    ui_font: Res<UiFont>,
-    panel_texture: Res<PanelTexture>,
+    assets: ShopScreenAssets,
 ) {
+    let ui_font = &*assets.ui_font;
+    let panel_texture = &*assets.panel_texture;
+    let icons = &*assets.icons;
     let attributes = player_attributes(player);
     commands
         .spawn((
@@ -272,25 +361,33 @@ fn spawn_shop_screen(
                         ui_font.text_font_bold(32.0),
                         TextColor(CREAM),
                     ));
-                    header.spawn((
-                        line_text(wallet_text(&wallet), 20.0, &ui_font),
-                        ShopLabel::Wallet,
-                    ));
+                    spawn_icon_text_row(
+                        header,
+                        ShopIconKind::Wallet,
+                        wallet_text(&wallet),
+                        20.0,
+                        ui_font,
+                        icons,
+                        Some(ShopLabel::Wallet),
+                    );
                 });
             // The catalog, grouped by slot.
             for slot in Slot::ALL {
-                parent.spawn((
-                    line_text(slot_label(slot).to_string(), 18.0, &ui_font),
-                    Node {
-                        margin: UiRect::top(Val::Px(4.0)),
-                        ..default()
-                    },
-                ));
+                spawn_icon_text_row(
+                    parent,
+                    ShopIconKind::Slot(slot),
+                    slot_label(slot).to_string(),
+                    18.0,
+                    ui_font,
+                    icons,
+                    None,
+                );
                 for item in CATALOG.iter().filter(|item| item.slot == slot) {
                     let state = ItemButtonState::of(item.id, &wallet, &owned, &equipment);
-                    spawn_item_row(parent, item, state, &ui_font, &panel_texture);
+                    spawn_item_row(parent, item, state, ui_font, panel_texture);
                 }
             }
+            spawn_loadout_preview(parent, &equipment, ui_font, panel_texture, icons);
             // Live stat summary: purchases visibly matter.
             parent
                 .spawn(Node {
@@ -300,20 +397,20 @@ fn spawn_shop_screen(
                 })
                 .with_children(|panel| {
                     panel.spawn((
-                        line_text(attack_text(&attributes, &equipment), 20.0, &ui_font),
+                        line_text(attack_text(&attributes, &equipment), 20.0, ui_font),
                         ShopLabel::Attack,
                     ));
                     panel.spawn((
-                        line_text(armor_text(&equipment), 20.0, &ui_font),
+                        line_text(armor_text(&equipment), 20.0, ui_font),
                         ShopLabel::Armor,
                     ));
                     panel.spawn((
-                        line_text(health_text(&attributes), 20.0, &ui_font),
+                        line_text(health_text(&attributes), 20.0, ui_font),
                         ShopLabel::Health,
                     ));
                 });
             parent.spawn((
-                wide_button("Înapoi în arenă", &ui_font),
+                wide_button("Înapoi în arenă", ui_font),
                 ShopAction::BackToArena,
             ));
         });
@@ -326,6 +423,92 @@ fn line_text(label: String, font_size: f32, ui_font: &UiFont) -> impl Bundle {
         ui_font.text_font(font_size),
         TextColor(CREAM),
     )
+}
+
+/// A small icon image with a stable marker for tests. The neighboring text
+/// is always present, so the UI stays readable while an image is loading.
+fn icon_node(kind: ShopIconKind, icons: &ShopIcons) -> impl Bundle {
+    (
+        ShopIcon { kind },
+        ImageNode::new(icons.get(kind)),
+        Node {
+            width: Val::Px(24.0),
+            height: Val::Px(24.0),
+            flex_shrink: 0.0,
+            ..default()
+        },
+    )
+}
+
+fn spawn_icon_text_row(
+    parent: &mut ChildSpawnerCommands,
+    kind: ShopIconKind,
+    label: String,
+    font_size: f32,
+    ui_font: &UiFont,
+    icons: &ShopIcons,
+    shop_label: Option<ShopLabel>,
+) {
+    parent
+        .spawn(Node {
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(6.0),
+            margin: UiRect::top(Val::Px(4.0)),
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn(icon_node(kind, icons));
+            let mut text = row.spawn(line_text(label, font_size, ui_font));
+            if let Some(shop_label) = shop_label {
+                text.insert(shop_label);
+            }
+        });
+}
+
+fn loadout_text(slot: Slot, equipment: &PlayerEquipment) -> String {
+    let item = equipment
+        .0
+        .equipped(slot)
+        .map(|id| id.item().name)
+        .unwrap_or("liber");
+    format!("{}: {item}", slot_label(slot))
+}
+
+fn spawn_loadout_preview(
+    parent: &mut ChildSpawnerCommands,
+    equipment: &PlayerEquipment,
+    ui_font: &UiFont,
+    panel_texture: &PanelTexture,
+    icons: &ShopIcons,
+) {
+    parent
+        .spawn(panel_bundle(
+            panel_texture,
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                margin: UiRect::vertical(Val::Px(8.0)),
+                ..default()
+            },
+        ))
+        .with_children(|panel| {
+            for slot in Slot::ALL {
+                panel
+                    .spawn(Node {
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(6.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        row.spawn(icon_node(ShopIconKind::Slot(slot), icons));
+                        row.spawn((
+                            line_text(loadout_text(slot, equipment), 16.0, ui_font),
+                            ShopLabel::Loadout(slot),
+                        ));
+                    });
+            }
+        });
 }
 
 /// One catalog row: name, stat, price, and the buy/equip/equipped button.
@@ -467,6 +650,7 @@ fn refresh_shop_ui(
             ShopLabel::Attack => attack_text(&attributes, &equipment),
             ShopLabel::Armor => armor_text(&equipment),
             ShopLabel::Health => health_text(&attributes),
+            ShopLabel::Loadout(slot) => loadout_text(slot, &equipment),
             ShopLabel::ItemButton(id) => {
                 let state = ItemButtonState::of(id, &wallet, &owned, &equipment);
                 color.0 = state.text_color();
@@ -708,6 +892,30 @@ mod tests {
     }
 
     #[test]
+    fn shop_icon_paths_cover_wallet_and_every_slot() {
+        assert_eq!(shop_icon_path(ShopIconKind::Wallet), "ui/icon_coin.png");
+        for slot in Slot::ALL {
+            assert!(
+                shop_icon_path(ShopIconKind::Slot(slot)).starts_with("ui/icon_"),
+                "{slot:?} has an icon path"
+            );
+        }
+    }
+
+    #[test]
+    fn every_shop_icon_asset_exists_on_disk() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for kind in shop_icon_kinds() {
+            let path = manifest.join("assets").join(shop_icon_path(kind));
+            assert!(
+                path.is_file(),
+                "{kind:?} icon missing at {}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
     fn entering_the_shop_spawns_the_catalog_grouped_by_slot() {
         let mut app = test_app();
         set_state(&mut app, GameState::Shop);
@@ -730,11 +938,22 @@ mod tests {
                 "missing {slot:?} header: {texts:?}"
             );
         }
+        for slot in Slot::ALL {
+            assert!(
+                texts.contains(&loadout_text(slot, &PlayerEquipment::default())),
+                "missing empty loadout slot {slot:?}: {texts:?}"
+            );
+        }
         assert!(texts.contains(&"Înapoi în arenă".to_string()), "{texts:?}");
         assert_eq!(
             count::<Button>(&mut app),
             CATALOG.len() + 1,
             "one button per item plus the back button"
+        );
+        assert_eq!(
+            count::<ShopIcon>(&mut app),
+            shop_icon_kinds().len() + Slot::ALL.len(),
+            "wallet, slot headers, and loadout preview all show icons"
         );
     }
 
@@ -801,6 +1020,10 @@ mod tests {
             texts.contains(&"Armură: 1".to_string()),
             "the summary is live: {texts:?}"
         );
+        assert!(
+            texts.contains(&"Cap: Căciulă de oaie".to_string()),
+            "the loadout preview is live: {texts:?}"
+        );
         assert_eq!(
             item_button_label(&mut app, ItemId::CaciulaDeOaie),
             "Echipat"
@@ -854,6 +1077,10 @@ mod tests {
         assert_eq!(
             item_button_label(&mut app, ItemId::BataCiobaneasca),
             "Echipat"
+        );
+        assert!(
+            texts(&mut app).contains(&"Armă: Bâtă ciobănească".to_string()),
+            "loadout preview tracks slot swaps"
         );
     }
 
