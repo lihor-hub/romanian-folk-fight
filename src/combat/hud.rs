@@ -31,8 +31,15 @@ pub const LOG_CAPACITY: usize = 8;
 
 const PANEL_WIDTH: f32 = 240.0;
 const BAR_HEIGHT: f32 = 16.0;
-const ACTION_BUTTON_WIDTH: f32 = 108.0;
+#[cfg(test)]
+const HUD_TARGET_WIDTH: f32 = 800.0;
+#[cfg(test)]
+const ACTION_BUTTON_COUNT: f32 = 7.0;
+const ACTION_BUTTON_WIDTH: f32 = 100.0;
 const ACTION_BUTTON_HEIGHT: f32 = 64.0;
+const ACTION_BAR_DESKTOP_GAP: f32 = 6.0;
+const ACTION_BAR_PADDING: f32 = 8.0;
+const ACTION_BAR_DESKTOP_INSET: f32 = 10.0;
 
 /// Marker for the HUD root; everything under it despawns on
 /// `OnExit(GameState::Fight)`.
@@ -409,21 +416,21 @@ fn action_bar(ui_font: &UiFont, panel_texture: &PanelTexture, is_mobile: bool) -
             justify_content: JustifyContent::Center,
             column_gap: Val::Px(8.0),
             row_gap: Val::Px(8.0),
-            padding: UiRect::all(Val::Px(8.0)),
+            padding: UiRect::all(Val::Px(ACTION_BAR_PADDING)),
             ..default()
         }
     } else {
         Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(12.0),
-            left: Val::Px(10.0),
-            right: Val::Px(10.0),
+            left: Val::Px(ACTION_BAR_DESKTOP_INSET),
+            right: Val::Px(ACTION_BAR_DESKTOP_INSET),
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::NoWrap,
             justify_content: JustifyContent::Center,
             row_gap: Val::Px(0.0),
-            column_gap: Val::Px(6.0),
-            padding: UiRect::all(Val::Px(8.0)),
+            column_gap: Val::Px(ACTION_BAR_DESKTOP_GAP),
+            padding: UiRect::all(Val::Px(ACTION_BAR_PADDING)),
             ..default()
         }
     };
@@ -516,6 +523,18 @@ fn action_glyph(action: CombatAction) -> &'static str {
         CombatAction::StepBack => "<-",
         CombatAction::LeapForward => "^>",
     }
+}
+
+#[cfg(test)]
+fn desktop_action_strip_occupied_width() -> f32 {
+    ACTION_BUTTON_WIDTH * ACTION_BUTTON_COUNT
+        + ACTION_BAR_DESKTOP_GAP * (ACTION_BUTTON_COUNT - 1.0)
+        + ACTION_BAR_PADDING * 2.0
+}
+
+#[cfg(test)]
+fn desktop_action_strip_available_width() -> f32 {
+    HUD_TARGET_WIDTH - ACTION_BAR_DESKTOP_INSET * 2.0
 }
 
 /// Query for the display data of one side's fighter.
@@ -783,7 +802,11 @@ pub(super) fn apply_responsive_hud_layout(
         };
         node.left = Val::Px(if is_mobile { 8.0 } else { 0.0 });
         node.right = Val::Px(if is_mobile { 8.0 } else { 0.0 });
-        node.column_gap = Val::Px(if is_mobile { 8.0 } else { 6.0 });
+        node.column_gap = Val::Px(if is_mobile {
+            8.0
+        } else {
+            ACTION_BAR_DESKTOP_GAP
+        });
         node.row_gap = Val::Px(if is_mobile { 8.0 } else { 0.0 });
     }
     for mut node in &mut buttons {
@@ -1206,6 +1229,10 @@ mod tests {
             assert_eq!(node.width, Val::Px(ACTION_BUTTON_WIDTH));
             assert_eq!(node.height, Val::Px(ACTION_BUTTON_HEIGHT));
         }
+        assert!(
+            desktop_action_strip_occupied_width() <= desktop_action_strip_available_width(),
+            "desktop action strip must fit the 800px target viewport"
+        );
     }
 
     #[test]

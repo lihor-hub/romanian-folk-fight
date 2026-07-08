@@ -26,6 +26,19 @@ use crate::ui_widgets::{
     attribute_row::spawn_attribute_row, button_bundle, scroll_with_wheel_and_touch, small_button,
 };
 
+#[cfg(test)]
+const CREATION_TARGET_WIDTH: f32 = 800.0;
+const CREATION_ROOT_PADDING: f32 = 14.0;
+const CREATION_BODY_WIDTH: f32 = 760.0;
+const CREATION_BODY_GAP: f32 = 12.0;
+const CREATION_PREVIEW_STAGE_WIDTH: f32 = 392.0;
+const CREATION_CONTROL_DECK_WIDTH: f32 = 356.0;
+const CREATION_PANEL_HEIGHT: f32 = 482.0;
+const CREATION_PREVIEW_FRAME_HEIGHT: f32 = 318.0;
+const CREATION_PREVIEW_SCALE: f32 = 1.02;
+const CREATION_PREVIEW_Y: f32 = -18.0;
+const PREVIEW_Z: f32 = 25.0;
+
 /// The confirmed player character: chosen name, final attributes, and saved
 /// appearance. Written by the confirm button and read by the fight screen.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
@@ -164,12 +177,9 @@ fn spawn_creation_screen(
                 justify_content: JustifyContent::FlexStart,
                 align_items: AlignItems::Center,
                 row_gap: Val::Px(8.0),
-                padding: UiRect::all(Val::Px(14.0)),
-                overflow: Overflow::scroll_y(),
+                padding: UiRect::all(Val::Px(CREATION_ROOT_PADDING)),
                 ..default()
             },
-            ScrollPosition::default(),
-            crate::ui_widgets::Scrollable,
         ))
         .with_children(|parent| {
             parent.spawn((
@@ -184,14 +194,14 @@ fn spawn_creation_screen(
 
             parent
                 .spawn(Node {
-                    width: Val::Px(760.0),
+                    width: Val::Px(CREATION_BODY_WIDTH),
                     max_width: Val::Percent(94.0),
-                    min_height: Val::Px(482.0),
+                    min_height: Val::Px(CREATION_PANEL_HEIGHT),
                     flex_direction: FlexDirection::Row,
                     flex_wrap: FlexWrap::Wrap,
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Stretch,
-                    column_gap: Val::Px(12.0),
+                    column_gap: Val::Px(CREATION_BODY_GAP),
                     row_gap: Val::Px(10.0),
                     ..default()
                 })
@@ -205,7 +215,7 @@ fn spawn_creation_screen(
         .spawn((
             CreationScreen,
             CreationPreview,
-            Transform::from_xyz(-212.0, -18.0, 25.0).with_scale(Vec3::splat(1.02)),
+            creation_preview_transform(),
         ))
         .id();
     let equipment = equipment_from_items(draft.starter_items());
@@ -230,8 +240,9 @@ fn spawn_preview_stage(
             panel_bundle(
                 panel_texture,
                 Node {
-                    width: Val::Px(338.0),
-                    min_height: Val::Px(482.0),
+                    width: Val::Px(CREATION_PREVIEW_STAGE_WIDTH),
+                    max_width: Val::Percent(100.0),
+                    min_height: Val::Px(CREATION_PANEL_HEIGHT),
                     flex_direction: FlexDirection::Column,
                     justify_content: JustifyContent::SpaceBetween,
                     padding: UiRect::all(Val::Px(18.0)),
@@ -251,7 +262,7 @@ fn spawn_preview_stage(
             stage.spawn((
                 Node {
                     width: Val::Percent(100.0),
-                    height: Val::Px(318.0),
+                    height: Val::Px(CREATION_PREVIEW_FRAME_HEIGHT),
                     border: UiRect::all(Val::Px(2.0)),
                     ..default()
                 },
@@ -303,8 +314,9 @@ fn spawn_control_deck(
             panel_bundle(
                 panel_texture,
                 Node {
-                    width: Val::Px(410.0),
-                    min_height: Val::Px(482.0),
+                    width: Val::Px(CREATION_CONTROL_DECK_WIDTH),
+                    max_width: Val::Percent(100.0),
+                    min_height: Val::Px(CREATION_PANEL_HEIGHT),
                     flex_direction: FlexDirection::Column,
                     row_gap: Val::Px(8.0),
                     padding: UiRect::all(Val::Px(16.0)),
@@ -530,6 +542,32 @@ fn equipment_from_items(items: &[crate::items::ItemId]) -> Equipment {
         equipment.equip(item);
     }
     equipment
+}
+
+fn creation_preview_stage_center_x() -> f32 {
+    -CREATION_BODY_WIDTH / 2.0 + CREATION_PREVIEW_STAGE_WIDTH / 2.0
+}
+
+fn creation_preview_transform() -> Transform {
+    Transform::from_xyz(
+        creation_preview_stage_center_x(),
+        CREATION_PREVIEW_Y,
+        PREVIEW_Z,
+    )
+    .with_scale(Vec3::splat(CREATION_PREVIEW_SCALE))
+}
+
+#[cfg(test)]
+fn creation_preview_allocation_fits_width(viewport_width: f32) -> bool {
+    let usable_width = viewport_width - CREATION_ROOT_PADDING * 2.0;
+    let preview_width = CREATION_PREVIEW_STAGE_WIDTH.min(usable_width);
+    let control_width = CREATION_CONTROL_DECK_WIDTH.min(usable_width);
+    let desktop_width =
+        CREATION_PREVIEW_STAGE_WIDTH + CREATION_BODY_GAP + CREATION_CONTROL_DECK_WIDTH;
+    desktop_width <= CREATION_BODY_WIDTH
+        && CREATION_BODY_WIDTH <= CREATION_TARGET_WIDTH - CREATION_ROOT_PADDING * 2.0
+        && preview_width <= usable_width
+        && control_width <= usable_width
 }
 
 fn appearance_text(draft: &CharacterDraft, field: AppearanceField) -> String {
@@ -835,8 +873,8 @@ mod tests {
             .find(|(_, role)| **role == CreationLayoutRole::PreviewStage)
             .map(|(node, _)| node)
             .expect("preview stage exists");
-        assert_eq!(preview_stage.width, Val::Px(338.0));
-        assert_eq!(preview_stage.min_height, Val::Px(482.0));
+        assert_eq!(preview_stage.width, Val::Px(CREATION_PREVIEW_STAGE_WIDTH));
+        assert_eq!(preview_stage.min_height, Val::Px(CREATION_PANEL_HEIGHT));
 
         let control_deck = app
             .world_mut()
@@ -845,7 +883,35 @@ mod tests {
             .find(|(_, role)| **role == CreationLayoutRole::ControlDeck)
             .map(|(node, _)| node)
             .expect("control deck exists");
-        assert_eq!(control_deck.width, Val::Px(410.0));
+        assert_eq!(control_deck.width, Val::Px(CREATION_CONTROL_DECK_WIDTH));
+        const {
+            assert!(CREATION_PREVIEW_STAGE_WIDTH > CREATION_CONTROL_DECK_WIDTH);
+        }
+        assert!(creation_preview_allocation_fits_width(375.0));
+    }
+
+    #[test]
+    fn creation_preview_rig_is_centered_from_stage_constants() {
+        let mut app = test_app();
+        let transform = app
+            .world_mut()
+            .query_filtered::<&Transform, With<CreationPreview>>()
+            .single(app.world())
+            .expect("creation preview transform exists");
+        let expected = creation_preview_transform();
+        assert_eq!(transform.translation, expected.translation);
+        assert_eq!(transform.scale, expected.scale);
+        assert!((transform.translation.x - creation_preview_stage_center_x()).abs() < f32::EPSILON);
+        assert!(transform.translation.x.abs() <= CREATION_PREVIEW_STAGE_WIDTH / 2.0);
+        assert!(transform.translation.y.abs() <= CREATION_PREVIEW_FRAME_HEIGHT / 2.0);
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<(), (With<CreationScreen>, With<crate::ui_widgets::Scrollable>)>()
+                .iter(app.world())
+                .count(),
+            0,
+            "preview stage cannot scroll independently from the world rig"
+        );
     }
 
     #[test]

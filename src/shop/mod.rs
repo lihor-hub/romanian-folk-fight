@@ -24,6 +24,17 @@ use crate::theme::{
 };
 use crate::ui_widgets::wide_button;
 
+const SHOP_ROOT_PADDING: f32 = 12.0;
+const SHOP_BODY_WIDTH: f32 = 760.0;
+const SHOP_BODY_GAP: f32 = 12.0;
+const SHOP_CATALOG_WIDTH: f32 = 430.0;
+const SHOP_PREVIEW_STAGE_WIDTH: f32 = 318.0;
+const SHOP_PANEL_HEIGHT: f32 = 450.0;
+const SHOP_PREVIEW_FRAME_HEIGHT: f32 = 216.0;
+const SHOP_PREVIEW_SCALE: f32 = 0.68;
+const SHOP_PREVIEW_Y: f32 = 70.0;
+const SHOP_PREVIEW_Z: f32 = 25.0;
+
 /// The items bought this run: a set of catalog ids. Persists across fights
 /// within a run and resets with the run (see `progression::reset_run`).
 #[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
@@ -375,15 +386,10 @@ fn spawn_shop_screen(
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 row_gap: Val::Px(4.0),
-                padding: UiRect::all(Val::Px(12.0)),
-                // The catalog can outgrow short viewports (portrait phones,
-                // #31); scroll instead of clipping unreachable rows.
-                overflow: Overflow::scroll_y(),
+                padding: UiRect::all(Val::Px(SHOP_ROOT_PADDING)),
                 ..default()
             },
             BackgroundColor(ARENA_BROWN),
-            ScrollPosition::default(),
-            crate::ui_widgets::Scrollable,
         ))
         .with_children(|parent| {
             // Header row: title on the left, wallet balance top-right.
@@ -413,25 +419,30 @@ fn spawn_shop_screen(
                 });
             parent
                 .spawn(Node {
-                    width: Val::Px(760.0),
+                    width: Val::Px(SHOP_BODY_WIDTH),
                     max_width: Val::Percent(96.0),
                     flex_direction: FlexDirection::Row,
                     flex_wrap: FlexWrap::Wrap,
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::FlexStart,
-                    column_gap: Val::Px(12.0),
+                    column_gap: Val::Px(SHOP_BODY_GAP),
                     row_gap: Val::Px(10.0),
                     ..default()
                 })
                 .with_children(|body| {
                     body.spawn((
                         Node {
-                            width: Val::Px(430.0),
+                            width: Val::Px(SHOP_CATALOG_WIDTH),
+                            max_width: Val::Percent(100.0),
+                            height: Val::Px(SHOP_PANEL_HEIGHT),
                             flex_direction: FlexDirection::Column,
                             row_gap: Val::Px(4.0),
+                            overflow: Overflow::scroll_y(),
                             ..default()
                         },
                         ShopLayoutRole::CatalogColumn,
+                        ScrollPosition::default(),
+                        crate::ui_widgets::Scrollable,
                     ))
                     .with_children(|catalog| {
                         for slot in Slot::ALL {
@@ -456,8 +467,9 @@ fn spawn_shop_screen(
                         panel_bundle(
                             panel_texture,
                             Node {
-                                width: Val::Px(318.0),
-                                min_height: Val::Px(470.0),
+                                width: Val::Px(SHOP_PREVIEW_STAGE_WIDTH),
+                                max_width: Val::Percent(100.0),
+                                min_height: Val::Px(SHOP_PANEL_HEIGHT),
                                 flex_direction: FlexDirection::Column,
                                 row_gap: Val::Px(8.0),
                                 padding: UiRect::all(Val::Px(14.0)),
@@ -471,7 +483,7 @@ fn spawn_shop_screen(
                         preview_panel.spawn((
                             Node {
                                 width: Val::Percent(100.0),
-                                height: Val::Px(248.0),
+                                height: Val::Px(SHOP_PREVIEW_FRAME_HEIGHT),
                                 border: UiRect::all(Val::Px(2.0)),
                                 ..default()
                             },
@@ -502,11 +514,7 @@ fn spawn_shop_preview(
     asset_server: Option<&AssetServer>,
 ) {
     let preview = commands
-        .spawn((
-            ShopScreen,
-            ShopPreview,
-            Transform::from_xyz(231.0, 78.0, 25.0).with_scale(Vec3::splat(0.68)),
-        ))
+        .spawn((ShopScreen, ShopPreview, shop_preview_transform()))
         .id();
     spawn_cutout_rig_with_gear(
         commands,
@@ -516,6 +524,28 @@ fn spawn_shop_preview(
         false,
         equipment,
     );
+}
+
+fn shop_preview_stage_center_x() -> f32 {
+    -SHOP_BODY_WIDTH / 2.0 + SHOP_CATALOG_WIDTH + SHOP_BODY_GAP + SHOP_PREVIEW_STAGE_WIDTH / 2.0
+}
+
+fn shop_preview_transform() -> Transform {
+    Transform::from_xyz(
+        shop_preview_stage_center_x(),
+        SHOP_PREVIEW_Y,
+        SHOP_PREVIEW_Z,
+    )
+    .with_scale(Vec3::splat(SHOP_PREVIEW_SCALE))
+}
+
+#[cfg(test)]
+fn shop_layout_fits_width(viewport_width: f32) -> bool {
+    let usable_width = viewport_width - SHOP_ROOT_PADDING * 2.0;
+    let desktop_width = SHOP_CATALOG_WIDTH + SHOP_BODY_GAP + SHOP_PREVIEW_STAGE_WIDTH;
+    desktop_width <= SHOP_BODY_WIDTH
+        && SHOP_CATALOG_WIDTH.min(usable_width) <= usable_width
+        && SHOP_PREVIEW_STAGE_WIDTH.min(usable_width) <= usable_width
 }
 
 /// A cream text line of the given font size.
@@ -1182,6 +1212,27 @@ mod tests {
         assert!(roles.contains(&ShopLayoutRole::PreviewStage));
         assert!(roles.contains(&ShopLayoutRole::LoadoutBodyMap));
         assert!(roles.contains(&ShopLayoutRole::StatStrip));
+        assert!(shop_layout_fits_width(375.0));
+
+        let preview_stage = app
+            .world_mut()
+            .query::<(&Node, &ShopLayoutRole)>()
+            .iter(app.world())
+            .find(|(_, role)| **role == ShopLayoutRole::PreviewStage)
+            .map(|(node, _)| node)
+            .expect("shop preview stage exists");
+        assert_eq!(preview_stage.width, Val::Px(SHOP_PREVIEW_STAGE_WIDTH));
+        assert_eq!(preview_stage.min_height, Val::Px(SHOP_PANEL_HEIGHT));
+
+        let scroll_roots = app
+            .world_mut()
+            .query_filtered::<(), With<crate::ui_widgets::Scrollable>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(
+            scroll_roots, 1,
+            "only the catalog scrolls; the preview stage stays anchored to the rig"
+        );
 
         let texts = texts(&mut app);
         for slot in Slot::ALL {
@@ -1191,6 +1242,24 @@ mod tests {
                 "missing body-region loadout row {expected}: {texts:?}"
             );
         }
+    }
+
+    #[test]
+    fn shop_preview_rig_is_centered_from_stage_constants() {
+        let mut app = test_app();
+        set_state(&mut app, GameState::Shop);
+
+        let transform = app
+            .world_mut()
+            .query_filtered::<&Transform, With<ShopPreview>>()
+            .single(app.world())
+            .expect("shop preview transform exists");
+        let expected = shop_preview_transform();
+        assert_eq!(transform.translation, expected.translation);
+        assert_eq!(transform.scale, expected.scale);
+        assert!((transform.translation.x - shop_preview_stage_center_x()).abs() < f32::EPSILON);
+        assert!(transform.translation.x.abs() <= SHOP_BODY_WIDTH / 2.0);
+        assert!(transform.translation.y.abs() <= SHOP_PANEL_HEIGHT / 2.0);
     }
 
     #[test]

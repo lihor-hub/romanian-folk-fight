@@ -11,6 +11,10 @@ use crate::theme::{
     PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
 };
 
+const MENU_ROOT_PADDING: f32 = 18.0;
+const MENU_TITLE_STAGE_WIDTH: f32 = 382.0;
+const MENU_BUTTON_PANEL_WIDTH: f32 = 318.0;
+
 /// Marker for the main-menu screen root; everything under it is despawned by
 /// [`despawn_screen`] on `OnExit(GameState::MainMenu)`.
 #[derive(Component)]
@@ -48,10 +52,15 @@ pub struct MenuPlugin;
 
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(GameState::MainMenu), spawn_main_menu)
+        app.add_plugins(crate::ui_widgets::ScrollInputPlugin)
+            .add_systems(OnEnter(GameState::MainMenu), spawn_main_menu)
             .add_systems(
                 Update,
-                (handle_menu_actions, update_button_backgrounds)
+                (
+                    handle_menu_actions,
+                    update_button_backgrounds,
+                    crate::ui_widgets::scroll_with_wheel_and_touch,
+                )
                     .run_if(in_state(GameState::MainMenu)),
             )
             .add_systems(
@@ -83,10 +92,13 @@ fn spawn_main_menu(
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(24.0),
                 row_gap: Val::Px(16.0),
-                padding: UiRect::all(Val::Px(18.0)),
+                padding: UiRect::all(Val::Px(MENU_ROOT_PADDING)),
+                overflow: Overflow::scroll_y(),
                 ..default()
             },
             BackgroundColor(ARENA_BROWN),
+            ScrollPosition::default(),
+            crate::ui_widgets::Scrollable,
         ))
         .with_children(|parent| {
             parent
@@ -94,7 +106,8 @@ fn spawn_main_menu(
                     panel_bundle(
                         &panel_texture,
                         Node {
-                            width: Val::Px(382.0),
+                            width: Val::Px(MENU_TITLE_STAGE_WIDTH),
+                            max_width: Val::Percent(100.0),
                             min_height: Val::Px(430.0),
                             flex_direction: FlexDirection::Column,
                             justify_content: JustifyContent::SpaceBetween,
@@ -142,7 +155,8 @@ fn spawn_main_menu(
                     panel_bundle(
                         &panel_texture,
                         Node {
-                            width: Val::Px(318.0),
+                            width: Val::Px(MENU_BUTTON_PANEL_WIDTH),
+                            max_width: Val::Percent(100.0),
                             flex_direction: FlexDirection::Column,
                             align_items: AlignItems::Center,
                             row_gap: Val::Px(14.0),
@@ -212,6 +226,13 @@ fn menu_button(label: &str, text_color: Color, background: Color, ui_font: &UiFo
             TextColor(text_color),
         )],
     )
+}
+
+#[cfg(test)]
+fn menu_panels_fit_width(viewport_width: f32) -> bool {
+    let usable_width = viewport_width - MENU_ROOT_PADDING * 2.0;
+    MENU_TITLE_STAGE_WIDTH.min(usable_width) <= usable_width
+        && MENU_BUTTON_PANEL_WIDTH.min(usable_width) <= usable_width
 }
 
 /// Query filter: buttons whose interaction changed this frame.
@@ -380,6 +401,14 @@ mod tests {
             .collect();
         assert!(roles.contains(&MainMenuLayoutRole::TitleStage));
         assert!(roles.contains(&MainMenuLayoutRole::ButtonPanel));
+        assert!(menu_panels_fit_width(375.0));
+
+        let scroll_roots = app
+            .world_mut()
+            .query_filtered::<(), (With<MainMenuScreen>, With<crate::ui_widgets::Scrollable>)>()
+            .iter(app.world())
+            .count();
+        assert_eq!(scroll_roots, 1, "narrow stacked menu can scroll");
     }
 
     #[test]
