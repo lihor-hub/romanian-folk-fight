@@ -20,14 +20,19 @@ WORKTREE_ROOT="$(pwd)"
 #   1. Whatever `cargo` already resolves to on the inherited PATH.
 #   2. $CARGO_HOME/bin                       (explicit CARGO_HOME override)
 #   3. $HOME/.cargo/bin                       (default rustup shim location)
-#   4. $HOME/.rustup/toolchains/*/bin         (direct toolchain dirs, in case
-#                                               the ~/.cargo/bin shims are
-#                                               missing but a toolchain is
-#                                               installed)
-#   5. /opt/homebrew/opt/rustup/bin           (Homebrew rustup, Apple Silicon)
-#   6. /usr/local/opt/rustup/bin              (Homebrew rustup, Intel mac)
-#   7. /usr/local/bin                         (common Linux manual install)
-#   8. /usr/bin                               (distro-packaged Rust)
+#   4. /opt/homebrew/opt/rustup/bin           (Homebrew rustup, Apple Silicon)
+#   5. /usr/local/opt/rustup/bin              (Homebrew rustup, Intel mac)
+#   6. /usr/local/bin                         (common Linux manual install)
+#   7. /usr/bin                               (distro-packaged Rust)
+#   8. $HOME/.rustup/toolchains/*/bin         (last resort: a direct toolchain
+#                                               dir, picked only if no rustup
+#                                               proxy/shim was found anywhere
+#                                               above. This bypasses rustup's
+#                                               toolchain-selection logic, e.g.
+#                                               `rust-toolchain.toml` overrides
+#                                               and `rustup default`, so it is
+#                                               deliberately tried last and
+#                                               only as a fallback.)
 echo "Checking for Rust/Cargo installation..."
 
 resolve_cargo() {
@@ -41,19 +46,22 @@ resolve_cargo() {
     candidates+=("$CARGO_HOME/bin")
   fi
   candidates+=("$HOME/.cargo/bin")
-
-  if [[ -d "$HOME/.rustup/toolchains" ]]; then
-    while IFS= read -r toolchain_dir; do
-      candidates+=("$toolchain_dir/bin")
-    done < <(find "$HOME/.rustup/toolchains" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
-  fi
-
   candidates+=(
     "/opt/homebrew/opt/rustup/bin"
     "/usr/local/opt/rustup/bin"
     "/usr/local/bin"
     "/usr/bin"
   )
+
+  # Last-resort fallback: a direct toolchain bin dir. Only reached if no
+  # rustup proxy/shim was found above, so it deliberately comes last -- it
+  # bypasses rustup's own toolchain-selection logic (overrides, `rustup
+  # default`), so a proxy/shim is always preferred when one is available.
+  if [[ -d "$HOME/.rustup/toolchains" ]]; then
+    while IFS= read -r toolchain_dir; do
+      candidates+=("$toolchain_dir/bin")
+    done < <(find "$HOME/.rustup/toolchains" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+  fi
 
   local dir
   for dir in "${candidates[@]}"; do
@@ -71,8 +79,8 @@ if ! resolve_cargo; then
 ERROR: Could not find a Rust/Cargo installation.
 
 Checked: current PATH, $CARGO_HOME/bin, $HOME/.cargo/bin,
-$HOME/.rustup/toolchains/*/bin, /opt/homebrew/opt/rustup/bin,
-/usr/local/opt/rustup/bin, /usr/local/bin, and /usr/bin.
+/opt/homebrew/opt/rustup/bin, /usr/local/opt/rustup/bin, /usr/local/bin,
+/usr/bin, and $HOME/.rustup/toolchains/*/bin.
 
 Install Rust via rustup and re-run this script:
   https://rustup.rs
@@ -88,9 +96,12 @@ echo "Found Cargo: $(cargo --version) (${CARGO_BIN})"
 #
 # Each worktree gets its own `.cargo/config.toml` (gitignored, never the
 # user/global ~/.cargo/config) pinning `build.target-dir` to a path derived
-# from this worktree's own root. That keeps parallel worktrees from ever
-# contending on the same `target/` lock, even if a global CARGO_TARGET_DIR
-# happens to be exported in the caller's environment.
+# from this worktree's own root, so parallel worktrees never contend on the
+# same `target/` lock by default. Note: a `CARGO_TARGET_DIR` environment
+# variable, if exported by the caller, takes precedence over this config
+# (that's Cargo's own resolution order) -- this script does not touch shell
+# profiles, so it cannot guard against an operator exporting a shared
+# CARGO_TARGET_DIR themselves.
 #
 # If `sccache` is resolvable on the (now-discovered) PATH, it's configured as
 # the rustc wrapper in the same file so sibling worktrees can still share
