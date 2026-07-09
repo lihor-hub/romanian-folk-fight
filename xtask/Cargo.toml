@@ -1,0 +1,12 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Root cargo-xtask dispatcher: focused Rust verification gates for romanian-folk-fight."
+
+# Deliberately dependency-free: hand-rolled arg parsing and `std::process`
+# keep this a fast-compiling, low-maintenance dev tool. Add a dependency here
+# only if a later, independently owned module genuinely needs one -- match
+# the root crate's dependency conservatism.
+[dependencies]

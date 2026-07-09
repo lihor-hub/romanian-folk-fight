@@ -4,6 +4,13 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+# The game binary stays the workspace root package (implicitly a member, per
+# Cargo's rules for a manifest that has both `[package]` and `[workspace]`).
+# `xtask` is the only other member; it is a dev-tooling dispatcher, never a
+# dependency of this package. See `xtask/README.md`.
+[workspace]
+members = ["xtask"]
+
 [dependencies]
 bevy = { version = "0.19.0" }
 # default-features off: the engine only needs the `Rng`/`SeedableRng` traits,

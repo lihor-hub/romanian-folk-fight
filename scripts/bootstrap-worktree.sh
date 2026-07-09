@@ -3,7 +3,13 @@
 #   1. Discovers a Rust/Cargo toolchain even if it isn't on the initial PATH.
 #   2. Writes a worktree-local .cargo/config.toml so this worktree builds into
 #      its own target directory (no shared-lock contention with sibling
-#      worktrees) and, when available, shares sccache compiler-cache hits.
+#      worktrees), when available shares sccache compiler-cache hits, and
+#      wires the `cargo xtask` alias to the root xtask dispatcher crate (see
+#      xtask/README.md). Cargo only reads one `.cargo/config.toml` per
+#      directory, and the workspace root has no ancestor directory inside
+#      the repo to host a second, committed one -- so the alias is generated
+#      into this same file rather than a separate location, keeping
+#      bootstrap the single, idempotent source of worktree Cargo config.
 #   3. Installs git pre-commit/pre-push hooks (unchanged behavior).
 #
 # Never touches user/global Cargo config (~/.cargo/config*), rustup settings,
@@ -93,6 +99,7 @@ CARGO_BIN="$(command -v cargo)"
 echo "Found Cargo: $(cargo --version) (${CARGO_BIN})"
 
 # --- 2. Worktree-local Cargo config: isolated target dir + shared sccache --
+#        + the `cargo xtask` alias ------------------------------------------
 #
 # Each worktree gets its own `.cargo/config.toml` (gitignored, never the
 # user/global ~/.cargo/config) pinning `build.target-dir` to a path derived
@@ -108,6 +115,15 @@ echo "Found Cargo: $(cargo --version) (${CARGO_BIN})"
 # compiler-cache hits despite having separate target directories. If it's not
 # available, bootstrap reports that shared caching is disabled and how to fix
 # it, without failing.
+#
+# The same file also carries `[alias] xtask = "run --package xtask --"` so
+# `cargo xtask ...` works from the workspace root (see xtask/README.md).
+# Cargo merges config from ancestor directories, but only reads one
+# `.cargo/config.toml` per directory -- and the workspace root has no parent
+# directory inside this repo -- so the alias lives here rather than a second
+# file. The whole file is regenerated deterministically on every run, so
+# adding the alias to this generation step does not change bootstrap's
+# idempotency: an unchanged worktree still produces byte-identical output.
 CARGO_CONFIG_DIR="$WORKTREE_ROOT/.cargo"
 CARGO_CONFIG_FILE="$CARGO_CONFIG_DIR/config.toml"
 CARGO_CONFIG_STAGED="$CARGO_CONFIG_FILE.bootstrap-staged"
@@ -127,6 +143,10 @@ SCCACHE_BIN="$(command -v sccache || true)"
   if [[ -n "$SCCACHE_BIN" ]]; then
     echo "rustc-wrapper = \"$SCCACHE_BIN\""
   fi
+  echo
+  echo "[alias]"
+  echo "# Dispatches to the xtask workspace crate; see xtask/README.md."
+  echo "xtask = \"run --package xtask --\""
 } >"$CARGO_CONFIG_STAGED"
 
 if [[ -f "$CARGO_CONFIG_FILE" ]] && cmp -s "$CARGO_CONFIG_FILE" "$CARGO_CONFIG_STAGED"; then
