@@ -117,6 +117,9 @@ fn transition_out_of_loading(
 /// Every screen's spawn/update systems read this instead of querying the
 /// window directly, so the breakpoint logic — [`is_mobile_width`] — stays in
 /// one place.
+///
+/// `width`/`height` are always **logical** (CSS-equivalent) pixels, never
+/// physical/device pixels — see [`ViewportInfo::from_window`] (#115).
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct ViewportInfo {
     pub width: f32,
@@ -125,12 +128,32 @@ pub struct ViewportInfo {
 }
 
 impl ViewportInfo {
+    /// Builds from an already-logical width/height. Private and pure (no
+    /// `Window` access) so the breakpoint math in [`is_mobile_width`] stays
+    /// unit-testable without spinning up a window — callers that have a
+    /// live `Window` should go through [`ViewportInfo::from_window`] instead
+    /// of reaching for a physical-pixel field by mistake.
     fn new(width: f32, height: f32) -> Self {
         Self {
             width,
             height,
             is_mobile: is_mobile_width(width),
         }
+    }
+
+    /// Builds from a live [`Window`], resolving to logical pixels regardless
+    /// of `scale_factor` (#115). On a HiDPI display the window's *physical*
+    /// pixel count is `scale_factor` times its logical size — e.g. a
+    /// 1280-logical-px desktop window reports 2560 physical pixels at a 2x
+    /// `scale_factor` — so the mobile breakpoint must compare against the
+    /// logical width (1280), not that physical count, or a desktop-sized
+    /// window would misread as a phone-sized one on any HiDPI display.
+    /// [`Window::width`]/[`Window::height`] already divide physical size by
+    /// `scale_factor` to produce this; routing every call site through this
+    /// one helper keeps that the single, tested place that decision is made
+    /// instead of leaving each caller to remember it independently.
+    fn from_window(window: &Window) -> Self {
+        Self::new(window.width(), window.height())
     }
 }
 
@@ -150,6 +173,14 @@ impl Plugin for CorePlugin {
         app.init_state::<GameState>()
             .init_resource::<UiFont>()
             .init_resource::<ViewportInfo>()
+            // Bevy multiplies every `Val::Px` by `window.scale_factor() *
+            // UiScale` exactly once to get a HiDPI-crisp physical pixel
+            // size (#115). `UiScale`'s own default is already `1.0`, but
+            // that reliance was implicit — pinned here explicitly so a
+            // node declared 260px wide is guaranteed to paint 260 CSS px
+            // (not 520) on any display, and so nothing can silently start
+            // compounding a second multiplier onto `window.scale_factor()`.
+            .insert_resource(UiScale(1.0))
             // Registered here (idempotent) rather than assumed from
             // `WindowPlugin`, so headless test apps that skip the window
             // stack can still read `MessageReader<WindowResized>`.
@@ -176,7 +207,7 @@ fn init_viewport_size(
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     if let Ok(window) = windows.single() {
-        *viewport = ViewportInfo::new(window.width(), window.height());
+        *viewport = ViewportInfo::from_window(window);
     }
 }
 
@@ -191,7 +222,11 @@ fn track_viewport_size(
     let Some(event) = resized.read().last() else {
         return;
     };
-    let _ = windows; // resize events already carry the new size.
+    let _ = windows; // resize events already carry the new (logical) size.
+    // `WindowResized::width`/`height` are documented as logical pixels, the
+    // same quantity `ViewportInfo::from_window` derives from a live
+    // `Window` — kept as a direct `ViewportInfo::new` call (rather than
+    // re-querying the window) since the event already carries the value.
     let next = ViewportInfo::new(event.width, event.height);
     if next != *viewport {
         *viewport = next;
@@ -449,6 +484,101 @@ mod tests {
         assert_eq!(font.weight, FontWeight::default());
         let bold = ui_font.text_font_bold(24.0);
         assert_eq!(bold.weight, FontWeight::BOLD);
+    }
+
+    /// Builds a `Window` whose logical size is exactly `(logical_width,
+    /// logical_height)` at the given `scale_factor`, by deriving the
+    /// physical size that produces it (`physical = logical * scale_factor`)
+    /// — mirroring what a real HiDPI display reports, e.g. a 1280-logical-px
+    /// desktop window is 2560 physical pixels at a 2x `scale_factor`.
+    fn window_at(logical_width: f32, logical_height: f32, scale_factor: f32) -> Window {
+        let mut window = Window::default();
+        window.resolution = bevy::window::WindowResolution::new(
+            (logical_width * scale_factor).round() as u32,
+            (logical_height * scale_factor).round() as u32,
+        )
+        .with_scale_factor_override(scale_factor);
+        window
+    }
+
+    /// #115: on a HiDPI display the window's *physical* pixel count is
+    /// `scale_factor` times its logical size. `ViewportInfo::from_window`
+    /// must key the mobile breakpoint off the logical size, or a
+    /// desktop-sized window at a 2x `scale_factor` would misread as
+    /// phone-sized (1280 physical / 2 = 640 < the 700 breakpoint).
+    #[test]
+    fn viewport_info_from_window_uses_logical_width_regardless_of_scale_factor() {
+        let desktop_hidpi = window_at(1280.0, 800.0, 2.0);
+        let info = ViewportInfo::from_window(&desktop_hidpi);
+        assert_eq!(info.width, 1280.0);
+        assert!(
+            !info.is_mobile,
+            "a 1280-logical-px window must not be mobile at any scale factor"
+        );
+
+        let desktop_standard = window_at(1280.0, 800.0, 1.0);
+        assert!(!ViewportInfo::from_window(&desktop_standard).is_mobile);
+
+        let phone_hidpi = window_at(375.0, 812.0, 3.0);
+        let info = ViewportInfo::from_window(&phone_hidpi);
+        assert_eq!(info.width, 375.0);
+        assert!(
+            info.is_mobile,
+            "a 375-logical-px window must be mobile at any scale factor"
+        );
+
+        let phone_2x = window_at(375.0, 812.0, 2.0);
+        assert!(ViewportInfo::from_window(&phone_2x).is_mobile);
+    }
+
+    /// Builds a minimal app running only `letterbox_camera`, with a
+    /// `PrimaryWindow` at the given `scale_factor` and a `ViewportInfo`
+    /// fixed at `(logical_width, logical_height)`, and returns the
+    /// `WorldCamera`'s computed physical `Viewport` after one update.
+    fn run_letterbox_camera(
+        logical_width: f32,
+        logical_height: f32,
+        scale_factor: f32,
+    ) -> Viewport {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(ViewportInfo::new(logical_width, logical_height));
+        app.world_mut().spawn((
+            window_at(logical_width, logical_height, scale_factor),
+            PrimaryWindow,
+        ));
+        let camera = app.world_mut().spawn((Camera::default(), WorldCamera)).id();
+        app.add_systems(Update, letterbox_camera);
+        app.update();
+        app.world()
+            .get::<Camera>(camera)
+            .and_then(|camera| camera.viewport.clone())
+            .expect("letterbox_camera must set a physical viewport")
+    }
+
+    /// #115: `letterbox_camera` must keep computing the same *physical*
+    /// letterboxed rectangle (scaled proportionally by `scale_factor`) after
+    /// the `ViewportInfo`/`UiScale` changes in this PR — it must not regress
+    /// to using a `scale_factor`-independent (logical) size.
+    #[test]
+    fn letterbox_camera_scales_physical_viewport_with_scale_factor() {
+        // A 1600x900 (16:9) logical window letterboxed to LOGICAL_WIDTH /
+        // LOGICAL_HEIGHT's 4:3 aspect: full height, pillarboxed left/right.
+        for (scale_factor, expected_position, expected_size) in [
+            (1.0, UVec2::new(200, 0), UVec2::new(1200, 900)),
+            (2.0, UVec2::new(400, 0), UVec2::new(2400, 1800)),
+            (3.0, UVec2::new(600, 0), UVec2::new(3600, 2700)),
+        ] {
+            let viewport = run_letterbox_camera(1600.0, 900.0, scale_factor);
+            assert_eq!(
+                viewport.physical_position, expected_position,
+                "wrong physical_position at scale_factor {scale_factor}"
+            );
+            assert_eq!(
+                viewport.physical_size, expected_size,
+                "wrong physical_size at scale_factor {scale_factor}"
+            );
+        }
     }
 
     #[test]
