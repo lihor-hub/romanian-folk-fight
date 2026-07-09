@@ -131,7 +131,7 @@ impl Plugin for ProgressionPlugin {
             .add_systems(
                 Update,
                 (
-                    result_ui::handle_result_actions,
+                    result_ui::handle_result_actions.in_set(crate::flow::FlowIntentEmission),
                     result_ui::handle_allocation_actions,
                     result_ui::update_button_backgrounds,
                     result_ui::update_allocation_labels
@@ -154,7 +154,7 @@ impl Plugin for ProgressionPlugin {
             .add_systems(
                 Update,
                 (
-                    result_ui::handle_game_over_actions,
+                    result_ui::handle_game_over_actions.in_set(crate::flow::FlowIntentEmission),
                     result_ui::update_button_backgrounds,
                 )
                     .run_if(in_state(GameState::GameOver)),
@@ -170,7 +170,7 @@ impl Plugin for ProgressionPlugin {
             .add_systems(
                 Update,
                 (
-                    victory_ui::handle_victory_actions,
+                    victory_ui::handle_victory_actions.in_set(crate::flow::FlowIntentEmission),
                     result_ui::update_button_backgrounds,
                 )
                     .run_if(in_state(GameState::Victory)),
@@ -315,6 +315,7 @@ pub(crate) fn reset_run(commands: &mut Commands) {
 mod tests {
     use super::*;
     use crate::core::CorePlugin;
+    use crate::flow::FlowPlugin;
     use bevy::state::app::StatesPlugin;
     use std::time::Duration;
 
@@ -322,7 +323,13 @@ mod tests {
     /// registered (combat itself is not needed to drive the flow).
     fn test_app() -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, ProgressionPlugin));
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            FlowPlugin,
+            ProgressionPlugin,
+        ));
         app.add_message::<CombatLogEvent>();
         app.update();
         app

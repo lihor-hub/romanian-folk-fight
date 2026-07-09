@@ -394,6 +394,7 @@ mod tests {
     use crate::combat::CombatPlugin;
     use crate::core::CorePlugin;
     use crate::creation::PlayerCharacter;
+    use crate::flow::FlowPlugin;
     use bevy::state::app::StatesPlugin;
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
@@ -538,7 +539,7 @@ mod tests {
     /// opening action overwrites the fight-start banner in the same frame.
     fn test_app_at(progress: crate::roster::LadderProgress, attributes: Attributes) -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin));
+        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, FlowPlugin));
         app.add_plugins((ArenaPlugin, CombatPlugin, AnnouncerPlugin));
         app.init_resource::<ButtonInput<KeyCode>>();
         app.insert_resource(PlayerCharacter {

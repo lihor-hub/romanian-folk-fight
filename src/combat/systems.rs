@@ -459,6 +459,7 @@ mod tests {
     use crate::character::stats::{CRIT_PERCENT_CAP, HIT_PERCENT_MIN};
     use crate::core::CorePlugin;
     use crate::creation::PlayerCharacter;
+    use crate::flow::FlowPlugin;
     use bevy::state::app::StatesPlugin;
     use rand::RngExt as _;
 
@@ -479,7 +480,7 @@ mod tests {
 
     fn test_app_with(attributes: Attributes) -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin));
+        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, FlowPlugin));
         app.add_plugins((ArenaPlugin, CombatPlugin));
         app.init_resource::<ButtonInput<KeyCode>>();
         app.world_mut()

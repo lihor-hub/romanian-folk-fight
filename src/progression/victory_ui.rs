@@ -10,8 +10,9 @@ use crate::announcer::{
     fill_placeholders,
     lines::{LineKey, pool},
 };
-use crate::core::{GameState, UiFont};
+use crate::core::UiFont;
 use crate::creation::PlayerCharacter;
+use crate::flow::FlowIntent;
 use crate::roster::{LADDER, LadderProgress};
 use crate::theme::{CREAM, CREDITS_GRAY, NIGHT_BLACK, PanelTexture, panel_bundle};
 use crate::ui_widgets::wide_button;
@@ -177,20 +178,22 @@ fn credits_line(label: &str, ui_font: &UiFont) -> impl Bundle {
 }
 
 /// Runs the [`VictoryAction`] of whichever victory-screen button was
-/// pressed. Neither path resets the run: **Turul 2** heads to the shop with
-/// the ladder already on lap 2, **Înapoi la menu** leaves the save intact so
-/// **Continuă** resumes the looping run.
+/// pressed: emits the matching [`FlowIntent`]. Neither path resets the run
+/// (the ladder advance/payout already landed on `OnEnter(Victory)`), so
+/// there is no domain side effect to order here: **Turul 2** heads to the
+/// shop with the ladder already on lap 2, **Înapoi la menu** leaves the save
+/// intact so **Continuă** resumes the looping run.
 pub(super) fn handle_victory_actions(
     interactions: Query<(&Interaction, &VictoryAction), ChangedButton>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut intents: MessageWriter<FlowIntent>,
 ) {
     for (interaction, action) in &interactions {
         if *interaction != Interaction::Pressed {
             continue;
         }
-        next_state.set(match action {
-            VictoryAction::NextLap => GameState::Shop,
-            VictoryAction::BackToMenu => GameState::MainMenu,
+        intents.write(match action {
+            VictoryAction::NextLap => FlowIntent::NextLap,
+            VictoryAction::BackToMenu => FlowIntent::BackToMenu,
         });
     }
 }
@@ -201,7 +204,8 @@ mod tests {
     use super::*;
     use crate::character::Attributes;
     use crate::combat::{CombatLogEvent, CombatSide};
-    use crate::core::CorePlugin;
+    use crate::core::{CorePlugin, GameState};
+    use crate::flow::FlowPlugin;
     use bevy::state::app::StatesPlugin;
 
     /// Headless app one update away from the victory screen: the run stands
@@ -209,7 +213,13 @@ mod tests {
     /// player has a name and some prior earnings.
     fn test_app() -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, ProgressionPlugin));
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            FlowPlugin,
+            ProgressionPlugin,
+        ));
         app.add_message::<CombatLogEvent>();
         app.insert_resource(PlayerCharacter {
             name: "Făt-Frumos".to_string(),

@@ -844,6 +844,7 @@ mod tests {
     use crate::character::stats::{CRIT_PERCENT_CAP, HIT_PERCENT_MIN};
     use crate::core::{CorePlugin, GameState};
     use crate::creation::PlayerCharacter;
+    use crate::flow::FlowPlugin;
     use bevy::state::app::StatesPlugin;
     use rand::{RngExt as _, SeedableRng};
     use rand_chacha::ChaCha8Rng;
@@ -870,7 +871,7 @@ mod tests {
     /// first four strikes are clean hits without crits.
     fn test_app() -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin));
+        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, FlowPlugin));
         app.add_plugins((ArenaPlugin, CombatPlugin));
         app.init_resource::<ButtonInput<KeyCode>>();
         app.world_mut()
@@ -1307,7 +1308,7 @@ mod tests {
     #[test]
     fn the_player_panel_shows_the_level_next_to_the_name() {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin));
+        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, FlowPlugin));
         app.add_plugins((ArenaPlugin, CombatPlugin));
         app.init_resource::<ButtonInput<KeyCode>>();
         app.insert_resource(PlayerCharacter {

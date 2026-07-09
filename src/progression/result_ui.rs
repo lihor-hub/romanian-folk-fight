@@ -7,8 +7,9 @@ use bevy::prelude::*;
 
 use crate::character::{AttributeKind, Health, PlayerFighter, Stamina, stats};
 use crate::combat::hud::bar_percent;
-use crate::core::{GameState, UiFont};
+use crate::core::UiFont;
 use crate::creation::PlayerCharacter;
+use crate::flow::FlowIntent;
 use crate::save::SaveRequested;
 use crate::theme::{
     BAR_TRACK, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK, PanelTexture,
@@ -283,18 +284,21 @@ fn screen_line(label: String, ui_font: &UiFont) -> impl Bundle {
 /// Query filter: buttons whose interaction changed this frame.
 pub(super) type ChangedButton = (Changed<Interaction>, With<Button>);
 
-/// Runs the [`ResultAction`] of whichever result-screen button was pressed.
+/// Runs the [`ResultAction`] of whichever result-screen button was pressed:
+/// emits the matching [`FlowIntent`] — the payout was already credited on
+/// `OnEnter(FightResult)`, so this handler has no domain side effect of its
+/// own to order before the intent.
 pub(super) fn handle_result_actions(
     interactions: Query<(&Interaction, &ResultAction), ChangedButton>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut intents: MessageWriter<FlowIntent>,
 ) {
     for (interaction, action) in &interactions {
         if *interaction != Interaction::Pressed {
             continue;
         }
-        next_state.set(match action {
-            ResultAction::GoToShop => GameState::Shop,
-            ResultAction::NextFight => GameState::Fight,
+        intents.write(match action {
+            ResultAction::GoToShop => FlowIntent::GoToShop,
+            ResultAction::NextFight => FlowIntent::NextFight,
         });
     }
 }
@@ -372,11 +376,13 @@ pub(super) fn update_allocation_labels(
 }
 
 /// Runs the [`GameOverAction`] of whichever game-over button was pressed:
-/// back to the menu with every run resource reset.
+/// resets every run resource, then emits [`FlowIntent::BackToMenu`] — the
+/// reset must land before the intent so the flow table never routes to the
+/// menu with stale run state.
 pub(super) fn handle_game_over_actions(
     mut commands: Commands,
     interactions: Query<(&Interaction, &GameOverAction), ChangedButton>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut intents: MessageWriter<FlowIntent>,
 ) {
     for (interaction, action) in &interactions {
         if *interaction != Interaction::Pressed {
@@ -385,7 +391,7 @@ pub(super) fn handle_game_over_actions(
         match action {
             GameOverAction::BackToMenu => {
                 reset_run(&mut commands);
-                next_state.set(GameState::MainMenu);
+                intents.write(FlowIntent::BackToMenu);
             }
         }
     }
@@ -411,15 +417,22 @@ mod tests {
     use crate::arena::ArenaPlugin;
     use crate::character::{Attributes, EnemyFighter, Health, PlayerFighter, Stamina};
     use crate::combat::{CombatEvent, CombatLogEvent, CombatPlugin, CombatSide};
-    use crate::core::CorePlugin;
+    use crate::core::{CorePlugin, GameState};
     use crate::creation::PlayerCharacter;
+    use crate::flow::FlowPlugin;
     use bevy::state::app::StatesPlugin;
     use std::time::Duration;
 
     /// Headless app with only the progression flow (no arena or combat).
     fn test_app() -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, ProgressionPlugin));
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            FlowPlugin,
+            ProgressionPlugin,
+        ));
         app.add_message::<CombatLogEvent>();
         app.update();
         app
@@ -437,7 +450,7 @@ mod tests {
     /// Headless app with the full fight loop: arena, combat, progression.
     fn full_app() -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin));
+        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, FlowPlugin));
         app.add_plugins((ArenaPlugin, CombatPlugin, ProgressionPlugin));
         app.init_resource::<ButtonInput<KeyCode>>();
         app.insert_resource(PlayerCharacter {

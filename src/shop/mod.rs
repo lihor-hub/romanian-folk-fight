@@ -14,6 +14,7 @@ use crate::character::{Attributes, PlayerAppearance, PlayerFighter, stats};
 use crate::core::{GameState, UiFont, ViewportInfo, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::cutout::{CutoutRig, human_template_for, spawn_cutout_rig_with_gear};
+use crate::flow::FlowIntent;
 use crate::items::{CATALOG, Equipment, Item, ItemId, Slot};
 use crate::menu::DisabledButton;
 use crate::progression::Wallet;
@@ -231,7 +232,7 @@ impl Plugin for ShopPlugin {
             .add_systems(
                 Update,
                 (
-                    handle_shop_actions,
+                    handle_shop_actions.in_set(crate::flow::FlowIntentEmission),
                     update_button_backgrounds,
                     refresh_shop_ui.run_if(
                         resource_changed::<Wallet>
@@ -806,16 +807,17 @@ type ChangedButton = (Changed<Interaction>, With<Button>);
 type ChangedEnabledButton = (Changed<Interaction>, With<Button>, Without<DisabledButton>);
 
 /// Runs the [`ShopAction`] of whichever shop button was pressed: buys (via
-/// [`try_buy`]) and auto-equips, equips owned items, or leaves for the
-/// arena. State is re-derived from the resources on every press, so a
-/// stale-looking button can never overdraw the wallet. Every successful
-/// purchase or equip swap autosaves the run (see [`crate::save`]).
+/// [`try_buy`]) and auto-equips, equips owned items, or emits
+/// [`FlowIntent::BackToArena`] to leave for the fight. State is re-derived
+/// from the resources on every press, so a stale-looking button can never
+/// overdraw the wallet. Every successful purchase or equip swap autosaves
+/// the run (see [`crate::save`]) before any intent is written.
 fn handle_shop_actions(
     interactions: Query<(&Interaction, &ShopAction), ChangedButton>,
     mut wallet: ResMut<Wallet>,
     mut owned: ResMut<OwnedItems>,
     mut equipment: ResMut<PlayerEquipment>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut intents: MessageWriter<FlowIntent>,
     mut save_requests: MessageWriter<SaveRequested>,
 ) {
     for (interaction, action) in &interactions {
@@ -823,7 +825,9 @@ fn handle_shop_actions(
             continue;
         }
         match *action {
-            ShopAction::BackToArena => next_state.set(GameState::Fight),
+            ShopAction::BackToArena => {
+                intents.write(FlowIntent::BackToArena);
+            }
             ShopAction::Item(id) => {
                 match ItemButtonState::of(id, &wallet, &owned, &equipment) {
                     ItemButtonState::Equip => {
@@ -950,6 +954,7 @@ mod tests {
     use crate::combat::CombatLogEvent;
     use crate::core::CorePlugin;
     use crate::cutout::{CutoutPartKind, CutoutPartMarker, GearVisualLayer};
+    use crate::flow::FlowPlugin;
     use crate::progression::{ProgressionPlugin, STARTING_GALBENI, result_ui::GameOverAction};
     use bevy::state::app::StatesPlugin;
 
@@ -1062,7 +1067,13 @@ mod tests {
     /// Headless app with only the shop flow.
     fn test_app() -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, ShopPlugin));
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            FlowPlugin,
+            ShopPlugin,
+        ));
         app.insert_resource(player_character());
         app.update();
         app
@@ -1608,6 +1619,7 @@ mod tests {
             MinimalPlugins,
             StatesPlugin,
             CorePlugin,
+            FlowPlugin,
             ProgressionPlugin,
             ShopPlugin,
         ));
