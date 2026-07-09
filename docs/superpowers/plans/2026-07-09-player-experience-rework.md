@@ -1,6 +1,6 @@
 # Romanian Folk Fight Player Experience Rework Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans. A linked GitHub issue—not a roadmap subsection—is the atomic execution task. Implement exactly one issue per worktree and PR, merge it, then rebase the next dependent issue. Steps use checkbox (`- [ ]`) syntax for program tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans. A native GitHub **leaf sub-issue**—not a coordinator parent or roadmap subsection—is the atomic execution task. Implement exactly one leaf per worktree and PR, merge it, then rebase the next dependent leaf. Steps use checkbox (`- [ ]`) syntax for program tracking.
 
 **Goal:** Turn the shipped arena ladder into a polished, readable campaign, then extend that stable core into the complete town-centered RPG without a rewrite.
 
@@ -20,6 +20,7 @@
 - Every accepted asset needs explicit provenance, license, crop, scale, pivot, and attachment data where applicable.
 - UI and asset changes require rendered before/after evidence; unit tests alone cannot prove presentation quality.
 - One issue, one worktree, one independently reviewable PR. Rebase on `origin/main`; never merge feature branches together.
+- Claim only leaf issues labeled `ready-for-agent`. Parents labeled `ready-for-human` coordinate their children and are closed only after a human verifies the parent acceptance criteria.
 - Do not begin a blocked issue because an agent slot is free. Pull the next unblocked issue from the current wave.
 
 ---
@@ -64,8 +65,8 @@ The following boundaries are the intended outcome. A child issue may adjust a fi
 | Timed effects and expiry rules | `src/combat/effects.rs` | Combat engine, spells, consumables, armour, HUD |
 | Responsive action palette | `src/combat/action_palette.rs` | Fight HUD |
 | Shared responsive screen shell | `src/ui_widgets/screen_shell.rs` | Result, game over, victory, town, shop, preview |
-| Runtime asset contract | `assets/manifest.toml` | Rust asset paths, credits, gallery, CI |
-| Command dispatcher and shared `xtask` wiring | `xtask/src/main.rs`, root Cargo registration | Owned by #152; consumed by asset/browser tooling |
+| Runtime asset contract | Per-directory manifest sidecars plus a derived aggregate | Rust asset paths, credits, gallery, CI |
+| Command dispatcher and shared `xtask` wiring | `xtask/src/main.rs`, root Cargo registration | Owned by leaf #163; consumed by asset/browser tooling |
 | Asset validation and gallery subcommands | `xtask/src/assets/` | Asset agents and CI |
 | Browser-smoke orchestration subcommands | `xtask/src/web_smoke/` | UI/web agents and CI |
 | Browser journeys and screenshot baselines | `tests/visual/` | UI, assets, viewport, web runtime |
@@ -89,13 +90,14 @@ git status --short --branch
 
 Before writing a test or asset, the agent must also:
 
-1. Read the assigned issue body and every issue comment.
-2. Read all blocking issues and confirm their PRs are merged into the current base.
-3. Read [#151](https://github.com/lihor-hub/romanian-folk-fight/issues/151), this plan, `AGENTS.md`, and `docs/art-direction.md`.
-4. Restate the issue's player-visible before/after, focused verification command, and any program-level correction that overrides stale issue text.
-5. Stop if the assigned issue conflicts with a merged owner contract; do not invent a parallel API.
+1. Confirm the assigned issue has no native sub-issues, is labeled `ready-for-agent`, and every issue in `Blocked by` is closed with its PR merged.
+2. Read the assigned issue body and every issue comment.
+3. Read all blocking issues and confirm their PRs are merged into the current base.
+4. Read [#151](https://github.com/lihor-hub/romanian-folk-fight/issues/151), this plan, `AGENTS.md`, and `docs/art-direction.md`.
+5. Restate the issue's player-visible before/after, focused verification command, ownership boundary, and every `Must not change` constraint.
+6. Stop if the assigned issue conflicts with a merged owner contract; do not invent a parallel API.
 
-[Issue #152](https://github.com/lihor-hub/romanian-folk-fight/issues/152) must make this reliable when Cargo is initially absent from `PATH`, configure shared compiler caching, and retain separate target directories so parallel worktrees do not fight over one Cargo lock.
+[Leaf #154](https://github.com/lihor-hub/romanian-folk-fight/issues/154) must make this reliable when Cargo is initially absent from `PATH`, configure shared compiler caching, and retain separate target directories so parallel worktrees do not fight over one Cargo lock.
 
 ### Inner loops
 
@@ -115,7 +117,7 @@ cargo xtask assets review --changed
 cargo xtask web-smoke --scenario <scenario-name>
 ```
 
-[Issue #152](https://github.com/lihor-hub/romanian-folk-fight/issues/152) owns the root `xtask` crate, command dispatcher, Cargo registration, and shared process/error conventions. After #152 merges, [#141](https://github.com/lihor-hub/romanian-folk-fight/issues/141) adds the asset subcommands and [#144](https://github.com/lihor-hub/romanian-folk-fight/issues/144) adds browser-smoke orchestration in disjoint modules. Those command names are the shared interface; later agents add scenarios and checks without creating new runners.
+[Leaf #163](https://github.com/lihor-hub/romanian-folk-fight/issues/163) owns the root `xtask` crate, command dispatcher, Cargo registration, and shared process/error conventions. After #163 merges, [leaf #167](https://github.com/lihor-hub/romanian-folk-fight/issues/167) starts the asset subcommands and [leaf #168](https://github.com/lihor-hub/romanian-folk-fight/issues/168) starts browser-smoke orchestration in disjoint modules. Those command names are the shared interface; later leaves extend their assigned module without creating new runners.
 
 Target warm budgets:
 
@@ -127,7 +129,7 @@ Target warm budgets:
 | One browser scenario | 90 seconds | Scenario, viewport/DPR, console errors, screenshot diff |
 | Full pre-push gate | 10 minutes | First failing command plus retained artifacts |
 
-Budgets are observability thresholds, not excuses to skip verification. [Issue #152](https://github.com/lihor-hub/romanian-folk-fight/issues/152) records representative cold and warm measurements.
+Budgets are observability thresholds, not excuses to skip verification. [Leaf #165](https://github.com/lihor-hub/romanian-folk-fight/issues/165) records representative cold and warm measurements.
 
 ### Required pre-review gate
 
@@ -162,13 +164,37 @@ An issue remains open until both reviews pass.
 
 ## 6. Wave 0 — Feedback spine
 
-Run the first row in parallel because the files are disjoint:
+GitHub's native hierarchy under [#151](https://github.com/lihor-hub/romanian-folk-fight/issues/151) is the live source for leaf bodies and blockers. The parent checkboxes later in this plan are wave-completion gates, not implementation branches.
+
+Start these two leaves in parallel because their ownership is disjoint:
+
+- [ ] [#154 Bootstrap/toolchain discovery and isolated targets](https://github.com/lihor-hub/romanian-folk-fight/issues/154)
+- [ ] [#155 Menu, Continue, and creation flow intents](https://github.com/lihor-hub/romanian-folk-fight/issues/155)
+
+After #154 merges, rebase and implement the root dispatcher. It owns shared `xtask` registration:
+
+- [ ] [#163 Root xtask dispatcher and native verification gates](https://github.com/lihor-hub/romanian-folk-fight/issues/163)
+
+After #163 merges, these tooling leaves may run in parallel in their assigned modules:
+
+- [ ] [#165 Measured worktree feedback budgets](https://github.com/lihor-hub/romanian-folk-fight/issues/165)
+- [ ] [#167 Per-directory asset sidecars and inventory validation](https://github.com/lihor-hub/romanian-folk-fight/issues/167)
+- [ ] [#168 Cold-menu browser smoke](https://github.com/lihor-hub/romanian-folk-fight/issues/168)
+
+The flow chain is independent of #163. As soon as #155 merges, rebase and run:
+
+- [ ] [#164 Post-fight flow intents](https://github.com/lihor-hub/romanian-folk-fight/issues/164)
+
+Finish each parent through its ordered leaf chain:
+
+- [ ] Flow: #164 → [#166 combat outcomes and sole transition ownership](https://github.com/lihor-hub/romanian-folk-fight/issues/166)
+- [ ] Assets: #167 → #185 → #197 → #211
+- [ ] Browser: #168 and #166 must both merge before #187; then #187 → #198
+
+The following parent issues close only after every native child and the parent acceptance gate pass:
 
 - [ ] [#142 Central flow intents](https://github.com/lihor-hub/romanian-folk-fight/issues/142)
 - [ ] [#152 Fast, self-verifying worktrees](https://github.com/lihor-hub/romanian-folk-fight/issues/152)
-
-After #152 merges, rebase and run the second row in parallel. #141 and #144 own separate `xtask` modules and separate workflow files; neither may edit the other's module.
-
 - [ ] [#141 Asset manifest and review gallery](https://github.com/lihor-hub/romanian-folk-fight/issues/141)
 - [ ] [#144 Browser visual smoke tests](https://github.com/lihor-hub/romanian-folk-fight/issues/144)
 
@@ -184,7 +210,7 @@ Wave 1 does not begin until the commands exist, even if their first runs expose 
 
 ## 7. Wave 1 — First impression and layout correctness
 
-Each issue below is a separate worktree and PR. Merge and rebase at the end of every numbered issue sequence.
+Each atomic issue below is a leaf. Where a parent is named, it is a completion gate only: execute its listed leaves, then ask a human to verify and close the parent.
 
 ### Issue sequence 1.1: Cold first frame
 
@@ -210,8 +236,9 @@ Each issue below is a separate worktree and PR. Merge and rebase at the end of e
 ### Issue sequence 1.5: Palette, accessibility, and menu motifs
 
 - [ ] Implement [#126](https://github.com/lihor-hub/romanian-folk-fight/issues/126).
-- [ ] Implement [#145](https://github.com/lihor-hub/romanian-folk-fight/issues/145).
-- [ ] Implement [#121](https://github.com/lihor-hub/romanian-folk-fight/issues/121) through the asset manifest and loading gate.
+- [ ] Execute accessibility leaves #191, #200, #214, and #216 only when each leaf's `Blocked by` list is closed. #200 and #214 may proceed independently once their own blockers are satisfied; #216 is the final integration leaf.
+- [ ] Human gate: close parent [#145](https://github.com/lihor-hub/romanian-folk-fight/issues/145) only after all four accessibility leaves and the parent acceptance criteria pass.
+- [ ] Implement atomic [#121](https://github.com/lihor-hub/romanian-folk-fight/issues/121) through the per-directory asset contract and loading gate.
 
 ### Wave 1 exit evidence
 
@@ -222,7 +249,7 @@ Each issue below is a separate worktree and PR. Merge and rebase at the end of e
 
 ## 8. Wave 2 — Fighter and asset truthfulness
 
-Each issue below is a separate worktree and PR. Merge #116 before starting #117, merge #117 before #123, and merge #148 before #118.
+Each atomic issue below is a separate worktree and PR. Merge #116 before starting #117, merge #117 before #123, and merge leaf #195 before #118.
 
 ### Issue sequence 2.1: Correct the rig contract
 
@@ -238,8 +265,11 @@ Each issue below is a separate worktree and PR. Merge #116 before starting #117,
 
 ### Issue sequence 2.3: Complete roster identities
 
-- [ ] Implement [#148](https://github.com/lihor-hub/romanian-folk-fight/issues/148) to produce reviewed runtime assets.
-- [ ] Implement [#118](https://github.com/lihor-hub/romanian-folk-fight/issues/118) to select those assets and apply roster identity data.
+- [ ] After #116, #117, and parent #141 are closed, execute approval leaf #156.
+- [ ] After #156, execute identity leaves #171, #172, #176, and #179 in parallel; each owns a disjoint identity directory.
+- [ ] After all four identity leaves merge, execute integration leaf #195.
+- [ ] Human gate: close parent [#148](https://github.com/lihor-hub/romanian-folk-fight/issues/148) only after #156, #171, #172, #176, #179, #195, and the parent acceptance criteria pass.
+- [ ] Implement atomic [#118](https://github.com/lihor-hub/romanian-folk-fight/issues/118) after #195 to select those assets and apply roster identity data.
 - [ ] Reject any implementation that routes legacy full-frame sheets into the production cutout path.
 - [ ] Review silhouettes in grayscale, at thumbnail size, both facings, and at real game scale.
 
@@ -252,21 +282,24 @@ Each issue below is a separate worktree and PR. Merge #116 before starting #117,
 
 ## 9. Wave 3 — Gold compact campaign
 
-Each issue below is a separate worktree and PR. Merge and rebase in the listed order.
+Each atomic issue below is a separate worktree and PR. Split parents are completion gates, never worktree names.
 
 ### Issue sequence 3.1: Scalable action presentation
 
-- [ ] Implement [#143](https://github.com/lihor-hub/romanian-folk-fight/issues/143).
-- [ ] Implement [#122](https://github.com/lihor-hub/romanian-folk-fight/issues/122) through action descriptors and publish a pictogram style contract covering canvas size, outline weight, silhouette rules, shared palette, disabled treatment, and small-size readability.
+- [ ] Execute action-palette leaves #189 → #199 → #213, respecting each leaf's additional live blockers.
+- [ ] Human gate: close parent [#143](https://github.com/lihor-hub/romanian-folk-fight/issues/143) only after those leaves and its parent acceptance criteria pass.
+- [ ] Execute pictogram leaf #157 after parent #141 closes, then integration leaf #178 after #143, #144, and #157 close.
+- [ ] Human gate: close parent [#122](https://github.com/lihor-hub/romanian-folk-fight/issues/122) only after #157, #178, and its parent acceptance criteria pass.
 - [ ] Implement [#124](https://github.com/lihor-hub/romanian-folk-fight/issues/124) through the same descriptor/view-data path.
 - [ ] Prove a test-only action appears without modifying HUD layout code.
 
 ### Issue sequence 3.2: Honest run persistence
 
-- [ ] Implement [#146](https://github.com/lihor-hub/romanian-folk-fight/issues/146) after #142.
+- [ ] After parent #142 closes, execute snapshot leaves #193 → #201 → #217, respecting the browser and flow blockers named by each leaf.
+- [ ] Human gate: close parent [#146](https://github.com/lihor-hub/romanian-folk-fight/issues/146) only after those leaves and its parent acceptance criteria pass.
 - [ ] Migrate version-1 saves once, preserving fields that existed and assigning explicit safe defaults to new fields.
 - [ ] Prove abandon/continue cannot turn a losing fight into a free full-health retry.
-- [ ] Treat the #146 schema as the first extensible snapshot version, not the final campaign schema; every later persistent field requires a new version, a migration from the previous version, and a safe default backed by a migration test.
+- [ ] Treat the leaf #193 schema as the first extensible snapshot version, not the final campaign schema; every later persistent field requires a new version, a migration from the previous version, and a safe default backed by a migration test.
 
 ### Issue sequence 3.3: Gold journey proof
 
@@ -278,68 +311,70 @@ Wave 4 does not begin until the gold journey passes headless and browser gates.
 
 ## 10. Wave 4 — Combat depth
 
-Every Wave 4 issue is sequential by default because combat actions still share exhaustive rule, AI, event, audio, announcer, and catalog owners. Parallel work requires a separately reviewed registration seam that makes the file ownership genuinely disjoint.
+Every Wave 4 implementation leaf is sequential by default because combat actions still share exhaustive rule, AI, event, audio, announcer, and catalog owners. Parallel work requires a separately reviewed registration seam that makes the file ownership genuinely disjoint.
 
 ### Issue sequence 4.1: Final core models
 
 - [ ] Implement [#128](https://github.com/lihor-hub/romanian-folk-fight/issues/128), explicitly allowing `magie == 0` non-casters.
-- [ ] Implement [#134](https://github.com/lihor-hub/romanian-folk-fight/issues/134) as the only distance/reach model.
-- [ ] Implement [#150](https://github.com/lihor-hub/romanian-folk-fight/issues/150) as the only temporary-effect lifecycle.
+- [ ] Execute geometry leaves #159 → #160; then use parent [#134](https://github.com/lihor-hub/romanian-folk-fight/issues/134) only as the human completion gate for the sole distance/reach model.
+- [ ] Execute effect leaves #161 → #162; then use parent [#150](https://github.com/lihor-hub/romanian-folk-fight/issues/150) only as the human completion gate for the sole temporary-effect lifecycle.
 
 ### Issue sequence 4.2: Actions on stable contracts
 
-After Issue sequence 4.1, merge and rebase each of the following in order:
+After Issue sequence 4.1, merge and rebase each implementation leaf in this order:
 
-- [ ] [#130 Strike tiers](https://github.com/lihor-hub/romanian-folk-fight/issues/130)
-- [ ] [#131 Taunt and shove](https://github.com/lihor-hub/romanian-folk-fight/issues/131)
-- [ ] [#132 Folk spells](https://github.com/lihor-hub/romanian-folk-fight/issues/132)
-- [ ] [#135 Ranged weapons and reach](https://github.com/lihor-hub/romanian-folk-fight/issues/135)
+- [ ] Implement atomic [#130 Strike tiers](https://github.com/lihor-hub/romanian-folk-fight/issues/130).
+- [ ] Execute #169 → #170; then use parent [#131 Taunt and shove](https://github.com/lihor-hub/romanian-folk-fight/issues/131) only as its completion gate.
+- [ ] Execute #181 → #182 → #183; then use parent [#132 Folk spells](https://github.com/lihor-hub/romanian-folk-fight/issues/132) only as its completion gate.
+- [ ] Execute #184 → #186; then use parent [#135 Ranged weapons and reach](https://github.com/lihor-hub/romanian-folk-fight/issues/135) only as its completion gate.
 
 Integration constraints:
 
-- `#130`, `#131`, and `#135` use continuous world units; no new distance bands.
-- `#131` and `#132` use #150 for penalties, buffs, locks, and expiry.
-- Every action uses #143 for label, icon, cost, chance, legality, and disabled reason.
+- `#130`, leaves #169–#170, and leaves #184 and #186 use continuous world units; no new distance bands.
+- Leaves #169–#170 and #181–#183 use the completed #150 effect contract for penalties, buffs, locks, and expiry.
+- Every action uses the descriptor contract completed by leaves #189, #199, and #213 for label, icon, cost, chance, legality, and disabled reason.
 - Fixed-seed tests pin behavior before UI work begins.
 
 ### Issue sequence 4.3: Persistent resources
 
-- [ ] Implement [#133](https://github.com/lihor-hub/romanian-folk-fight/issues/133).
-- [ ] Implement [#139](https://github.com/lihor-hub/romanian-folk-fight/issues/139).
-- [ ] Define `Untură de urs` once as armour-pool restoration in #139.
-- [ ] Extend the snapshot through a new version and migration when #133 adds persistent current HP, consumable inventory, and allowed between-fight effects.
-- [ ] Preserve current HP between ordinary fights after #133. Ordinary-fight stamina continues to refill under the existing fight-start rule.
-- [ ] Refill current armour to equipment-derived maximum at the start of every fight after #139, including tournament rounds; armour damage does not persist between safe checkpoints.
+- [ ] Execute recovery leaves #188 → #190; then use parent [#133](https://github.com/lihor-hub/romanian-folk-fight/issues/133) only as its completion gate.
+- [ ] Execute armour leaves #192 → #194; then use parent [#139](https://github.com/lihor-hub/romanian-folk-fight/issues/139) only as its completion gate.
+- [ ] Define `Untură de urs` once as armour-pool restoration in leaf #194.
+- [ ] Extend the snapshot through a new version and migration when leaf #188 adds persistent current HP, consumable inventory, and allowed between-fight effects.
+- [ ] Preserve current HP between ordinary fights after #188. Ordinary-fight stamina continues to refill under the existing fight-start rule.
+- [ ] Refill current armour to equipment-derived maximum at the start of every fight after #192, including tournament rounds; armour damage does not persist between safe checkpoints.
 
 ### Wave 4 exit evidence
 
 - [ ] All new actions render without HUD-specific layout branches.
 - [ ] Reach, displacement, effects, armour, and persistence each have one authoritative model.
-- [ ] Seeded simulations reproduce results and expose balance metrics for later #149.
+- [ ] Seeded simulations reproduce results and expose balance metrics for leaf #210.
 
 ## 11. Wave 5 — Full town campaign
 
-Every Wave 5 issue is a separate worktree and PR. Merge and rebase in the listed order unless an issue's files are proven disjoint in its own approved implementation plan.
+Every Wave 5 implementation leaf is a separate worktree and PR. Merge and rebase in the listed order unless leaf ownership is proven disjoint in its own issue.
 
 ### Issue sequence 5.1: Town spine and locations
 
 - [ ] Implement [#129](https://github.com/lihor-hub/romanian-folk-fight/issues/129).
-- [ ] Implement [#147](https://github.com/lihor-hub/romanian-folk-fight/issues/147) after the town interaction zones are stable.
+- [ ] Execute location approval leaf #158 after #129 and parent #141 close.
+- [ ] After #158, execute disjoint location leaves #173, #174, #175, #177, and #180 in parallel when each leaf's additional blockers are closed; then execute integration leaf #196.
+- [ ] Human gate: close parent [#147](https://github.com/lihor-hub/romanian-folk-fight/issues/147) only after those seven leaves and its parent acceptance criteria pass.
 - [ ] Use the shared responsive screen shell and centralized flow intents.
 
 ### Issue sequence 5.2: Services
 
-- [ ] Implement [#136](https://github.com/lihor-hub/romanian-folk-fight/issues/136) after spell and consumable catalogs exist.
+- [ ] Execute service leaves #202 → #203 → #204 after every blocker named by #202 is closed; then use parent [#136](https://github.com/lihor-hub/romanian-folk-fight/issues/136) only as its completion gate.
 - [ ] Instantiate one reusable storefront framework for fierărie, armurărie, coliba vrăjitoarei, and biserică/rest.
 - [ ] A missing catalog produces a deliberate unavailable state, not an absent or broken destination.
 
 ### Issue sequence 5.3: Player-facing campaign sequence
 
-- [ ] Implement [#137](https://github.com/lihor-hub/romanian-folk-fight/issues/137) using final actions, runtime assets, and snapshot flags.
+- [ ] Execute tutorial leaves #205 → #206 using final actions, runtime assets, and snapshot flags; then use parent [#137](https://github.com/lihor-hub/romanian-folk-fight/issues/137) only as its completion gate.
 - [ ] Implement [#138](https://github.com/lihor-hub/romanian-folk-fight/issues/138) from final combat/opponent view data.
-- [ ] Implement [#140](https://github.com/lihor-hub/romanian-folk-fight/issues/140) last, persisting matchup and tournament state.
-- [ ] Extend the snapshot with a new version/migration when #137 adds tutorial-completion state.
-- [ ] Extend it again when #140 adds current matchup, tournament bracket/round, persistent HP, and current stamina between tournament rounds. Missing legacy stamina defaults to the normal maximum when migrating into a tournament-capable schema.
+- [ ] Execute arena leaves #207 → #208 → #209 last; then use parent [#140](https://github.com/lihor-hub/romanian-folk-fight/issues/140) only as its completion gate.
+- [ ] Extend the snapshot with a new version/migration when leaf #205 adds tutorial-completion state.
+- [ ] Extend it again when leaves #207–#209 add current matchup, tournament bracket/round, persistent HP, and current stamina between tournament rounds. Missing legacy stamina defaults to the normal maximum when migrating into a tournament-capable schema.
 
 ### Wave 5 exit evidence
 
@@ -349,7 +384,10 @@ Every Wave 5 issue is a separate worktree and PR. Merge and rebase in the listed
 
 ## 12. Wave 6 — Balance and release proof
 
-- [ ] Implement [#149](https://github.com/lihor-hub/romanian-folk-fight/issues/149).
+- [ ] Execute simulator leaf #210.
+- [ ] After #210, a human executes playtest leaf #212 and files every release-blocking finding as its own issue.
+- [ ] After #212 and every release-blocking finding close, execute final-proof leaf #215.
+- [ ] Human gate: close parent [#149](https://github.com/lihor-hub/romanian-folk-fight/issues/149) only after #210, #212, #215, and its parent acceptance criteria pass.
 - [ ] Simulate representative strength, agility, vitality, luck, charisma, magic, ranged, and armour builds across fixed seeds.
 - [ ] Report win rate, turns, action usage, resource starvation, economy curve, item timing, healing, and tournament completion.
 - [ ] Complete at least three structured human campaign runs from fresh browser profiles.
@@ -362,26 +400,27 @@ The program may use multiple agents only when their files and contracts are inde
 
 Safe examples:
 
-- #142 flow and #152 bootstrap before either creates a dependency on the other's output.
-- #141 asset tooling and #144 browser smoke after #152 merges, because their `xtask` modules and workflow files are explicitly disjoint.
-- Separate roster-asset identities under #148 only when each agent owns a different source/runtime directory and a coordinator owns the shared manifest merge.
+- Leaves #154 bootstrap and #155 flow because their ownership is disjoint and neither is blocked.
+- Leaves #167 asset tooling and #168 browser smoke after #163 merges, because their `xtask` modules and workflow files are explicitly disjoint.
+- Identity leaves #171, #172, #176, and #179 after #156, because each owns a different source/runtime directory and adds metadata only to its own per-directory sidecar. Leaf #195 owns shared registration and integration after all four merge.
 
 Unsafe examples:
 
 - #116 and #117 editing the cutout spawn/hierarchy simultaneously.
-- #134 and #135 defining reach at the same time.
-- #130, #131, #132, or #135 running concurrently before a reviewed action-registration seam removes their shared exhaustive owners.
-- #129, #136, and #140 independently adding state transitions before #142 merges.
+- Geometry leaves #159–#160 and weapon leaves #184 and #186 defining reach at the same time.
+- #130, #169–#170, #181–#183, or #184 and #186 running concurrently before a reviewed action-registration seam removes their shared exhaustive owners.
+- #129, leaves #202–#204, and leaves #207–#209 independently adding state transitions before parent #142 closes.
 - Multiple asset agents changing the same source sheet or runtime identity directory.
 
 When two ready issues touch one owner file, run them sequentially or extract the shared owner in the earlier issue and rebase the later issue after merge.
 
 ## 14. Program completion checklist
 
-- [ ] All tracker issues in #151 are closed by merged PRs with proof bundles.
+- [ ] Every implementation leaf under #151 is closed by a merged PR with a proof bundle; human-only leaves are closed with their required evidence.
+- [ ] Every coordinator parent is closed only after all native children and the parent's acceptance gate pass.
 - [ ] No open release-blocking visual, flow, asset, accessibility, save, or balance issue remains.
 - [ ] The gold compact journey and full town journey pass from clean browser profiles.
-- [ ] All runtime assets are manifest-backed, credited, and reviewed at game scale.
+- [ ] All runtime assets are backed by per-directory sidecars, credited, included in the derived aggregate, and reviewed at game scale.
 - [ ] All navigation uses flow intents; all run persistence uses versioned snapshots.
 - [ ] All combat actions and timed effects use their shared contracts.
 - [ ] `cargo fmt`, native clippy/tests, WASM clippy/build, asset validation, browser matrix, and screenshot diffs pass from a clean checkout.
