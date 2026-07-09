@@ -1,0 +1,175 @@
+//! `cargo xtask assets check` -- validates every per-directory manifest
+//! sidecar under `assets/`, derives one in-memory aggregate, and reports
+//! coverage (#167, a child of #141).
+//!
+//! Unlike `test_cmd`/`check_cmd`, this command's work is pure in-process
+//! Rust (parsing TOML, walking the filesystem) rather than a spawned
+//! `cargo`/external subprocess, so it does not go through
+//! [`crate::process::run_step`] (which spawns a [`std::process::Command`]).
+//! It still follows the same *conventions* that module documents: it
+//! measures elapsed time, retains a full diagnostics log under the same
+//! [`crate::process::artifacts_dir`] path convention, and reports success via
+//! [`crate::process::StepReport`] / failure via
+//! [`crate::process::StepError::Failed`] so `cargo xtask --help` and the
+//! dispatcher treat this group exactly like any other.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use crate::assets::CheckResult;
+use crate::process::{StepError, StepReport, artifacts_dir, print_summary};
+
+pub const ABOUT: &str = "Per-directory asset manifest sidecar inventory and validation.";
+
+pub const SUBCOMMANDS: &[(&str, &str)] = &[(
+    "check",
+    "Load every assets/**/manifest.toml sidecar, derive the aggregate, and report coverage.",
+)];
+
+pub fn run(sub: &str) -> Result<(), StepError> {
+    match sub {
+        "check" => check(),
+        other => unreachable!("dispatch validates subcommands before calling run; got {other}"),
+    }
+}
+
+fn check() -> Result<(), StepError> {
+    let label = "assets check";
+    println!("\n==> {label}");
+
+    let assets_root = workspace_root().join("assets");
+    let credits_path = assets_root.join("CREDITS.md");
+
+    let start = Instant::now();
+    let result = crate::assets::run_check(&assets_root, &credits_path);
+    let elapsed = start.elapsed();
+
+    let report_text = render_report(&result);
+    let artifact = artifact_path(label);
+    if let Some(parent) = artifact.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(&artifact, &report_text);
+
+    print!("{report_text}");
+
+    if result.is_clean() {
+        println!(
+            "    ok ({:.2}s) -- log: {}",
+            elapsed.as_secs_f64(),
+            artifact.display()
+        );
+        print_summary(&[StepReport {
+            label: label.to_string(),
+            elapsed,
+            artifact,
+        }]);
+        Ok(())
+    } else {
+        println!(
+            "    FAILED ({:.2}s) -- log retained at: {}",
+            elapsed.as_secs_f64(),
+            artifact.display()
+        );
+        Err(StepError::Failed {
+            label: label.to_string(),
+            elapsed,
+            exit_code: Some(1),
+            artifact,
+        })
+    }
+}
+
+fn render_report(result: &CheckResult) -> String {
+    let mut out = String::new();
+
+    let diagnostics = result.all_diagnostics();
+    if diagnostics.is_empty() {
+        out.push_str("All sidecar records validated cleanly.\n\n");
+    } else {
+        out.push_str(&format!("{} diagnostic(s):\n", diagnostics.len()));
+        for diagnostic in &diagnostics {
+            out.push_str(&format!("  - {diagnostic}\n"));
+        }
+        out.push('\n');
+    }
+
+    let coverage = &result.coverage;
+    out.push_str("Coverage:\n");
+    out.push_str(&format!(
+        "  files under assets/:      {}\n",
+        coverage.total_files
+    ));
+    out.push_str(&format!(
+        "  covered by records:       {}\n",
+        coverage.total_records
+    ));
+    out.push_str(&format!(
+        "  covered by ignore entries: {}\n",
+        coverage.total_ignored
+    ));
+    out.push_str(&format!(
+        "  total covered:             {}\n",
+        coverage.total_records + coverage.total_ignored
+    ));
+
+    out.push_str("\nBy status:\n");
+    for (status, count) in &coverage.by_status {
+        out.push_str(&format!("  {status:<10} {count}\n"));
+    }
+
+    out.push_str("\nBy category:\n");
+    for (category, count) in &coverage.by_category {
+        out.push_str(&format!("  {category:<24} {count}\n"));
+    }
+
+    out.push_str("\nBy provenance:\n");
+    for (provenance, count) in &coverage.by_provenance {
+        out.push_str(&format!("  {provenance:<28} {count}\n"));
+    }
+
+    out.push_str("\nBy sidecar:\n");
+    for (sidecar, count) in &coverage.by_sidecar {
+        out.push_str(&format!("  {:<55} {count}\n", sidecar.display()));
+    }
+
+    if !result.aggregate.ignores.is_empty() {
+        out.push_str("\nIgnored (documented reason):\n");
+        for ignore in &result.aggregate.ignores {
+            out.push_str(&format!(
+                "  {:<40} {}\n",
+                ignore.full_path.display(),
+                ignore.reason
+            ));
+        }
+    }
+
+    out
+}
+
+fn artifact_path(label: &str) -> PathBuf {
+    artifacts_dir().join(format!("{}.log", slugify(label)))
+}
+
+fn slugify(label: &str) -> String {
+    let mut slug = String::with_capacity(label.len());
+    let mut last_was_dash = false;
+    for ch in label.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if !last_was_dash {
+            slug.push('-');
+            last_was_dash = true;
+        }
+    }
+    slug.trim_matches('-').to_string()
+}
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask/Cargo.toml always has a parent workspace root")
+        .to_path_buf()
+}

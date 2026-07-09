@@ -1,0 +1,204 @@
+# Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs.
+#
+# `attachment`/`pivot`/`display` are copied from the live
+# `ITEM_VISUALS` table in `src/items/visuals.rs` as of this commit (that
+# table already stores exactly this data), so unlike the fighter body-part
+# sidecars, these are not at risk of drifting out of sync by construction --
+# a future value change there still requires a human to update this sidecar
+# alongside it, though; `cargo xtask assets check` does not cross-reference
+# the two. `crop` is "unknown" for the same reason documented in
+# `fighters/human/runtime/manifest.toml`. Two-part attachments (feet) list
+# both attachment points comma-separated.
+version = 1
+
+[[record]]
+id = "fighters.gear.runtime.bata-ciobaneasca"
+path = "bata_ciobaneasca.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [56, 489]
+sampler = "linear"
+attachment = "hand_front"
+pivot = [-2.0, 42.0]
+display = [18.0, 136.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.topor-de-padurar"
+path = "topor_de_padurar.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [96, 183]
+sampler = "linear"
+attachment = "hand_front"
+pivot = [8.0, 20.0]
+display = [42.0, 82.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.palos"
+path = "palos.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [66, 222]
+sampler = "linear"
+attachment = "hand_front"
+pivot = [8.0, 20.0]
+display = [28.0, 92.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.scut-de-lemn"
+path = "scut_de_lemn.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [161, 161]
+sampler = "linear"
+attachment = "forearm_back"
+pivot = [-4.0, 4.0]
+display = [54.0, 54.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.scut-ferecat"
+path = "scut_ferecat.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [157, 161]
+sampler = "linear"
+attachment = "forearm_back"
+pivot = [-4.0, 4.0]
+display = [54.0, 54.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.ie-descantata"
+path = "ie_descantata.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [174, 150]
+sampler = "linear"
+attachment = "torso"
+pivot = [0.0, 2.0]
+display = [56.0, 76.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.cojoc-gros"
+path = "cojoc_gros.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [144, 161]
+sampler = "linear"
+attachment = "torso"
+pivot = [0.0, 2.0]
+display = [54.0, 72.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.camasa-de-zale"
+path = "camasa_de_zale.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [178, 151]
+sampler = "linear"
+attachment = "torso"
+pivot = [0.0, 2.0]
+display = [56.0, 74.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.caciula-de-oaie"
+path = "caciula_de_oaie.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [92, 90]
+sampler = "linear"
+attachment = "head"
+pivot = [0.0, 18.0]
+display = [40.0, 30.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.coif-de-ostean"
+path = "coif_de_ostean.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [92, 105]
+sampler = "linear"
+attachment = "head"
+pivot = [0.0, 14.0]
+display = [38.0, 34.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.opinci-iuti"
+path = "opinci_iuti.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [121, 73]
+sampler = "linear"
+attachment = "foot_back,foot_front"
+pivot = [0.0, -2.0]
+display = [30.0, 18.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.cizme-de-voinic"
+path = "cizme_de_voinic.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [102, 99]
+sampler = "linear"
+attachment = "foot_back,foot_front"
+pivot = [0.0, -1.0]
+display = [28.0, 24.0]
+crop = "unknown"

@@ -1,0 +1,142 @@
+# Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs.
+version = 1
+
+[[record]]
+id = "audio.music-menu"
+path = "music_menu.ogg"
+kind = "audio"
+category = "music"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-audio.py"
+license = "CC0 1.0"
+
+[[record]]
+id = "audio.music-arena"
+path = "music_arena.ogg"
+kind = "audio"
+category = "music"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-audio.py"
+license = "CC0 1.0"
+
+[[record]]
+id = "audio.music-boss"
+path = "music_boss.ogg"
+kind = "audio"
+category = "music"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-audio.py"
+license = "CC0 1.0"
+
+[[record]]
+id = "audio.sfx-hit"
+path = "sfx_hit.ogg"
+kind = "audio"
+category = "sfx"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-audio.py"
+license = "CC0 1.0"
+
+[[record]]
+id = "audio.sfx-crit"
+path = "sfx_crit.ogg"
+kind = "audio"
+category = "sfx"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-audio.py"
+license = "CC0 1.0"
+
+[[record]]
+id = "audio.sfx-block"
+path = "sfx_block.ogg"
+kind = "audio"
+category = "sfx"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-audio.py"
+license = "CC0 1.0"
+
+[[record]]
+id = "audio.sfx-whoosh"
+path = "sfx_whoosh.ogg"
+kind = "audio"
+category = "sfx"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-audio.py"
+license = "CC0 1.0"
+
+[[record]]
+id = "audio.sfx-rest"
+path = "sfx_rest.ogg"
+kind = "audio"
+category = "sfx"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-audio.py"
+license = "CC0 1.0"
+
+[[record]]
+id = "audio.sfx-fail"
+path = "sfx_fail.ogg"
+kind = "audio"
+category = "sfx"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-audio.py"
+license = "CC0 1.0"
+
+[[record]]
+id = "audio.sfx-defeated"
+path = "sfx_defeated.ogg"
+kind = "audio"
+category = "sfx"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-audio.py"
+license = "CC0 1.0"
+
+[[record]]
+id = "audio.sfx-click"
+path = "sfx_click.ogg"
+kind = "audio"
+category = "sfx"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-audio.py"
+license = "CC0 1.0"
+
+[[record]]
+id = "audio.sfx-coin"
+path = "sfx_coin.ogg"
+kind = "audio"
+category = "sfx"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-audio.py"
+license = "CC0 1.0"
+
+[[record]]
+id = "audio.sting-victory"
+path = "sting_victory.ogg"
+kind = "audio"
+category = "sting"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-audio.py"
+license = "CC0 1.0"
+
+[[record]]
+id = "audio.sting-defeat"
+path = "sting_defeat.ogg"
+kind = "audio"
+category = "sting"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-audio.py"
+license = "CC0 1.0"

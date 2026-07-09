@@ -1,0 +1,235 @@
+# Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs.
+#
+# `pivot`/`display` are derived by replaying the deterministic
+# `strigoi_part` transform in `src/cutout.rs` against the human base
+# rest-pose as of this commit; they are a point-in-time snapshot, not
+# re-derived from the live source by `cargo xtask assets check` (see
+# xtask/README.md for this known limitation). Strigoi has no `hair.png` --
+# `strigoi_asset_path` returns `None` for that part, so there is no record
+# for it here. `crop` is "unknown" for the same reason documented in
+# `fighters/human/runtime/manifest.toml`.
+version = 1
+
+[[record]]
+id = "fighters.strigoi.runtime.head"
+path = "head.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.strigoi.source.strigoi-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [128, 157]
+sampler = "linear"
+attachment = "head"
+pivot = [0.0, 72.0]
+display = [44.84, 51.24]
+crop = "unknown"
+
+[[record]]
+id = "fighters.strigoi.runtime.torso"
+path = "torso.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.strigoi.source.strigoi-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [116, 285]
+sampler = "linear"
+attachment = "torso"
+pivot = [0.0, 12.0]
+display = [31.68, 69.56]
+crop = "unknown"
+
+[[record]]
+id = "fighters.strigoi.runtime.upper-arm-back"
+path = "upper_arm_back.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.strigoi.source.strigoi-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [74, 168]
+sampler = "linear"
+attachment = "upper_arm_back"
+pivot = [-16.4, 34.0]
+display = [12.9, 51.92]
+crop = "unknown"
+
+[[record]]
+id = "fighters.strigoi.runtime.upper-arm-front"
+path = "upper_arm_front.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.strigoi.source.strigoi-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [56, 172]
+sampler = "linear"
+attachment = "upper_arm_front"
+pivot = [17.22, 33.0]
+display = [12.9, 53.1]
+crop = "unknown"
+
+[[record]]
+id = "fighters.strigoi.runtime.forearm-back"
+path = "forearm_back.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.strigoi.source.strigoi-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [47, 173]
+sampler = "linear"
+attachment = "forearm_back"
+pivot = [-22.4, 2.0]
+display = [10.92, 46.36]
+crop = "unknown"
+
+[[record]]
+id = "fighters.strigoi.runtime.forearm-front"
+path = "forearm_front.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.strigoi.source.strigoi-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [52, 176]
+sampler = "linear"
+attachment = "forearm_front"
+pivot = [23.2, 1.0]
+display = [10.92, 47.58]
+crop = "unknown"
+
+[[record]]
+id = "fighters.strigoi.runtime.hand-back"
+path = "hand_back.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.strigoi.source.strigoi-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [87, 77]
+sampler = "linear"
+attachment = "hand_back"
+pivot = [-25.6, -24.0]
+display = [11.7, 14.04]
+crop = "unknown"
+
+[[record]]
+id = "fighters.strigoi.runtime.hand-front"
+path = "hand_front.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.strigoi.source.strigoi-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [83, 75]
+sampler = "linear"
+attachment = "hand_front"
+pivot = [26.4, -26.0]
+display = [11.7, 14.04]
+crop = "unknown"
+
+[[record]]
+id = "fighters.strigoi.runtime.thigh-back"
+path = "thigh_back.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.strigoi.source.strigoi-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [63, 158]
+sampler = "linear"
+attachment = "thigh_back"
+pivot = [-11.96, -44.0]
+display = [15.3, 45.36]
+crop = "unknown"
+
+[[record]]
+id = "fighters.strigoi.runtime.thigh-front"
+path = "thigh_front.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.strigoi.source.strigoi-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [98, 159]
+sampler = "linear"
+attachment = "thigh_front"
+pivot = [11.96, -44.0]
+display = [15.3, 45.36]
+crop = "unknown"
+
+[[record]]
+id = "fighters.strigoi.runtime.shin-back"
+path = "shin_back.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.strigoi.source.strigoi-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [38, 162]
+sampler = "linear"
+attachment = "shin_back"
+pivot = [-13.5, -82.0]
+display = [12.04, 44.08]
+crop = "unknown"
+
+[[record]]
+id = "fighters.strigoi.runtime.shin-front"
+path = "shin_front.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.strigoi.source.strigoi-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [49, 160]
+sampler = "linear"
+attachment = "shin_front"
+pivot = [13.5, -82.0]
+display = [12.04, 44.08]
+crop = "unknown"
+
+[[record]]
+id = "fighters.strigoi.runtime.foot-back"
+path = "foot_back.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.strigoi.source.strigoi-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [41, 86]
+sampler = "linear"
+attachment = "foot_back"
+pivot = [-6.56, -110.0]
+display = [21.28, 10.8]
+crop = "unknown"
+
+[[record]]
+id = "fighters.strigoi.runtime.foot-front"
+path = "foot_front.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.strigoi.source.strigoi-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [66, 76]
+sampler = "linear"
+attachment = "foot_front"
+pivot = [18.86, -110.0]
+display = [21.28, 10.8]
+crop = "unknown"

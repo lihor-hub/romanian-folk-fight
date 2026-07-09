@@ -1,0 +1,31 @@
+name: Asset manifest check
+
+# Separate from ci.yml on purpose (see the #141 tracker's "separate workflow
+# files" rule): this validates the assets/ manifest sidecars owned by #167,
+# independent of the native/wasm build-and-test gates in ci.yml.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  merge_group:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  assets_check:
+    name: cargo xtask assets check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run cargo xtask assets check
+        # No worktree bootstrap in CI, so no `cargo xtask` alias exists yet
+        # (see xtask/README.md's "known limitation"); invoke the crate
+        # directly instead.
+        run: cargo run --package xtask -- assets check

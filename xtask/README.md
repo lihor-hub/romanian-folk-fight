@@ -27,10 +27,11 @@ run bootstrap first (already required for a fresh worktree, see the repo's
 ## Commands
 
 ```
-cargo xtask --help              # lists every root-owned command
+cargo xtask --help              # lists every command, including this file's and #167's
 cargo xtask test logic          # fast pure-logic unit tests
 cargo xtask test journey        # one headless multi-step GameState journey
 cargo xtask check build-matrix  # native + release + wasm cargo check, no `dev` leakage
+cargo xtask assets check        # validate every assets/**/manifest.toml sidecar (#167)
 cargo xtask pre-push            # fmt check, clippy, cargo test, build-matrix -- stops at first failure
 ```
 
@@ -72,12 +73,84 @@ never leak into a release or wasm artifact. Omitting the flag *is* the
 guarantee -- the root `Cargo.toml` has no default feature list that could
 pull `dev` in implicitly, so the transcript never mentions it.
 
+### `assets check` (#167, a child of #141)
+
+Owned by `xtask/src/assets/`, independent of every module above (root
+dispatch/process helpers stay #152/#163-owned). Validates every
+`assets/**/manifest.toml` sidecar and derives one in-memory aggregate --
+there is no separate hand-maintained repo-wide manifest file, so later
+parallel asset work never contends on one shared file.
+
+**Sidecar schema (v1).** A sidecar is a small `manifest.toml` placed
+*inside* the directory it describes (e.g. `assets/audio/manifest.toml`
+covers only `assets/audio/*`). Every `record`/`ignore` `path` is a bare file
+name -- no `/` -- which structurally enforces the ownership boundary:
+a sidecar can never reach into a sibling directory, so adding a new asset
+directory, or new files to an existing one, never requires touching an
+unrelated sidecar. Full field reference and worked examples live in
+[`xtask/src/assets/schema.rs`](src/assets/schema.rs); in short, every record
+carries a globally unique `id`, `path`, `kind` (`image`/`audio`/`font`/
+`document`), `category`, `status` (`runtime`/`source`/`legacy`),
+`provenance`, and an explicit `license`, plus fields required only where
+they apply: `dimensions` (raster images), `sampler` (runtime images decoded
+through Bevy's `AssetServer` -- not `web-icon`/`web-image`, which are served
+straight to the browser), and `attachment`/`pivot`/`display`/`crop` (runtime
+fighter/gear body-part and overlay categories). A file that isn't itself an
+asset record (a directory `README.md`, `assets/CREDITS.md`) is listed under
+`[[ignore]]` with a human-readable `reason` -- the one hardcoded exemption
+is `manifest.toml` itself, sidecar infrastructure rather than an asset.
+
+**Aggregation order.** [`aggregate::build`](src/assets/aggregate.rs) walks
+`assets/` once for every `manifest.toml` and every other file, parses each
+sidecar independently (one bad sidecar produces an `Undecodable` diagnostic
+without blocking the rest), resolves every record/ignore `path` against its
+sidecar's own directory, then runs: per-record checks (missing file, case
+mismatch via [`discover::case_correct`](src/assets/discover.rs), license
+presence, kind/category/extension classification, required-field-by-kind/
+category/status), cross-sidecar checks (duplicate id, duplicate path), and
+finally coverage (every file under `assets/` must resolve to exactly one
+record or ignore entry). Every check runs to completion and every
+diagnostic is collected before reporting, so one run surfaces every
+problem instead of stopping at the first.
+
+**Ignore policy.** An ignored file always needs a `reason`; there is no
+silent skip list. `cargo xtask assets check` also flags a *stale* ignore
+entry (its file no longer exists) as its own diagnostic, so an ignore list
+can't quietly drift from the tree either.
+
+**Credits synchronization ([`credits.rs`](src/assets/credits.rs)).**
+Sidecars are authoritative; `assets/CREDITS.md` is the human-readable
+rollup and is *checked against* the sidecars, never regenerated from them
+and never treated as a second independent inventory. For every non-ignored
+record (one exemption: the bundled font license text, cited from
+`CREDITS.md` as a link target rather than its own row), the check confirms
+the record's path is mentioned somewhere in `CREDITS.md` and that the
+sidecar's exact `license` string appears on a line that also mentions the
+path. Sidecar license strings are authored to match `CREDITS.md`'s existing
+wording verbatim (e.g. `"CC0 1.0"`, not the SPDX id `CC0-1.0`), which keeps
+this a simple, auditable substring check instead of a fuzzy license-name
+normalizer.
+
+**Known limitations.** `crop` (the source-sheet crop rectangle for fighter/
+gear runtime parts) is recorded as the literal string `"unknown"`
+throughout -- it was never tracked anywhere in the repo (parts were
+hand-cropped from the source sheets in an image editor), so sidecars record
+that honestly rather than inventing coordinates. `attachment`/`pivot`/
+`display` on the fighter body-part sidecars are point-in-time snapshots of
+the rest-pose values authored in `src/cutout.rs`, not cross-referenced
+against that live source by this check (a genuine future drift risk; see
+each `fighters/*/runtime/manifest.toml` for detail). This module also does
+not implement image-integrity rules (alpha/chroma-key/pixel decoding) or a
+review gallery -- those remain later, independently owned #141 children.
+
 ### `pre-push`
 
 The full repository-native gate, in order, stopping at the first failure:
 `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
 `cargo test`, then `check build-matrix`. This mirrors what the git
-`pre-push` hook and CI expect a clean tree to pass.
+`pre-push` hook and CI expect a clean tree to pass. It does not run
+`assets check`, which has its own dedicated workflow
+(`.github/workflows/assets.yml`).
 
 ## Process/result conventions
 
@@ -112,10 +185,10 @@ the path on both success and failure.
 
 ## Extension pattern for later, independently owned modules
 
-`xtask` is root-owned (#152/#163). Later work adds its own command group as
-a new module -- #141 for `asset`, #144 for `browser-smoke` -- without
-editing any existing feature module (`test_cmd.rs`, `check_cmd.rs`,
-`pre_push.rs`):
+`xtask` is root-owned (#152/#163). Later, independently owned work adds its
+own command group as a new module without editing any existing feature
+module (`test_cmd.rs`, `check_cmd.rs`, `pre_push.rs`) -- #167 (a child of
+#141) added `assets_cmd.rs` this way; #144 (`browser-smoke`) is next:
 
 1. Add a new file under `xtask/src/commands/`, e.g. `assets_cmd.rs`.
 2. In it, expose the same shape every group exposes:
@@ -133,5 +206,6 @@ A standalone command with no subcommands (like `pre-push`) follows the same
 shape minus the subcommand list: `pub const ABOUT`, `pub fn run() ->
 Result<(), StepError>`, and one entry in `ROOT_COMMANDS` instead of `GROUPS`.
 
-This module deliberately contains no placeholder `asset`/`browser-smoke`
-modules or subcommands -- those are #141's and #144's to add.
+This module deliberately contains no placeholder `browser-smoke` module or
+subcommands -- that is #144's to add, following the same pattern `assets_cmd.rs`
+(#167) already demonstrates.

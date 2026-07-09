@@ -21,6 +21,7 @@
 //! the same shape minus the subcommand list: a `pub const ABOUT`, a `pub fn
 //! run() -> Result<(), StepError>`, and one entry in `ROOT_COMMANDS`.
 
+pub mod assets_cmd;
 pub mod check_cmd;
 pub mod pre_push;
 pub mod test_cmd;
@@ -54,6 +55,12 @@ const GROUPS: &[Group] = &[
         about: check_cmd::ABOUT,
         subcommands: check_cmd::SUBCOMMANDS,
         run: check_cmd::run,
+    },
+    Group {
+        name: "assets",
+        about: assets_cmd::ABOUT,
+        subcommands: assets_cmd::SUBCOMMANDS,
+        run: assets_cmd::run,
     },
 ];
 
@@ -154,14 +161,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn help_lists_only_root_owned_commands() {
+    fn help_lists_root_owned_and_asset_commands() {
         let text = help_text();
         assert!(text.contains("test logic"));
         assert!(text.contains("test journey"));
         assert!(text.contains("check build-matrix"));
         assert!(text.contains("pre-push"));
-        // Must never grow asset/browser-smoke placeholders (#141/#144 own those).
-        assert!(!text.to_lowercase().contains("asset"));
+        // #167 (a child of #141) owns the `assets` group added here.
+        assert!(text.contains("assets check"));
+        // browser-smoke (#144) is still independently owned and unregistered.
         assert!(!text.to_lowercase().contains("browser"));
     }
 

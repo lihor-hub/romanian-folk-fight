@@ -1,0 +1,21 @@
+# Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs.
+version = 1
+
+[[record]]
+id = "fonts.alegreya-variable"
+path = "Alegreya-Variable.ttf"
+kind = "font"
+category = "font"
+status = "runtime"
+provenance = "google-fonts"
+license = "SIL OFL 1.1"
+license_file = "fonts/OFL-Alegreya.txt"
+
+[[record]]
+id = "fonts.ofl-alegreya-license"
+path = "OFL-Alegreya.txt"
+kind = "document"
+category = "font-license"
+status = "runtime"
+provenance = "google-fonts"
+license = "SIL OFL 1.1"

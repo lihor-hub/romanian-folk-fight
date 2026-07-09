@@ -1,0 +1,48 @@
+# Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs.
+#
+# These are served straight to the browser via index.html (favicon/social
+# card), never decoded through Bevy's `AssetServer` -- hence no `sampler`
+# field even though `status = "runtime"`.
+version = 1
+
+[[record]]
+id = "web.favicon-svg"
+path = "favicon.svg"
+kind = "image"
+category = "web-icon"
+status = "runtime"
+provenance = "hand-authored"
+license = "same as the project"
+
+[[record]]
+id = "web.favicon-32"
+path = "favicon-32.png"
+kind = "image"
+category = "web-icon"
+status = "runtime"
+provenance = "hand-authored"
+generator = "rsvg-convert (rendered from web/favicon.svg)"
+license = "same as the project"
+dimensions = [32, 32]
+
+[[record]]
+id = "web.apple-touch-icon"
+path = "apple-touch-icon.png"
+kind = "image"
+category = "web-icon"
+status = "runtime"
+provenance = "hand-authored"
+generator = "rsvg-convert (rendered from web/favicon.svg)"
+license = "same as the project"
+dimensions = [180, 180]
+
+[[record]]
+id = "web.og-image"
+path = "og-image.png"
+kind = "image"
+category = "web-image"
+status = "runtime"
+provenance = "hand-authored"
+generator = "rsvg-convert (rendered from web/favicon.svg)"
+license = "same as the project"
+dimensions = [1200, 630]

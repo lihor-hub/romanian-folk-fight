@@ -1,0 +1,235 @@
+# Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs.
+#
+# `pivot`/`display` are derived by replaying the deterministic
+# `human_parts(1.26)` scale-up followed by the `zmeu_part` transform in
+# `src/cutout.rs` against the human base rest-pose as of this commit; they
+# are a point-in-time snapshot, not re-derived from the live source by
+# `cargo xtask assets check` (see xtask/README.md for this known
+# limitation). Zmeu has no `hair.png` -- `zmeu_asset_path` returns `None`
+# for that part, so there is no record for it here. `crop` is "unknown" for
+# the same reason documented in `fighters/human/runtime/manifest.toml`.
+version = 1
+
+[[record]]
+id = "fighters.zmeu.runtime.head"
+path = "head.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.zmeu.source.zmeu-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [98, 122]
+sampler = "linear"
+attachment = "head"
+pivot = [9.04, 93.6]
+display = [54.58, 62.45]
+crop = "unknown"
+
+[[record]]
+id = "fighters.zmeu.runtime.torso"
+path = "torso.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.zmeu.source.zmeu-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [185, 221]
+sampler = "linear"
+attachment = "torso"
+pivot = [0.0, 17.56]
+display = [74.29, 111.89]
+crop = "unknown"
+
+[[record]]
+id = "fighters.zmeu.runtime.upper-arm-back"
+path = "upper_arm_back.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.zmeu.source.zmeu-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [96, 152]
+sampler = "linear"
+attachment = "upper_arm_back"
+pivot = [-29.23, 40.76]
+display = [26.84, 62.09]
+crop = "unknown"
+
+[[record]]
+id = "fighters.zmeu.runtime.upper-arm-front"
+path = "upper_arm_front.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.zmeu.source.zmeu-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [74, 149]
+sampler = "linear"
+attachment = "upper_arm_front"
+pivot = [30.69, 39.5]
+display = [26.84, 63.5]
+crop = "unknown"
+
+[[record]]
+id = "fighters.zmeu.runtime.forearm-back"
+path = "forearm_back.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.zmeu.source.zmeu-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [80, 153]
+sampler = "linear"
+attachment = "forearm_back"
+pivot = [-40.92, 1.48]
+display = [21.95, 54.58]
+crop = "unknown"
+
+[[record]]
+id = "fighters.zmeu.runtime.forearm-front"
+path = "forearm_front.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.zmeu.source.zmeu-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [80, 158]
+sampler = "linear"
+attachment = "forearm_front"
+pivot = [42.39, 0.22]
+display = [21.95, 56.02]
+crop = "unknown"
+
+[[record]]
+id = "fighters.zmeu.runtime.hand-back"
+path = "hand_back.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.zmeu.source.zmeu-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [57, 52]
+sampler = "linear"
+attachment = "hand_back"
+pivot = [-47.58, -32.76]
+display = [20.97, 19.66]
+crop = "unknown"
+
+[[record]]
+id = "fighters.zmeu.runtime.hand-front"
+path = "hand_front.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.zmeu.source.zmeu-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [57, 52]
+sampler = "linear"
+attachment = "hand_front"
+pivot = [49.06, -35.28]
+display = [20.97, 19.66]
+crop = "unknown"
+
+[[record]]
+id = "fighters.zmeu.runtime.thigh-back"
+path = "thigh_back.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.zmeu.source.zmeu-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [89, 150]
+sampler = "linear"
+attachment = "thigh_back"
+pivot = [-17.69, -56.92]
+display = [28.7, 59.27]
+crop = "unknown"
+
+[[record]]
+id = "fighters.zmeu.runtime.thigh-front"
+path = "thigh_front.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.zmeu.source.zmeu-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [73, 145]
+sampler = "linear"
+attachment = "thigh_front"
+pivot = [17.69, -56.92]
+display = [28.7, 59.27]
+crop = "unknown"
+
+[[record]]
+id = "fighters.zmeu.runtime.shin-back"
+path = "shin_back.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.zmeu.source.zmeu-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [84, 138]
+sampler = "linear"
+attachment = "shin_back"
+pivot = [-20.41, -105.76]
+display = [22.58, 52.67]
+crop = "unknown"
+
+[[record]]
+id = "fighters.zmeu.runtime.shin-front"
+path = "shin_front.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.zmeu.source.zmeu-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [91, 138]
+sampler = "linear"
+attachment = "shin_front"
+pivot = [20.41, -105.76]
+display = [22.58, 52.67]
+crop = "unknown"
+
+[[record]]
+id = "fighters.zmeu.runtime.foot-back"
+path = "foot_back.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.zmeu.source.zmeu-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [86, 64]
+sampler = "linear"
+attachment = "foot_back"
+pivot = [-11.29, -140.52]
+display = [48.69, 18.45]
+crop = "unknown"
+
+[[record]]
+id = "fighters.zmeu.runtime.foot-front"
+path = "foot_front.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "cropped-from-source-sheet"
+source_sheet = "fighters.zmeu.source.zmeu-cutout-parts-v1"
+license = "Same as project assets unless superseded"
+dimensions = [86, 64]
+sampler = "linear"
+attachment = "foot_front"
+pivot = [32.46, -140.52]
+display = [48.69, 18.45]
+crop = "unknown"
