@@ -848,7 +848,8 @@ mod tests {
             crate::menu::MenuPlugin,
             CreationPlugin,
         ));
-        app.update();
+        app.update(); // headless `Loading` fall-through queues MainMenu (#114)
+        app.update(); // transition applies; `OnEnter(MainMenu)` spawns the menu
         app
     }
 

@@ -19,7 +19,15 @@ pub const LOGICAL_HEIGHT: f32 = 600.0;
 /// to one of these states.
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum GameState {
+    /// Waits for [`UiFont`] and [`crate::theme::PanelTexture`] to finish
+    /// loading before anything spawns UI. Fixes #114: on a cold wasm load
+    /// the menu used to be built in [`GameState::MainMenu`] before the async
+    /// asset fetches landed, so its first frame drew Bevy's fallback
+    /// monospace font and untextured white panels — and neither one ever
+    /// re-laid-out once the real assets arrived. See
+    /// [`transition_out_of_loading`].
     #[default]
+    Loading,
     MainMenu,
     CharacterCreation,
     Shop,
@@ -77,6 +85,34 @@ fn load_ui_font(
     }
 }
 
+/// Gates [`GameState::Loading`] on the two handles every first-painted
+/// screen depends on: [`UiFont`] and [`crate::theme::PanelTexture`]. Moves to
+/// [`GameState::MainMenu`] only once `AssetServer::is_loaded_with_dependencies`
+/// is true for both, so no screen ever spawns text or a panel border with an
+/// unloaded handle (#114).
+///
+/// Headless test apps build without `AssetPlugin` (see [`load_ui_font`] and
+/// `load_panel_texture`'s own `Option<Res<AssetServer>>` tolerance), so
+/// nothing ever loads and this would hang forever waiting on it. When the
+/// `AssetServer` resource is absent, fall straight through to `MainMenu`
+/// instead.
+fn transition_out_of_loading(
+    ui_font: Res<UiFont>,
+    panel_texture: Res<crate::theme::PanelTexture>,
+    asset_server: Option<Res<AssetServer>>,
+    mut next_state: ResMut<NextState<GameState>>,
+) {
+    let Some(asset_server) = asset_server else {
+        next_state.set(GameState::MainMenu);
+        return;
+    };
+    let font_ready = asset_server.is_loaded_with_dependencies(ui_font.font.id());
+    let panel_ready = asset_server.is_loaded_with_dependencies(panel_texture.image.id());
+    if font_ready && panel_ready {
+        next_state.set(GameState::MainMenu);
+    }
+}
+
 /// Live window size plus the derived mobile/desktop layout choice (#31).
 /// Every screen's spawn/update systems read this instead of querying the
 /// window directly, so the breakpoint logic — [`is_mobile_width`] — stays in
@@ -120,6 +156,10 @@ impl Plugin for CorePlugin {
             .add_message::<WindowResized>()
             .add_systems(PreStartup, load_ui_font)
             .add_systems(Startup, (spawn_camera, init_viewport_size))
+            .add_systems(
+                Update,
+                transition_out_of_loading.run_if(in_state(GameState::Loading)),
+            )
             .add_systems(Update, (track_viewport_size, letterbox_camera).chain())
             // Every screen consumes the theme module's palette, spacing, and
             // panel texture, so it rides along with the other core resources
@@ -267,11 +307,99 @@ mod tests {
     }
 
     #[test]
-    fn initial_state_is_main_menu() {
+    fn initial_state_is_loading() {
         let mut app = test_app();
         app.update();
         let state = app.world().resource::<State<GameState>>();
+        assert_eq!(
+            *state.get(),
+            GameState::Loading,
+            "the game must gate on the loading screen before the menu builds any UI (#114)"
+        );
+    }
+
+    /// Guards the headless path (#114): apps built without `AssetPlugin` —
+    /// every unit test in this repo — must still fall through to `MainMenu`
+    /// instead of stalling in `Loading` forever, since nothing will ever
+    /// report as loaded without a real `AssetServer`.
+    #[test]
+    fn headless_app_without_asset_plugin_reaches_main_menu() {
+        let mut app = test_app();
+        app.update(); // Loading entered; no `AssetServer` -> falls through immediately.
+        app.update(); // the fall-through transition applies.
+        let state = app.world().resource::<State<GameState>>();
         assert_eq!(*state.get(), GameState::MainMenu);
+    }
+
+    /// With a real `AssetServer`, the gate must wait for *both* the font and
+    /// the panel texture before ever entering `MainMenu` — one handle stuck
+    /// (here, deliberately pointed at a path that will never resolve) must
+    /// hold the whole gate, even while the other handle finishes loading.
+    /// Once both handles are backed by real, loadable assets, the gate opens.
+    #[test]
+    fn loading_transitions_to_main_menu_only_once_both_handles_are_loaded() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::asset::AssetPlugin::default(),
+            bevy::text::TextPlugin,
+            bevy::image::ImagePlugin::default(),
+            StatesPlugin,
+            CorePlugin,
+        ));
+        // `ImagePlugin` only *reserves* the PNG loader's file extensions; the
+        // loader itself is normally registered by `RenderPlugin`'s `finish()`
+        // (which needs a render device we don't have here). Register a
+        // headless-safe one directly so `panel_texture.image` can actually
+        // finish loading in this test instead of stalling forever.
+        app.register_asset_loader(bevy::image::ImageLoader::new(
+            bevy::image::CompressedImageFormats::NONE,
+        ));
+        // PreStartup loads the real bundled font + panel texture.
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::Loading,
+            "must not race ahead of the asset fetches on the very first frame"
+        );
+
+        // Break just the font handle: a path that can never resolve keeps
+        // `is_loaded_with_dependencies` false forever, so even once the
+        // (still-genuine) panel texture finishes loading, the gate must
+        // stay shut.
+        {
+            let asset_server = app.world().resource::<AssetServer>().clone();
+            let mut ui_font = app.world_mut().resource_mut::<UiFont>();
+            ui_font.font = asset_server.load("fonts/does-not-exist.ttf");
+        }
+        for _ in 0..30 {
+            app.update();
+        }
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::Loading,
+            "one unresolved handle must block the transition even though the other loaded"
+        );
+
+        // Repair the font handle with the real asset; now both are genuine
+        // loadable assets, so the gate must eventually open.
+        {
+            let asset_server = app.world().resource::<AssetServer>().clone();
+            let mut ui_font = app.world_mut().resource_mut::<UiFont>();
+            ui_font.font = asset_server.load(UI_FONT_PATH);
+        }
+        let mut reached_main_menu = false;
+        for _ in 0..500 {
+            app.update();
+            if *app.world().resource::<State<GameState>>().get() == GameState::MainMenu {
+                reached_main_menu = true;
+                break;
+            }
+        }
+        assert!(
+            reached_main_menu,
+            "loading must reach MainMenu once both handles report loaded"
+        );
     }
 
     #[test]
