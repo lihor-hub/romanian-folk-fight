@@ -8,9 +8,18 @@
 use std::process::Command;
 
 use super::check_cmd;
-use crate::process::{StepError, print_summary, run_step};
+use crate::process::{
+    StepError, effective_budget_ms, print_summary, run_step, total_elapsed, warn_if_over_budget,
+};
 
 pub const ABOUT: &str = "Full repository gate: fmt check, clippy -D warnings, cargo test, build-matrix. Stops at the first failure.";
+
+/// Target warm-run budget (milliseconds) for the whole gate: the
+/// player-experience rework plan's feedback-loop contract names this budget
+/// explicitly ("Full pre-push gate": 10 minutes). Overridable via
+/// `XTASK_BUDGET_MS`; see `docs/feedback-budgets.md` for the measured
+/// cold/warm timings.
+const PRE_PUSH_BUDGET_MS: u64 = 10 * 60 * 1000;
 
 pub fn run() -> Result<(), StepError> {
     let mut reports = Vec::with_capacity(6);
@@ -20,6 +29,11 @@ pub fn run() -> Result<(), StepError> {
     reports.extend(check_cmd::build_matrix()?);
     println!("\ncargo xtask pre-push: all gates passed (fmt, clippy, cargo test, build-matrix).");
     print_summary(&reports);
+    warn_if_over_budget(
+        "pre-push",
+        total_elapsed(&reports),
+        effective_budget_ms(PRE_PUSH_BUDGET_MS),
+    );
     Ok(())
 }
 

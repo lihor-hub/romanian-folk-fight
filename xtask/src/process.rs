@@ -174,9 +174,7 @@ pub fn run_step(label: &str, mut command: Command) -> Result<StepReport, StepErr
 /// `check build-matrix` and `pre-push` once every step has succeeded.
 pub fn print_summary(reports: &[StepReport]) {
     println!("\nSummary:");
-    let mut total = Duration::ZERO;
     for report in reports {
-        total += report.elapsed;
         println!(
             "  {:<40} {:>7.2}s  log: {}",
             report.label,
@@ -187,8 +185,71 @@ pub fn print_summary(reports: &[StepReport]) {
     println!(
         "  {:<40} {:>7.2}s  (total)",
         "all steps",
-        total.as_secs_f64()
+        total_elapsed(reports).as_secs_f64()
     );
+}
+
+/// Sums the elapsed time of every reported step. Used alongside
+/// [`warn_if_over_budget`] so a multi-step command (`check build-matrix`,
+/// `pre-push`) can compare its *overall* wall-clock time against a single
+/// target budget, rather than budgeting each inner `cargo` invocation
+/// separately.
+pub fn total_elapsed(reports: &[StepReport]) -> Duration {
+    reports.iter().map(|r| r.elapsed).sum()
+}
+
+/// Resolves the target budget (in milliseconds) a root-owned command should
+/// warn against, letting `default_ms` be overridden by the `XTASK_BUDGET_MS`
+/// environment variable. This exists purely so a budget-regression warning
+/// can be demonstrated/tested deterministically (e.g. `XTASK_BUDGET_MS=1`
+/// forces every command to exceed budget) without hard-coding an artificially
+/// tiny budget into the real target. An unset or unparseable override falls
+/// back to `default_ms` unchanged.
+///
+/// See `docs/feedback-budgets.md` for the documented target budgets, the
+/// measured cold/warm timings they are based on, and the methodology.
+pub fn effective_budget_ms(default_ms: u64) -> u64 {
+    resolve_budget_ms(default_ms, std::env::var("XTASK_BUDGET_MS").ok())
+}
+
+/// Pure resolution logic behind [`effective_budget_ms`], split out so it can
+/// be unit-tested without mutating the process-wide environment (tests run
+/// concurrently in the same process, so racing `std::env::set_var` calls
+/// would be flaky).
+fn resolve_budget_ms(default_ms: u64, override_value: Option<String>) -> u64 {
+    override_value
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(default_ms)
+}
+
+/// Compares `elapsed` against `budget_ms` and, when exceeded, prints a
+/// `WARNING` line naming the command and both timings.
+///
+/// This is purely observational: it is called *after* a step (or a
+/// multi-step command's summed total) has already succeeded, so a slow run
+/// still reports success -- a budget overrun must never turn a passing
+/// command into a failing one. See `docs/feedback-budgets.md`.
+pub fn warn_if_over_budget(label: &str, elapsed: Duration, budget_ms: u64) {
+    if let Some(message) = over_budget_message(label, elapsed, budget_ms) {
+        println!("    {message}");
+    }
+}
+
+/// Pure logic behind [`warn_if_over_budget`]: `None` when `elapsed` is within
+/// `budget_ms`, otherwise the exact warning text. Split out for unit testing.
+fn over_budget_message(label: &str, elapsed: Duration, budget_ms: u64) -> Option<String> {
+    let budget = Duration::from_millis(budget_ms);
+    if elapsed > budget {
+        Some(format!(
+            "WARNING: {label} took {:.2}s, over its {:.2}s target budget \
+             (see docs/feedback-budgets.md). The command's pass/fail result is \
+             unaffected.",
+            elapsed.as_secs_f64(),
+            budget.as_secs_f64()
+        ))
+    } else {
+        None
+    }
 }
 
 fn format_command(command: &Command) -> String {
@@ -244,5 +305,59 @@ mod tests {
             }
             StepError::Spawn { .. } => panic!("`false` must spawn successfully"),
         }
+    }
+
+    #[test]
+    fn resolve_budget_ms_falls_back_to_default_when_unset() {
+        assert_eq!(resolve_budget_ms(30_000, None), 30_000);
+    }
+
+    #[test]
+    fn resolve_budget_ms_prefers_a_parseable_override() {
+        assert_eq!(resolve_budget_ms(30_000, Some("1".to_string())), 1);
+    }
+
+    #[test]
+    fn resolve_budget_ms_ignores_an_unparseable_override() {
+        assert_eq!(
+            resolve_budget_ms(30_000, Some("not-a-number".to_string())),
+            30_000
+        );
+    }
+
+    #[test]
+    fn over_budget_message_is_none_within_budget() {
+        assert!(over_budget_message("test logic", Duration::from_secs(5), 30_000).is_none());
+    }
+
+    #[test]
+    fn over_budget_message_is_none_exactly_at_budget() {
+        assert!(over_budget_message("test logic", Duration::from_millis(30_000), 30_000).is_none());
+    }
+
+    #[test]
+    fn over_budget_message_warns_and_preserves_the_label_and_timings() {
+        let message = over_budget_message("test logic", Duration::from_millis(1), 0)
+            .expect("elapsed exceeds a zero budget");
+        assert!(message.starts_with("WARNING: test logic took"));
+        assert!(message.contains("target budget"));
+        assert!(message.contains("docs/feedback-budgets.md"));
+    }
+
+    #[test]
+    fn total_elapsed_sums_every_report() {
+        let reports = vec![
+            StepReport {
+                label: "a".to_string(),
+                elapsed: Duration::from_secs(1),
+                artifact: PathBuf::from("a.log"),
+            },
+            StepReport {
+                label: "b".to_string(),
+                elapsed: Duration::from_millis(500),
+                artifact: PathBuf::from("b.log"),
+            },
+        ];
+        assert_eq!(total_elapsed(&reports), Duration::from_millis(1_500));
     }
 }

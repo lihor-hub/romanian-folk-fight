@@ -6,7 +6,10 @@
 
 use std::process::Command;
 
-use crate::process::{StepError, StepReport, print_summary, run_step};
+use crate::process::{
+    StepError, StepReport, effective_budget_ms, print_summary, run_step, total_elapsed,
+    warn_if_over_budget,
+};
 
 pub const ABOUT: &str = "Native build-feature matrix (native, release, wasm; no `dev` leakage).";
 
@@ -15,11 +18,26 @@ pub const SUBCOMMANDS: &[(&str, &str)] = &[(
     "cargo check across plain native, --release, and --target wasm32-unknown-unknown, none with the `dev` feature.",
 )];
 
+/// Target warm-run budget (milliseconds) for the whole three-step matrix
+/// (native + release + wasm `cargo check`), compared against the *summed*
+/// elapsed time of all three steps rather than each individually. The
+/// player-experience rework plan's feedback-loop contract does not name a
+/// budget for this loop directly (it only lists focused-test/asset/browser
+/// budgets); this is this issue's own initial target, set from the measured
+/// warm timing in `docs/feedback-budgets.md` with headroom, and revisable.
+/// Overridable via `XTASK_BUDGET_MS`.
+const BUILD_MATRIX_BUDGET_MS: u64 = 240_000;
+
 pub fn run(sub: &str) -> Result<(), StepError> {
     match sub {
         "build-matrix" => {
             let reports = build_matrix()?;
             print_summary(&reports);
+            warn_if_over_budget(
+                "check build-matrix",
+                total_elapsed(&reports),
+                effective_budget_ms(BUILD_MATRIX_BUDGET_MS),
+            );
             Ok(())
         }
         other => unreachable!("dispatch validates subcommands before calling run; got {other}"),

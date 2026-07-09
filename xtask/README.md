@@ -167,6 +167,29 @@ Every step (every `cargo` invocation any command runs) goes through
   and echoes the captured output immediately so the failure is visible
   without opening the log file.
 
+### Feedback budgets and the budget-overrun warning
+
+Each root-owned command (`test logic`, `test journey`, `check build-matrix`,
+`pre-push`) compares its own elapsed time (or, for multi-step commands, the
+summed elapsed time of all its steps) against a target warm-run budget. When
+the budget is exceeded, `xtask` prints a `WARNING` line naming the command and
+both timings -- but the command's actual success/failure result is always
+preserved: a slow-but-passing run still exits `0`, and a real failure still
+exits non-zero exactly as it would without this check. This is implemented by
+two small, additive functions in [`process.rs`](src/process.rs):
+`effective_budget_ms` (resolves the active budget, overridable via the
+`XTASK_BUDGET_MS` environment variable) and `warn_if_over_budget` (prints the
+warning). See [`docs/feedback-budgets.md`](../docs/feedback-budgets.md) for
+the documented target budgets, representative cold/warm measurements taken on
+one machine, the methodology, and a captured budget-warning transcript.
+
+To see the warning fire deterministically (e.g. while testing this mechanism
+itself) without waiting for a slow real run:
+
+```
+XTASK_BUDGET_MS=1 cargo xtask test logic
+```
+
 Commands that run multiple steps (`build-matrix`, `pre-push`) chain them with
 `?`, so the first `StepError` short-circuits the rest and propagates up to
 `main`, which prints `cargo xtask: stopped at first failure -> <StepError>`

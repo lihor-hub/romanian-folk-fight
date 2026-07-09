@@ -6,7 +6,15 @@
 
 use std::process::Command;
 
-use crate::process::{StepError, run_step};
+use crate::process::{StepError, effective_budget_ms, run_step, warn_if_over_budget};
+
+/// Target warm-run budget (milliseconds) shared by `test logic` and `test
+/// journey`: both are the "focused pure/headless test" loop from the
+/// player-experience rework plan's feedback-loop contract (30 seconds warm).
+/// Overridable per-invocation via `XTASK_BUDGET_MS`; see
+/// `docs/feedback-budgets.md` for the measured cold/warm timings this is
+/// based on.
+const FOCUSED_TEST_BUDGET_MS: u64 = 30_000;
 
 pub const ABOUT: &str = "Focused Rust test suites (fast pure-logic units, one headless journey).";
 
@@ -53,7 +61,13 @@ fn logic() -> Result<(), StepError> {
     let mut cmd = Command::new("cargo");
     cmd.arg("test").arg("--lib").arg("--");
     cmd.args(LOGIC_FILTERS);
-    run_step("test logic", cmd).map(|_| ())
+    let report = run_step("test logic", cmd)?;
+    warn_if_over_budget(
+        &report.label,
+        report.elapsed,
+        effective_budget_ms(FOCUSED_TEST_BUDGET_MS),
+    );
+    Ok(())
 }
 
 /// The closest existing headless "journey" test in the repo today. It drives
@@ -75,5 +89,11 @@ fn journey() -> Result<(), StepError> {
     let mut cmd = Command::new("cargo");
     cmd.arg("test").arg("--lib").arg("--");
     cmd.arg(JOURNEY_TEST).arg("--exact");
-    run_step("test journey", cmd).map(|_| ())
+    let report = run_step("test journey", cmd)?;
+    warn_if_over_budget(
+        &report.label,
+        report.elapsed,
+        effective_budget_ms(FOCUSED_TEST_BUDGET_MS),
+    );
+    Ok(())
 }
