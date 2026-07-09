@@ -4,6 +4,7 @@
 use bevy::prelude::*;
 
 use crate::core::{GameState, UiFont, despawn_screen};
+use crate::flow::FlowIntent;
 use crate::save::{SaveStore, load_save};
 use crate::settings::SettingsOpen;
 use crate::theme::{
@@ -52,12 +53,13 @@ pub struct MenuPlugin;
 
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(crate::ui_widgets::ScrollInputPlugin)
+        app.add_message::<FlowIntent>()
+            .add_plugins(crate::ui_widgets::ScrollInputPlugin)
             .add_systems(OnEnter(GameState::MainMenu), spawn_main_menu)
             .add_systems(
                 Update,
                 (
-                    handle_menu_actions,
+                    handle_menu_actions.in_set(crate::flow::FlowIntentEmission),
                     update_button_backgrounds,
                     crate::ui_widgets::scroll_with_wheel_and_touch,
                 )
@@ -244,12 +246,15 @@ type ChangedEnabledButton = (Changed<Interaction>, With<Button>, Without<Disable
 /// Generic click handler: runs the [`MenuAction`] of whichever button was
 /// pressed. Disabled buttons never carry a `MenuAction`, so they are ignored.
 /// **Continuă** re-loads the save on the click (never trusting a stale
-/// button), restores every run resource, and enters the fight.
+/// button) and restores every run resource. Navigation itself is not decided
+/// here: `NewGame` and `Continue` apply their domain side effect (run reset,
+/// save restore) first, then emit a [`FlowIntent`] so [`crate::flow`]'s
+/// single transition table is the only writer of `NextState<GameState>`.
 fn handle_menu_actions(
     mut commands: Commands,
     interactions: Query<(&Interaction, &MenuAction), ChangedButton>,
     store: Option<Res<SaveStore>>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut flow_intents: MessageWriter<FlowIntent>,
     #[cfg(not(target_arch = "wasm32"))] mut app_exit: MessageWriter<AppExit>,
 ) {
     for (interaction, action) in &interactions {
@@ -259,14 +264,14 @@ fn handle_menu_actions(
         match action {
             MenuAction::NewGame => {
                 crate::progression::reset_run(&mut commands);
-                next_state.set(GameState::CharacterCreation);
+                flow_intents.write(FlowIntent::StartNewGame);
             }
             MenuAction::Continue => {
                 let save = store.as_ref().and_then(|store| load_save(store));
                 match save {
                     Some(save) => {
                         save.restore(&mut commands);
-                        next_state.set(GameState::Fight);
+                        flow_intents.write(FlowIntent::ContinueRun);
                     }
                     None => warn!("Continuă pressed but no valid save loads; staying on the menu"),
                 }
@@ -301,7 +306,13 @@ mod tests {
 
     fn test_app() -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, MenuPlugin));
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            crate::flow::FlowPlugin,
+            MenuPlugin,
+        ));
         app
     }
 
