@@ -10,6 +10,7 @@
 use bevy::prelude::*;
 
 use crate::core::{GameState, UiFont, despawn_screen};
+use crate::flow::FlowIntent;
 use crate::menu::DisabledButton;
 use crate::settings::SettingsOpen;
 use crate::theme::{
@@ -60,7 +61,7 @@ impl Plugin for PausePlugin {
                 (
                     toggle_on_esc.run_if(not(resource_exists::<SettingsOpen>)),
                     handle_pause_button,
-                    handle_overlay_buttons,
+                    handle_overlay_buttons.in_set(crate::flow::FlowIntentEmission),
                     update_button_backgrounds,
                 )
                     .run_if(in_state(GameState::Fight)),
@@ -108,14 +109,18 @@ type ChangedEnabledPauseButton = (
     Without<DisabledButton>,
 );
 
-/// Applies the clicked overlay action: resume the duel or abandon to the
-/// main menu. Abandoning is not a defeat and never touches the save — the
-/// run keeps its last autosave and the fight restarts on return.
+/// Applies the clicked overlay action: resume the duel (a [`PauseState`]
+/// substate change, outside the [`FlowIntent`] table's scope), open
+/// settings, or abandon to the main menu via [`FlowIntent::AbandonFight`].
+/// Abandoning is not a defeat and never touches the save — the run keeps
+/// its last autosave and the fight restarts on return (no domain side
+/// effect precedes the intent here; #146 owns any future change to this
+/// persistence policy).
 fn handle_overlay_buttons(
     mut commands: Commands,
     interactions: Query<(&Interaction, &PauseAction), ChangedEnabledOverlayButton>,
     mut next_pause: ResMut<NextState<PauseState>>,
-    mut next_game: ResMut<NextState<GameState>>,
+    mut intents: MessageWriter<FlowIntent>,
 ) {
     for (interaction, action) in &interactions {
         if *interaction != Interaction::Pressed {
@@ -124,7 +129,9 @@ fn handle_overlay_buttons(
         match action {
             PauseAction::Resume => next_pause.set(PauseState::Running),
             PauseAction::Settings => commands.insert_resource(SettingsOpen),
-            PauseAction::Abandon => next_game.set(GameState::MainMenu),
+            PauseAction::Abandon => {
+                intents.write(FlowIntent::AbandonFight);
+            }
         }
     }
 }
@@ -222,6 +229,7 @@ mod tests {
     use crate::combat::engine::CombatAction;
     use crate::core::CorePlugin;
     use crate::creation::PlayerCharacter;
+    use crate::flow::FlowPlugin;
     use crate::save::SaveRequested;
     use bevy::state::app::StatesPlugin;
     use rand::SeedableRng;
@@ -237,7 +245,7 @@ mod tests {
     /// Headless app already on the fight screen with a fixed duel RNG.
     fn test_app() -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin));
+        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, FlowPlugin));
         app.add_plugins((ArenaPlugin, CombatPlugin));
         app.add_message::<SaveRequested>();
         app.init_resource::<ButtonInput<KeyCode>>();

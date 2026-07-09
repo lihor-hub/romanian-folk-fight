@@ -509,6 +509,7 @@ mod tests {
     use super::*;
     use crate::combat::{CombatLogEvent, CombatSide};
     use crate::core::CorePlugin;
+    use crate::flow::FlowPlugin;
     use crate::progression::{
         FightOutcome, ProgressionPlugin, STARTING_GALBENI,
         result_ui::{AllocateAction, GameOverAction},
@@ -724,6 +725,7 @@ mod tests {
             MinimalPlugins,
             StatesPlugin,
             CorePlugin,
+            FlowPlugin,
             ProgressionPlugin,
             RosterPlugin,
             ShopPlugin,

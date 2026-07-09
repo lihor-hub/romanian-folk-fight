@@ -1,13 +1,16 @@
-//! Flow plugin (#155): the single validated table of [`GameState`]
-//! transitions for menu/creation navigation. Screens keep their domain side
-//! effects (run reset, hero/loadout creation, save restore) but emit a
-//! [`FlowIntent`] for navigation instead of writing `NextState<GameState>`
-//! directly. [`apply_flow_intents`] is the only system that writes
+//! Flow plugin (#155, #164): the single validated table of [`GameState`]
+//! transitions for menu/creation navigation and the player-triggered routes
+//! out of a fight (result, shop, victory, game-over, and paused-fight
+//! abandon). Screens keep their domain side effects (run reset, hero/loadout
+//! creation, save restore, rewards, purchases) but emit a [`FlowIntent`] for
+//! navigation instead of writing `NextState<GameState>` directly.
+//! [`apply_flow_intents`] is the only system that writes
 //! `NextState<GameState>` for the routes this slice owns.
 //!
-//! Result, shop, victory, pause, game-over, and combat-outcome transitions
-//! are not migrated here — they keep writing `NextState<GameState>` directly
-//! until later issues (#142) bring them under the same table.
+//! Automated combat-outcome transitions (fight-end detection in
+//! `combat::systems`/`progression`) are not migrated here — they keep
+//! writing `NextState<GameState>` directly until a later #142 child brings
+//! them under the same table.
 
 use bevy::prelude::*;
 
@@ -30,8 +33,28 @@ pub enum FlowIntent {
     ContinueRun,
     /// Creation → Fight: the hero/loadout is confirmed and stored.
     ConfirmHero,
-    /// Creation → menu: abandon character creation.
+    /// Creation → menu, game-over → menu (with the run reset), or victory →
+    /// menu (with the looping run's save kept): every "back to the main
+    /// menu" button shares this intent since the table only routes state —
+    /// the emitting screen already applied whatever domain effect (or none)
+    /// its own destination implies.
     BackToMenu,
+    /// FightResult → Shop: spend the payout (**La prăvălie**). The reward
+    /// was already credited on `OnEnter(FightResult)`.
+    GoToShop,
+    /// FightResult → Fight: straight into the next duel (**Lupta
+    /// următoare**).
+    NextFight,
+    /// Shop → Fight: leave the shop (**Înapoi în arenă**). Purchases/equips
+    /// already applied as they were pressed.
+    BackToArena,
+    /// Victory → Shop: continue the looping run into lap 2 (**Turul 2**).
+    /// The ladder already advanced past the last lap-1 opponent.
+    NextLap,
+    /// Paused Fight → menu: **Abandonează**. Not a defeat and does not touch
+    /// the save — the run keeps its last autosave and the fight restarts
+    /// fresh on return (#146 owns any future change to this policy).
+    AbandonFight,
 }
 
 /// Outcome of applying one [`FlowIntent`] against the transition table.
@@ -53,9 +76,10 @@ pub enum TransitionResult {
     Rejected { intent: FlowIntent, from: GameState },
 }
 
-/// The transition table: exactly the routes owned by menu/creation (#155).
-/// `None` covers every other `(state, intent)` pair — including states and
-/// intents this slice deliberately does not own.
+/// The transition table: exactly the routes owned by menu/creation (#155)
+/// and by post-fight/pause navigation (#164). `None` covers every other
+/// `(state, intent)` pair — including states and intents this slice
+/// deliberately does not own (automated combat-outcome transitions).
 fn transition_for(from: GameState, intent: FlowIntent) -> Option<GameState> {
     use FlowIntent::*;
     use GameState::*;
@@ -64,6 +88,13 @@ fn transition_for(from: GameState, intent: FlowIntent) -> Option<GameState> {
         (MainMenu, ContinueRun) => Some(Fight),
         (CharacterCreation, ConfirmHero) => Some(Fight),
         (CharacterCreation, BackToMenu) => Some(MainMenu),
+        (FightResult, GoToShop) => Some(Shop),
+        (FightResult, NextFight) => Some(Fight),
+        (Shop, BackToArena) => Some(Fight),
+        (Victory, NextLap) => Some(Shop),
+        (Victory, BackToMenu) => Some(MainMenu),
+        (GameOver, BackToMenu) => Some(MainMenu),
+        (Fight, AbandonFight) => Some(MainMenu),
         _ => None,
     }
 }
@@ -213,6 +244,62 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fight_result_go_to_shop_routes_to_shop() {
+        assert_eq!(
+            transition_for(GameState::FightResult, FlowIntent::GoToShop),
+            Some(GameState::Shop)
+        );
+    }
+
+    #[test]
+    fn fight_result_next_fight_routes_to_fight() {
+        assert_eq!(
+            transition_for(GameState::FightResult, FlowIntent::NextFight),
+            Some(GameState::Fight)
+        );
+    }
+
+    #[test]
+    fn shop_back_to_arena_routes_to_fight() {
+        assert_eq!(
+            transition_for(GameState::Shop, FlowIntent::BackToArena),
+            Some(GameState::Fight)
+        );
+    }
+
+    #[test]
+    fn victory_next_lap_routes_to_shop() {
+        assert_eq!(
+            transition_for(GameState::Victory, FlowIntent::NextLap),
+            Some(GameState::Shop)
+        );
+    }
+
+    #[test]
+    fn victory_back_to_menu_routes_to_main_menu() {
+        assert_eq!(
+            transition_for(GameState::Victory, FlowIntent::BackToMenu),
+            Some(GameState::MainMenu)
+        );
+    }
+
+    #[test]
+    fn game_over_back_to_menu_routes_to_main_menu() {
+        assert_eq!(
+            transition_for(GameState::GameOver, FlowIntent::BackToMenu),
+            Some(GameState::MainMenu)
+        );
+    }
+
+    #[test]
+    fn paused_fight_abandon_routes_to_main_menu() {
+        assert_eq!(
+            transition_for(GameState::Fight, FlowIntent::AbandonFight),
+            Some(GameState::MainMenu)
+        );
+    }
+
     /// Every row of the table this slice owns, and nothing else — a stray
     /// extra row (e.g. accidentally letting `ConfirmHero` apply from
     /// `MainMenu`) would defeat the point of a validated table.
@@ -223,6 +310,13 @@ mod tests {
             (GameState::MainMenu, FlowIntent::ContinueRun),
             (GameState::CharacterCreation, FlowIntent::ConfirmHero),
             (GameState::CharacterCreation, FlowIntent::BackToMenu),
+            (GameState::FightResult, FlowIntent::GoToShop),
+            (GameState::FightResult, FlowIntent::NextFight),
+            (GameState::Shop, FlowIntent::BackToArena),
+            (GameState::Victory, FlowIntent::NextLap),
+            (GameState::Victory, FlowIntent::BackToMenu),
+            (GameState::GameOver, FlowIntent::BackToMenu),
+            (GameState::Fight, FlowIntent::AbandonFight),
         ];
         let all_states = [
             GameState::Loading,
@@ -239,6 +333,11 @@ mod tests {
             FlowIntent::ContinueRun,
             FlowIntent::ConfirmHero,
             FlowIntent::BackToMenu,
+            FlowIntent::GoToShop,
+            FlowIntent::NextFight,
+            FlowIntent::BackToArena,
+            FlowIntent::NextLap,
+            FlowIntent::AbandonFight,
         ];
         for state in all_states {
             for intent in all_intents {
@@ -333,5 +432,60 @@ mod tests {
         write_intent(&mut app, FlowIntent::BackToMenu);
         app.update();
         assert!(next_state_is_pending(&app, GameState::MainMenu));
+    }
+
+    /// A duplicate post-fight intent (e.g. two clicks landing in the same
+    /// frame) must apply once and deterministically reject the rest, exactly
+    /// like the menu/creation duplicate case above.
+    #[test]
+    fn duplicate_post_fight_intents_in_the_same_frame_apply_once_and_reject_the_rest() {
+        let mut app = test_app();
+        set_state(&mut app, GameState::FightResult);
+        write_intent(&mut app, FlowIntent::GoToShop);
+        write_intent(&mut app, FlowIntent::GoToShop);
+        app.update();
+
+        assert!(
+            next_state_is_pending(&app, GameState::Shop),
+            "exactly one transition is queued"
+        );
+        assert_eq!(
+            results(&mut app),
+            vec![
+                TransitionResult::Applied {
+                    intent: FlowIntent::GoToShop,
+                    from: GameState::FightResult,
+                    to: GameState::Shop,
+                },
+                TransitionResult::Rejected {
+                    intent: FlowIntent::GoToShop,
+                    from: GameState::Shop,
+                },
+            ]
+        );
+    }
+
+    /// An intent valid from a different owned state (e.g. `AbandonFight`,
+    /// owned only from `Fight`) is rejected outside its state, same as any
+    /// other invalid pairing.
+    #[test]
+    fn abandon_fight_is_invalid_outside_the_fight_state() {
+        let mut app = test_app();
+        set_state(&mut app, GameState::Shop);
+        write_intent(&mut app, FlowIntent::AbandonFight);
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::Shop,
+            "invalid intent must not move state"
+        );
+        assert_eq!(
+            results(&mut app),
+            vec![TransitionResult::Rejected {
+                intent: FlowIntent::AbandonFight,
+                from: GameState::Shop,
+            }]
+        );
     }
 }
