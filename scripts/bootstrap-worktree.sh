@@ -1,21 +1,155 @@
 #!/usr/bin/env bash
 # Bootstrap a fresh git worktree / checkout:
-# Installs git hooks and verifies Rust and Cargo.
+#   1. Discovers a Rust/Cargo toolchain even if it isn't on the initial PATH.
+#   2. Writes a worktree-local .cargo/config.toml so this worktree builds into
+#      its own target directory (no shared-lock contention with sibling
+#      worktrees) and, when available, shares sccache compiler-cache hits.
+#   3. Installs git pre-commit/pre-push hooks (unchanged behavior).
+#
+# Never touches user/global Cargo config (~/.cargo/config*), rustup settings,
+# or shell profiles. Safe to re-run; it reports whether anything changed.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+WORKTREE_ROOT="$(pwd)"
 
+# --- 1. Discover Rust/Cargo -------------------------------------------------
+#
+# Precedence (first match wins; existing PATH entries are tried first so any
+# toolchain the caller already configured keeps working unchanged):
+#   1. Whatever `cargo` already resolves to on the inherited PATH.
+#   2. $CARGO_HOME/bin                       (explicit CARGO_HOME override)
+#   3. $HOME/.cargo/bin                       (default rustup shim location)
+#   4. /opt/homebrew/opt/rustup/bin           (Homebrew rustup, Apple Silicon)
+#   5. /usr/local/opt/rustup/bin              (Homebrew rustup, Intel mac)
+#   6. /usr/local/bin                         (common Linux manual install)
+#   7. /usr/bin                               (distro-packaged Rust)
+#   8. $HOME/.rustup/toolchains/*/bin         (last resort: a direct toolchain
+#                                               dir, picked only if no rustup
+#                                               proxy/shim was found anywhere
+#                                               above. This bypasses rustup's
+#                                               toolchain-selection logic, e.g.
+#                                               `rust-toolchain.toml` overrides
+#                                               and `rustup default`, so it is
+#                                               deliberately tried last and
+#                                               only as a fallback.)
 echo "Checking for Rust/Cargo installation..."
-export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 
-if ! command -v cargo &> /dev/null; then
-  echo "ERROR: Cargo is not installed or not in /opt/homebrew/opt/rustup/bin." >&2
+resolve_cargo() {
+  if command -v cargo &>/dev/null; then
+    return 0
+  fi
+
+  local candidates=()
+
+  if [[ -n "${CARGO_HOME:-}" ]]; then
+    candidates+=("$CARGO_HOME/bin")
+  fi
+  candidates+=("$HOME/.cargo/bin")
+  candidates+=(
+    "/opt/homebrew/opt/rustup/bin"
+    "/usr/local/opt/rustup/bin"
+    "/usr/local/bin"
+    "/usr/bin"
+  )
+
+  # Last-resort fallback: a direct toolchain bin dir. Only reached if no
+  # rustup proxy/shim was found above, so it deliberately comes last -- it
+  # bypasses rustup's own toolchain-selection logic (overrides, `rustup
+  # default`), so a proxy/shim is always preferred when one is available.
+  if [[ -d "$HOME/.rustup/toolchains" ]]; then
+    while IFS= read -r toolchain_dir; do
+      candidates+=("$toolchain_dir/bin")
+    done < <(find "$HOME/.rustup/toolchains" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+  fi
+
+  local dir
+  for dir in "${candidates[@]}"; do
+    if [[ -x "$dir/cargo" ]]; then
+      export PATH="$dir:$PATH"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+if ! resolve_cargo; then
+  cat >&2 <<'EOF'
+ERROR: Could not find a Rust/Cargo installation.
+
+Checked: current PATH, $CARGO_HOME/bin, $HOME/.cargo/bin,
+/opt/homebrew/opt/rustup/bin, /usr/local/opt/rustup/bin, /usr/local/bin,
+/usr/bin, and $HOME/.rustup/toolchains/*/bin.
+
+Install Rust via rustup and re-run this script:
+  https://rustup.rs
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+EOF
   exit 1
 fi
 
-echo "Found Cargo: $(cargo --version)"
+CARGO_BIN="$(command -v cargo)"
+echo "Found Cargo: $(cargo --version) (${CARGO_BIN})"
 
-# Install pre-commit hooks if pre-commit is installed
+# --- 2. Worktree-local Cargo config: isolated target dir + shared sccache --
+#
+# Each worktree gets its own `.cargo/config.toml` (gitignored, never the
+# user/global ~/.cargo/config) pinning `build.target-dir` to a path derived
+# from this worktree's own root, so parallel worktrees never contend on the
+# same `target/` lock by default. Note: a `CARGO_TARGET_DIR` environment
+# variable, if exported by the caller, takes precedence over this config
+# (that's Cargo's own resolution order) -- this script does not touch shell
+# profiles, so it cannot guard against an operator exporting a shared
+# CARGO_TARGET_DIR themselves.
+#
+# If `sccache` is resolvable on the (now-discovered) PATH, it's configured as
+# the rustc wrapper in the same file so sibling worktrees can still share
+# compiler-cache hits despite having separate target directories. If it's not
+# available, bootstrap reports that shared caching is disabled and how to fix
+# it, without failing.
+CARGO_CONFIG_DIR="$WORKTREE_ROOT/.cargo"
+CARGO_CONFIG_FILE="$CARGO_CONFIG_DIR/config.toml"
+CARGO_CONFIG_STAGED="$CARGO_CONFIG_FILE.bootstrap-staged"
+TARGET_DIR="$WORKTREE_ROOT/target"
+
+mkdir -p "$CARGO_CONFIG_DIR"
+
+SCCACHE_BIN="$(command -v sccache || true)"
+
+{
+  echo "# Auto-generated by scripts/bootstrap-worktree.sh -- worktree-local only."
+  echo "# Safe to delete; re-running the bootstrap script regenerates this file."
+  echo "# Do not hand-edit: changes are overwritten on the next bootstrap run."
+  echo
+  echo "[build]"
+  echo "target-dir = \"$TARGET_DIR\""
+  if [[ -n "$SCCACHE_BIN" ]]; then
+    echo "rustc-wrapper = \"$SCCACHE_BIN\""
+  fi
+} >"$CARGO_CONFIG_STAGED"
+
+if [[ -f "$CARGO_CONFIG_FILE" ]] && cmp -s "$CARGO_CONFIG_FILE" "$CARGO_CONFIG_STAGED"; then
+  rm -f "$CARGO_CONFIG_STAGED"
+  echo "Worktree Cargo config unchanged: $CARGO_CONFIG_FILE"
+else
+  mv "$CARGO_CONFIG_STAGED" "$CARGO_CONFIG_FILE"
+  echo "Wrote worktree Cargo config: $CARGO_CONFIG_FILE"
+fi
+
+echo "Per-worktree Cargo target directory: $TARGET_DIR"
+
+if [[ -n "$SCCACHE_BIN" ]]; then
+  echo "Shared compiler cache: sccache found at ${SCCACHE_BIN}; configured as rustc wrapper."
+else
+  echo "Shared compiler cache: DISABLED (sccache not found on PATH)."
+  echo "  To enable cache sharing across worktrees, install sccache, e.g.:"
+  echo "    brew install sccache      # macOS"
+  echo "    cargo install sccache     # any platform"
+  echo "  then re-run this script."
+fi
+
+# --- 3. Git hooks (unchanged) -----------------------------------------------
 if command -v pre-commit &> /dev/null; then
   echo "Installing git pre-commit/pre-push hooks..."
   pre-commit install
