@@ -1,0 +1,89 @@
+# Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs.
+#
+# Only files directly in assets/ui/ -- the `source/` subdirectory owns its
+# own sidecar (assets/ui/source/manifest.toml).
+version = 1
+
+[[record]]
+id = "ui.icon-coin"
+path = "icon_coin.png"
+kind = "image"
+category = "ui-icon"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-shop-icons.py"
+license = "CC0 1.0"
+dimensions = [32, 32]
+sampler = "linear"
+
+[[record]]
+id = "ui.icon-weapon"
+path = "icon_weapon.png"
+kind = "image"
+category = "ui-icon"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-shop-icons.py"
+license = "CC0 1.0"
+dimensions = [32, 32]
+sampler = "linear"
+
+[[record]]
+id = "ui.icon-shield"
+path = "icon_shield.png"
+kind = "image"
+category = "ui-icon"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-shop-icons.py"
+license = "CC0 1.0"
+dimensions = [32, 32]
+sampler = "linear"
+
+[[record]]
+id = "ui.icon-torso"
+path = "icon_torso.png"
+kind = "image"
+category = "ui-icon"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-shop-icons.py"
+license = "CC0 1.0"
+dimensions = [32, 32]
+sampler = "linear"
+
+[[record]]
+id = "ui.icon-head"
+path = "icon_head.png"
+kind = "image"
+category = "ui-icon"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-shop-icons.py"
+license = "CC0 1.0"
+dimensions = [32, 32]
+sampler = "linear"
+
+[[record]]
+id = "ui.icon-feet"
+path = "icon_feet.png"
+kind = "image"
+category = "ui-icon"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-shop-icons.py"
+license = "CC0 1.0"
+dimensions = [32, 32]
+sampler = "linear"
+
+[[record]]
+id = "ui.panel-border"
+path = "panel_border.png"
+kind = "image"
+category = "ui-panel"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-ui-panel.py"
+license = "CC0 1.0"
+dimensions = [96, 96]
+sampler = "linear"

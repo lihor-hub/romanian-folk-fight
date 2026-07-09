@@ -1,0 +1,16 @@
+# Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs.
+version = 1
+
+[[ignore]]
+path = "README.md"
+reason = "Directory documentation describing intended parts and the style contract for this source sheet; not itself a media asset."
+
+[[record]]
+id = "fighters.zmeu.source.zmeu-cutout-parts-v1"
+path = "zmeu_cutout_parts_v1.png"
+kind = "image"
+category = "fighter-source-sheet"
+status = "source"
+provenance = "openai-generated"
+license = "Same as project assets unless superseded"
+dimensions = [640, 426]

@@ -1,0 +1,139 @@
+# Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs.
+#
+# These full-frame sprite sheets are bootstrap placeholder art (see
+# docs/art-direction.md); they are recorded `status = "runtime"` because
+# src/arena/animation.rs still loads every one of them today, not because
+# they are the intended long-term art.
+version = 1
+
+[[record]]
+id = "sprites.player"
+path = "player.png"
+kind = "image"
+category = "sprite"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-placeholder-sprites.py"
+license = "CC0 1.0"
+dimensions = [512, 512]
+sampler = "linear"
+
+[[record]]
+id = "sprites.hot-de-codru"
+path = "hot_de_codru.png"
+kind = "image"
+category = "sprite"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-placeholder-sprites.py"
+license = "CC0 1.0"
+dimensions = [512, 512]
+sampler = "linear"
+
+[[record]]
+id = "sprites.strigoi"
+path = "strigoi.png"
+kind = "image"
+category = "sprite"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-placeholder-sprites.py"
+license = "CC0 1.0"
+dimensions = [512, 512]
+sampler = "linear"
+
+[[record]]
+id = "sprites.varcolac"
+path = "varcolac.png"
+kind = "image"
+category = "sprite"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-placeholder-sprites.py"
+license = "CC0 1.0"
+dimensions = [512, 512]
+sampler = "linear"
+
+[[record]]
+id = "sprites.capcaun"
+path = "capcaun.png"
+kind = "image"
+category = "sprite"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-placeholder-sprites.py"
+license = "CC0 1.0"
+dimensions = [512, 512]
+sampler = "linear"
+
+[[record]]
+id = "sprites.muma-padurii"
+path = "muma_padurii.png"
+kind = "image"
+category = "sprite"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-placeholder-sprites.py"
+license = "CC0 1.0"
+dimensions = [512, 512]
+sampler = "linear"
+
+[[record]]
+id = "sprites.iele"
+path = "iele.png"
+kind = "image"
+category = "sprite"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-placeholder-sprites.py"
+license = "CC0 1.0"
+dimensions = [512, 512]
+sampler = "linear"
+
+[[record]]
+id = "sprites.solomonar"
+path = "solomonar.png"
+kind = "image"
+category = "sprite"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-placeholder-sprites.py"
+license = "CC0 1.0"
+dimensions = [512, 512]
+sampler = "linear"
+
+[[record]]
+id = "sprites.balaur"
+path = "balaur.png"
+kind = "image"
+category = "sprite"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-placeholder-sprites.py"
+license = "CC0 1.0"
+dimensions = [512, 512]
+sampler = "linear"
+
+[[record]]
+id = "sprites.zmeu"
+path = "zmeu.png"
+kind = "image"
+category = "sprite"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-placeholder-sprites.py"
+license = "CC0 1.0"
+dimensions = [512, 512]
+sampler = "linear"
+
+[[record]]
+id = "sprites.zmeul-zmeilor"
+path = "zmeul_zmeilor.png"
+kind = "image"
+category = "sprite"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-placeholder-sprites.py"
+license = "CC0 1.0"
+dimensions = [512, 512]
+sampler = "linear"

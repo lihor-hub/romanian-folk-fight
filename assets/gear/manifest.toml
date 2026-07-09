@@ -1,0 +1,157 @@
+# Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs.
+#
+# Historical "equipment overlay" placeholder art (issue #72). Twelve of the
+# thirteen files here were superseded by the cropped fighter cutout parts
+# under `assets/fighters/gear/runtime/` (see that directory's sidecar) and
+# are no longer referenced anywhere in src/ -- `status = "legacy"`.
+# `buzdugan_cu_trei_peceti.png` has no equivalent there yet, so
+# src/items/visuals.rs still loads it -- `status = "runtime"`.
+version = 1
+
+[[record]]
+id = "gear.buzdugan-cu-trei-peceti"
+path = "buzdugan_cu_trei_peceti.png"
+kind = "image"
+category = "gear-overlay"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-gear-visuals.py"
+license = "CC0 1.0"
+dimensions = [128, 128]
+sampler = "linear"
+attachment = "hand_front"
+pivot = [8.0, 18.0]
+display = [40.0, 88.0]
+crop = "unknown"
+
+[[record]]
+id = "gear.bata-ciobaneasca"
+path = "bata_ciobaneasca.png"
+kind = "image"
+category = "gear-overlay"
+status = "legacy"
+provenance = "repo-generated"
+generator = "scripts/generate-gear-visuals.py"
+license = "CC0 1.0"
+dimensions = [128, 128]
+
+[[record]]
+id = "gear.caciula-de-oaie"
+path = "caciula_de_oaie.png"
+kind = "image"
+category = "gear-overlay"
+status = "legacy"
+provenance = "repo-generated"
+generator = "scripts/generate-gear-visuals.py"
+license = "CC0 1.0"
+dimensions = [128, 128]
+
+[[record]]
+id = "gear.camasa-de-zale"
+path = "camasa_de_zale.png"
+kind = "image"
+category = "gear-overlay"
+status = "legacy"
+provenance = "repo-generated"
+generator = "scripts/generate-gear-visuals.py"
+license = "CC0 1.0"
+dimensions = [128, 128]
+
+[[record]]
+id = "gear.cizme-de-voinic"
+path = "cizme_de_voinic.png"
+kind = "image"
+category = "gear-overlay"
+status = "legacy"
+provenance = "repo-generated"
+generator = "scripts/generate-gear-visuals.py"
+license = "CC0 1.0"
+dimensions = [128, 128]
+
+[[record]]
+id = "gear.coif-de-ostean"
+path = "coif_de_ostean.png"
+kind = "image"
+category = "gear-overlay"
+status = "legacy"
+provenance = "repo-generated"
+generator = "scripts/generate-gear-visuals.py"
+license = "CC0 1.0"
+dimensions = [128, 128]
+
+[[record]]
+id = "gear.cojoc-gros"
+path = "cojoc_gros.png"
+kind = "image"
+category = "gear-overlay"
+status = "legacy"
+provenance = "repo-generated"
+generator = "scripts/generate-gear-visuals.py"
+license = "CC0 1.0"
+dimensions = [128, 128]
+
+[[record]]
+id = "gear.ie-descantata"
+path = "ie_descantata.png"
+kind = "image"
+category = "gear-overlay"
+status = "legacy"
+provenance = "repo-generated"
+generator = "scripts/generate-gear-visuals.py"
+license = "CC0 1.0"
+dimensions = [128, 128]
+
+[[record]]
+id = "gear.opinci-iuti"
+path = "opinci_iuti.png"
+kind = "image"
+category = "gear-overlay"
+status = "legacy"
+provenance = "repo-generated"
+generator = "scripts/generate-gear-visuals.py"
+license = "CC0 1.0"
+dimensions = [128, 128]
+
+[[record]]
+id = "gear.palos"
+path = "palos.png"
+kind = "image"
+category = "gear-overlay"
+status = "legacy"
+provenance = "repo-generated"
+generator = "scripts/generate-gear-visuals.py"
+license = "CC0 1.0"
+dimensions = [128, 128]
+
+[[record]]
+id = "gear.scut-de-lemn"
+path = "scut_de_lemn.png"
+kind = "image"
+category = "gear-overlay"
+status = "legacy"
+provenance = "repo-generated"
+generator = "scripts/generate-gear-visuals.py"
+license = "CC0 1.0"
+dimensions = [128, 128]
+
+[[record]]
+id = "gear.scut-ferecat"
+path = "scut_ferecat.png"
+kind = "image"
+category = "gear-overlay"
+status = "legacy"
+provenance = "repo-generated"
+generator = "scripts/generate-gear-visuals.py"
+license = "CC0 1.0"
+dimensions = [128, 128]
+
+[[record]]
+id = "gear.topor-de-padurar"
+path = "topor_de_padurar.png"
+kind = "image"
+category = "gear-overlay"
+status = "legacy"
+provenance = "repo-generated"
+generator = "scripts/generate-gear-visuals.py"
+license = "CC0 1.0"
+dimensions = [128, 128]

@@ -5,8 +5,16 @@ edition = "2024"
 publish = false
 description = "Root cargo-xtask dispatcher: focused Rust verification gates for romanian-folk-fight."
 
-# Deliberately dependency-free: hand-rolled arg parsing and `std::process`
+# Deliberately dependency-light: hand-rolled arg parsing and `std::process`
 # keep this a fast-compiling, low-maintenance dev tool. Add a dependency here
 # only if a later, independently owned module genuinely needs one -- match
 # the root crate's dependency conservatism.
+#
+# `serde`/`toml` were added for #167 (`xtask/src/assets/`): per-directory
+# manifest sidecars are hand-authored TOML, and a derive-based schema with
+# real error locations is far less maintenance than a hand-rolled parser.
+# `serde` is already a workspace dependency (root `Cargo.toml`), so this adds
+# only `toml` (and its own small dependency tree) to the lockfile.
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = { version = "0.9", default-features = false, features = ["parse", "display", "serde"] }

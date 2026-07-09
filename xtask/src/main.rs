@@ -2,6 +2,7 @@
 //! romanian-folk-fight. See `xtask/README.md` for the artifact-directory
 //! convention and the pattern for adding new command groups.
 
+mod assets;
 mod commands;
 mod process;
 

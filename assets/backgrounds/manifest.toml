@@ -1,0 +1,110 @@
+# Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs.
+version = 1
+
+[[record]]
+id = "backgrounds.village-far"
+path = "village_far.png"
+kind = "image"
+category = "background"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-backgrounds.py"
+license = "CC0 1.0"
+dimensions = [900, 600]
+sampler = "linear"
+
+[[record]]
+id = "backgrounds.village-near"
+path = "village_near.png"
+kind = "image"
+category = "background"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-backgrounds.py"
+license = "CC0 1.0"
+dimensions = [900, 600]
+sampler = "linear"
+
+[[record]]
+id = "backgrounds.village-foreground"
+path = "village_foreground.png"
+kind = "image"
+category = "background"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-backgrounds.py"
+license = "CC0 1.0"
+dimensions = [900, 600]
+sampler = "linear"
+
+[[record]]
+id = "backgrounds.forest-far"
+path = "forest_far.png"
+kind = "image"
+category = "background"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-backgrounds.py"
+license = "CC0 1.0"
+dimensions = [900, 600]
+sampler = "linear"
+
+[[record]]
+id = "backgrounds.forest-near"
+path = "forest_near.png"
+kind = "image"
+category = "background"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-backgrounds.py"
+license = "CC0 1.0"
+dimensions = [900, 600]
+sampler = "linear"
+
+[[record]]
+id = "backgrounds.forest-foreground"
+path = "forest_foreground.png"
+kind = "image"
+category = "background"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-backgrounds.py"
+license = "CC0 1.0"
+dimensions = [900, 600]
+sampler = "linear"
+
+[[record]]
+id = "backgrounds.mountains-far"
+path = "mountains_far.png"
+kind = "image"
+category = "background"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-backgrounds.py"
+license = "CC0 1.0"
+dimensions = [900, 600]
+sampler = "linear"
+
+[[record]]
+id = "backgrounds.mountains-near"
+path = "mountains_near.png"
+kind = "image"
+category = "background"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-backgrounds.py"
+license = "CC0 1.0"
+dimensions = [900, 600]
+sampler = "linear"
+
+[[record]]
+id = "backgrounds.mountains-foreground"
+path = "mountains_foreground.png"
+kind = "image"
+category = "background"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-backgrounds.py"
+license = "CC0 1.0"
+dimensions = [900, 600]
+sampler = "linear"
