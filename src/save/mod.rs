@@ -444,7 +444,18 @@ impl Plugin for SavePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SaveStore>()
             .add_message::<SaveRequested>()
-            .add_systems(Update, persist_on_request)
+            // Ordered after `FlowIntentEmission` (#155) so that when a menu
+            // or creation system both queues resource-inserting `Commands`
+            // and requests a save in the same frame (e.g. confirming a new
+            // hero), those commands are guaranteed flushed — Bevy
+            // auto-inserts the `apply_deferred` sync point for an explicit
+            // ordering edge — before this system reads the run resources.
+            // Without this, the two systems are ambiguous and may run in
+            // either order.
+            .add_systems(
+                Update,
+                persist_on_request.after(crate::flow::FlowIntentEmission),
+            )
             .add_systems(OnEnter(GameState::GameOver), delete_save);
     }
 }

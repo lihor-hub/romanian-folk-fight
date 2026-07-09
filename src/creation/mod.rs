@@ -14,6 +14,7 @@ pub use draft::{AttributeKind, CharacterDraft, FOLK_NAMES, FREE_POINTS, HeroChoi
 use crate::character::{Attributes, PlayerAppearance, stats};
 use crate::core::{GameState, UiFont, ViewportInfo, despawn_screen};
 use crate::cutout::{CutoutRig, human_template_for, spawn_cutout_rig_with_gear};
+use crate::flow::FlowIntent;
 use crate::items::Equipment;
 use crate::menu::DisabledButton;
 use crate::save::SaveRequested;
@@ -130,13 +131,14 @@ pub struct CreationPlugin;
 impl Plugin for CreationPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<SaveRequested>()
+            .add_message::<FlowIntent>()
             .init_resource::<CharacterDraft>()
             .add_plugins(crate::ui_widgets::ScrollInputPlugin)
             .add_systems(OnEnter(GameState::CharacterCreation), spawn_creation_screen)
             .add_systems(
                 Update,
                 (
-                    handle_creation_actions,
+                    handle_creation_actions.in_set(crate::flow::FlowIntentEmission),
                     update_button_backgrounds,
                     update_control_availability,
                     update_choice_button_styles,
@@ -623,7 +625,7 @@ fn handle_creation_actions(
     mut commands: Commands,
     interactions: Query<(&Interaction, &CreationAction), ChangedEnabledButton>,
     mut draft: ResMut<CharacterDraft>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut flow_intents: MessageWriter<FlowIntent>,
     mut save_requests: MessageWriter<SaveRequested>,
 ) {
     for (interaction, action) in &interactions {
@@ -666,12 +668,12 @@ fn handle_creation_actions(
                     commands.insert_resource(PlayerEquipment(equipment));
                     save_requests.write(SaveRequested);
                     draft.reset();
-                    next_state.set(GameState::Fight);
+                    flow_intents.write(FlowIntent::ConfirmHero);
                 }
             }
             CreationAction::Back => {
                 draft.reset();
-                next_state.set(GameState::MainMenu);
+                flow_intents.write(FlowIntent::BackToMenu);
             }
         }
     }
@@ -811,7 +813,13 @@ mod tests {
 
     fn test_app_with_viewport(viewport: ViewportInfo) -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, CreationPlugin));
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            crate::flow::FlowPlugin,
+            CreationPlugin,
+        ));
         app.update();
         app.world_mut()
             .resource_mut::<ViewportInfo>()
@@ -828,12 +836,43 @@ mod tests {
         test_app_with_viewport(ViewportInfo::default())
     }
 
+    /// Menu + creation + the flow plugin together, starting on the main
+    /// menu — for journeys that cross both screens (#155).
+    fn test_app_with_menu() -> App {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            crate::flow::FlowPlugin,
+            crate::menu::MenuPlugin,
+            CreationPlugin,
+        ));
+        app.update();
+        app
+    }
+
+    fn press_menu(app: &mut App, action: crate::menu::MenuAction) {
+        let button = app
+            .world_mut()
+            .query_filtered::<(Entity, &crate::menu::MenuAction), With<Button>>()
+            .iter(app.world())
+            .find(|&(_, &a)| a == action)
+            .map(|(e, _)| e)
+            .unwrap_or_else(|| panic!("menu button for {action:?} exists"));
+        app.world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        app.update();
+    }
+
     fn test_app_with_save() -> (App, std::sync::Arc<std::sync::Mutex<Option<String>>>) {
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
             StatesPlugin,
             CorePlugin,
+            crate::flow::FlowPlugin,
             CreationPlugin,
             SavePlugin,
         ));
@@ -1267,6 +1306,84 @@ mod tests {
         assert_eq!(
             label_text(&mut app, CreationLabel::Appearance(AppearanceField::Accent)),
             "Verde"
+        );
+    }
+
+    // --- Flow-intent journeys (#155): menu <-> creation, driven entirely
+    // through FlowIntent/the transition table rather than either screen
+    // writing NextState directly. ---
+
+    #[test]
+    fn menu_new_game_through_creation_confirm_reaches_fight() {
+        let mut app = test_app_with_menu();
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::MainMenu
+        );
+
+        press_menu(&mut app, crate::menu::MenuAction::NewGame);
+        app.update(); // transition applies; creation screen spawns
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::CharacterCreation,
+            "New Game routes menu -> creation through the flow table"
+        );
+
+        press(
+            &mut app,
+            CreationAction::SelectChoice(HeroChoice::Preset(HeroPreset::Ciobanul)),
+        );
+        press(&mut app, CreationAction::Confirm);
+        app.update(); // transition applies
+
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::Fight,
+            "confirming the hero routes creation -> fight through the flow table"
+        );
+        let player = app
+            .world()
+            .get_resource::<PlayerCharacter>()
+            .expect("PlayerCharacter stored on confirm");
+        assert_eq!(player.name, "Ciobanul");
+    }
+
+    #[test]
+    fn pressing_back_returns_to_the_main_menu_and_despawns_creation() {
+        let mut app = test_app_with_menu();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::CharacterCreation);
+        app.update();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::CharacterCreation
+        );
+
+        press(&mut app, CreationAction::Back);
+        app.update(); // transition applies; creation despawns, menu spawns
+
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::MainMenu,
+            "Back routes creation -> menu through the flow table"
+        );
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<(), With<CreationScreen>>()
+                .iter(app.world())
+                .count(),
+            0,
+            "creation screen fully despawned"
+        );
+        assert!(
+            app.world_mut()
+                .query_filtered::<(), With<crate::menu::MenuAction>>()
+                .iter(app.world())
+                .next()
+                .is_some(),
+            "main menu respawned with its action buttons"
         );
     }
 }
