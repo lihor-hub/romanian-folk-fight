@@ -138,6 +138,10 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin, FlowPlugin));
         app.init_state::<GameState>();
         app.update();
+        // The production initial state is `GameState::Loading` (#114), whose
+        // fall-through lives in `CorePlugin` — not added here. This suite
+        // exercises menu/creation routing, so start where those routes begin.
+        set_state(&mut app, GameState::MainMenu);
         app
     }
 
@@ -221,6 +225,7 @@ mod tests {
             (GameState::CharacterCreation, FlowIntent::BackToMenu),
         ];
         let all_states = [
+            GameState::Loading,
             GameState::MainMenu,
             GameState::CharacterCreation,
             GameState::Shop,

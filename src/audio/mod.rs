@@ -93,6 +93,9 @@ pub fn track_for(state: GameState, boss_fight: bool) -> Option<MusicTrack> {
         } else {
             MusicTrack::Arena
         }),
+        // Nothing has painted a frame yet (#114); silence until the menu is
+        // actually ready to play over.
+        GameState::Loading => None,
         GameState::FightResult | GameState::GameOver | GameState::Victory => None,
     }
 }
@@ -582,6 +585,12 @@ mod tests {
         // Native default is unlocked; force it for determinism.
         app.insert_resource(AudioUnlocked(true));
         app.update();
+        // This test app adds `AssetPlugin` (for `AudioPlugin`'s sake) but
+        // not `TextPlugin`/`ImagePlugin`, so `GameState::Loading`'s
+        // asset-readiness gate (#114) has no `Font`/`Image` asset types to
+        // ever resolve and would stall forever. Audio behavior isn't
+        // exercising the loading screen, so force straight into `MainMenu`.
+        set_state(&mut app, GameState::MainMenu);
         app
     }
 

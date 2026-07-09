@@ -304,6 +304,13 @@ mod tests {
     use crate::core::CorePlugin;
     use bevy::state::app::StatesPlugin;
 
+    /// Builds the app and settles it past `GameState::Loading` into
+    /// `MainMenu` before handing it back, so every test starts with the real
+    /// menu already spawned — same as under the old `#[default] MainMenu`
+    /// state, just requiring the two updates the headless fall-through now
+    /// takes (#114): one for `PreStartup` to run and the fall-through
+    /// transition to be queued, one for it to apply and `OnEnter(MainMenu)`
+    /// to spawn the screen.
     fn test_app() -> App {
         let mut app = App::new();
         app.add_plugins((
@@ -313,6 +320,8 @@ mod tests {
             crate::flow::FlowPlugin,
             MenuPlugin,
         ));
+        app.update();
+        app.update();
         app
     }
 
@@ -519,17 +528,30 @@ mod tests {
         .expect("plain data serializes")
     }
 
-    /// The menu app over an in-memory save store seeded with `json`.
+    /// The menu app over an in-memory save store seeded with `json`. Builds
+    /// its own app (rather than calling [`test_app`]) so the store is
+    /// inserted *before* the menu ever spawns: [`test_app`] now settles all
+    /// the way to `MainMenu` on its own (#114), which would spawn the menu
+    /// (and lock in `Continuă`'s enabled/disabled state) before this
+    /// function got a chance to insert the store it depends on.
     fn test_app_with_save(
         json: Option<&str>,
     ) -> (App, std::sync::Arc<std::sync::Mutex<Option<String>>>) {
-        let mut app = test_app();
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            crate::flow::FlowPlugin,
+            MenuPlugin,
+        ));
         let (store, cell) = SaveStore::in_memory();
         if let Some(json) = json {
             store.store(json);
         }
         app.insert_resource(store);
-        app.update();
+        app.update(); // PreStartup runs; no `AssetServer` -> fall-through queued.
+        app.update(); // fall-through applies; `OnEnter(MainMenu)` spawns the menu.
         (app, cell)
     }
 
