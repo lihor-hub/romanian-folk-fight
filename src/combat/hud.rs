@@ -20,6 +20,10 @@ use crate::theme::{
     BUTTON_PRESSED, CREAM, GOLD, HP_FILL, MOBILE_LOG_LINES, PANEL_LINEN, PanelTexture,
     STAMINA_FILL, TEXT_DISABLED, WALNUT, panel_bundle,
 };
+// Only used by the desktop-strip fit check and its test (#120): the runtime
+// paths never need to reason about the border inset directly.
+#[cfg(test)]
+use crate::theme::PANEL_BORDER_INSET;
 
 use super::engine::{CombatAction, CombatEvent, DuelDistance, REST_RESTORE};
 use super::systems::{
@@ -37,7 +41,11 @@ const HUD_TARGET_WIDTH: f32 = 800.0;
 const ACTION_BUTTON_COUNT: f32 = 7.0;
 const ACTION_BUTTON_WIDTH: f32 = 100.0;
 const ACTION_BUTTON_HEIGHT: f32 = 64.0;
-const ACTION_BAR_DESKTOP_GAP: f32 = 6.0;
+// Narrowed from 6.0 (#120): `panel_bundle` now floors this bar's padding at
+// `PANEL_BORDER_INSET` (24px, up from the 8px below), so the desktop strip
+// needs the extra ~4px of the 7-button row back to still fit
+// `HUD_TARGET_WIDTH`; see `desktop_action_strip_occupied_width`.
+const ACTION_BAR_DESKTOP_GAP: f32 = 5.0;
 const ACTION_BAR_PADDING: f32 = 8.0;
 const ACTION_BAR_DESKTOP_INSET: f32 = 10.0;
 
@@ -525,11 +533,20 @@ fn action_glyph(action: CombatAction) -> &'static str {
     }
 }
 
+/// The action bar's actual rendered padding after `panel_bundle` merges
+/// `ACTION_BAR_PADDING` with the border inset (#120) — whichever is larger,
+/// per side. Kept in sync with `merge_panel_padding`'s per-side rule so this
+/// fit check reflects reality instead of the pre-merge constant.
+#[cfg(test)]
+fn desktop_action_strip_effective_padding() -> f32 {
+    ACTION_BAR_PADDING.max(PANEL_BORDER_INSET)
+}
+
 #[cfg(test)]
 fn desktop_action_strip_occupied_width() -> f32 {
     ACTION_BUTTON_WIDTH * ACTION_BUTTON_COUNT
         + ACTION_BAR_DESKTOP_GAP * (ACTION_BUTTON_COUNT - 1.0)
-        + ACTION_BAR_PADDING * 2.0
+        + desktop_action_strip_effective_padding() * 2.0
 }
 
 #[cfg(test)]
@@ -1210,6 +1227,56 @@ mod tests {
             .count();
         assert_eq!(logs, 1, "one log text node");
         assert!(app.world().get_resource::<CombatLog>().is_some());
+    }
+
+    /// #120: every panel_bundle-decorated HUD node (fighter panels, the log
+    /// panel, the action bar) must keep at least `PANEL_BORDER_INSET` of
+    /// padding on all four sides, so nameplates, HP/stamina readouts, and the
+    /// combat log never render on top of the embroidered border.
+    #[test]
+    fn hud_panels_clear_the_border_inset_on_every_side() {
+        let mut app = test_app();
+
+        fn assert_padding_clears_inset(node: &Node, label: &str) {
+            for (side, val) in [
+                ("left", node.padding.left),
+                ("right", node.padding.right),
+                ("top", node.padding.top),
+                ("bottom", node.padding.bottom),
+            ] {
+                match val {
+                    Val::Px(px) => assert!(
+                        px >= PANEL_BORDER_INSET,
+                        "{label} {side} padding {px} below the {PANEL_BORDER_INSET}px border inset"
+                    ),
+                    other => panic!("{label} {side} padding expected Val::Px, got {other:?}"),
+                }
+            }
+        }
+
+        let mut fighter_panels = app
+            .world_mut()
+            .query_filtered::<&Node, With<FighterPanelRoot>>();
+        let mut count = 0;
+        for node in fighter_panels.iter(app.world()) {
+            assert_padding_clears_inset(node, "fighter panel");
+            count += 1;
+        }
+        assert_eq!(count, 2, "one fighter panel per side");
+
+        let log_node = app
+            .world_mut()
+            .query_filtered::<&Node, With<LogPanelRoot>>()
+            .single(app.world())
+            .expect("one log panel root");
+        assert_padding_clears_inset(log_node, "log panel");
+
+        let action_bar_node = app
+            .world_mut()
+            .query_filtered::<&Node, With<ActionBarRoot>>()
+            .single(app.world())
+            .expect("one action bar root");
+        assert_padding_clears_inset(action_bar_node, "action bar");
     }
 
     #[test]
