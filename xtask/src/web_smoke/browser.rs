@@ -338,6 +338,30 @@ impl Checkpoint {
         serde_json::from_str(&json_str).map_err(|e| format!("page status was not valid JSON: {e}"))
     }
 
+    /// Evaluates an arbitrary JS statement/expression, discarding any
+    /// result. Used by the `gold-journey` scenario (#187) to write review
+    /// commands into `localStorage` (see `src/review/mod.rs`'s module docs
+    /// for the seam this drives) -- `cold-menu` has no analogous need since
+    /// it never interacts with the page beyond reading status.
+    pub fn eval_unit(&self, script: &str) -> Result<(), String> {
+        self.tab
+            .evaluate(script, false)
+            .map_err(|e| format!("eval failed: {e}"))?;
+        Ok(())
+    }
+
+    /// Evaluates a JS expression and returns its result as a string, if any
+    /// (`null`/`undefined`/non-string results read back as `None`). Used by
+    /// `gold-journey` (#187) to poll the review seam's published
+    /// `localStorage` screen marker.
+    pub fn eval_string(&self, script: &str) -> Result<Option<String>, String> {
+        let remote = self
+            .tab
+            .evaluate(script, false)
+            .map_err(|e| format!("eval failed: {e}"))?;
+        Ok(remote.value.and_then(|v| v.as_str().map(str::to_string)))
+    }
+
     /// Captures a PNG screenshot of exactly the `width`x`height` viewport
     /// (CDP's `Page.captureScreenshot` `clip`, not a JS canvas readback --
     /// this captures the actual compositor output regardless of whether

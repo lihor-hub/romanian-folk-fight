@@ -15,6 +15,8 @@ pub mod flow;
 pub mod items;
 pub mod menu;
 pub mod progression;
+#[cfg(feature = "review")]
+pub mod review;
 pub mod roster;
 pub mod save;
 pub mod settings;
@@ -45,6 +47,12 @@ impl Plugin for GamePlugin {
         app.add_plugins(save::SavePlugin);
         app.add_plugins(settings::SettingsPlugin);
         app.add_plugins(shop::ShopPlugin);
+        // Review-only deterministic seam (#187): only compiled in behind the
+        // `review` cargo feature (see `Cargo.toml` and `src/review/mod.rs`'s
+        // module docs) -- absent entirely from the ordinary build/runtime
+        // path.
+        #[cfg(feature = "review")]
+        app.add_plugins(review::ReviewPlugin);
     }
 }
 

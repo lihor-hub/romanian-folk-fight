@@ -33,6 +33,7 @@ cargo xtask test journey        # one headless multi-step GameState journey
 cargo xtask check build-matrix  # native + release + wasm cargo check, no `dev` leakage
 cargo xtask assets check        # validate every manifest.toml sidecar + runtime refs/image integrity (#167, #185)
 cargo xtask web-smoke --scenario cold-menu   # build+serve the wasm game, verify the first-painted menu in a real browser (#168)
+cargo xtask web-smoke --scenario gold-journey  # deterministic menu->creation->fight->result->shop journey, review build (#187)
 cargo xtask pre-push            # fmt check, clippy, cargo test, build-matrix -- stops at first failure
 ```
 
@@ -229,6 +230,29 @@ normal runs never write them -- `--update-baselines` is the only thing that
 does. Dedicated workflow: `.github/workflows/web-smoke.yml`. See
 `src/web_smoke/mod.rs` for how a later scenario registers without touching
 the harness core.
+
+### `web-smoke --scenario gold-journey` (#187, a child of #144)
+
+Extends `web-smoke` per the pattern above: a new module
+(`xtask/src/web_smoke/gold_journey.rs`) plus one match arm, no dispatcher/
+CLI/harness-core change. Drives a **deterministic** review-only build
+(`trunk build --release --features review`, served from its own
+`dist-gold-journey/`, never `dist/`) through the full player loop -- menu ->
+character creation (a preset selected) -> first fight -> fight result -> shop
+-- at both viewports (10 captures total), via `src/review/mod.rs`'s
+`window.localStorage`-based seam: seed the combat RNG, pick a named preset,
+and advance screens by writing the same player-triggered `FlowIntent`s a
+button click writes (never `NextState<GameState>` directly). Readiness per
+checkpoint is the review seam's published current-screen marker plus
+`cold-menu`'s existing frame-stability contract -- no fixed sleeps. The fixed
+seed/preset/autoplay policy is pinned by a native unit test in
+`src/review/mod.rs` (`gold_journey_seed_wins_the_first_duel`) using the pure
+combat engine directly, so the whole journey's outcome (not just its
+screens) is reproducible run to run. Baselines live at
+`tests/visual/baselines/gold-journey/<viewport>-<checkpoint>.png`; the
+review seam itself is compiled in only behind the `review` cargo feature
+(see `Cargo.toml` and `src/review/mod.rs`), never part of an ordinary
+`cargo build`/`--release`/`trunk build --release`.
 
 ### `pre-push`
 
