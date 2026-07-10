@@ -75,6 +75,99 @@ pub enum Diagnostic {
         path: PathBuf,
         detail: String,
     },
+
+    // --- #185: runtime-reference and image-integrity validation ---
+    /// Production Rust/HTML code references an asset whose sidecar record
+    /// has `status` other than `runtime`, and no
+    /// `validate::refs::RUNTIME_REFERENCE_EXEMPTIONS` entry covers it.
+    IllegalRuntimeReference {
+        file: PathBuf,
+        line: usize,
+        reference: String,
+        id: String,
+        status: String,
+    },
+    /// Production Rust/HTML code references a path with no sidecar record
+    /// (or ignore entry) at all.
+    UnresolvedRuntimeReference {
+        file: PathBuf,
+        line: usize,
+        reference: String,
+    },
+    /// A `RUNTIME_REFERENCE_EXEMPTIONS` entry no longer matches any
+    /// discovered production reference -- keeps the list honest, mirroring
+    /// `StaleIgnore`.
+    StaleRuntimeReferenceExemption { id: String },
+    /// A record's recorded `dimensions` do not match the image's actual
+    /// decoded pixel size.
+    DimensionMismatch {
+        sidecar: PathBuf,
+        id: String,
+        recorded: [u32; 2],
+        actual: [u32; 2],
+    },
+    /// An image file exists and is covered by a record, but could not be
+    /// decoded as a valid raster image.
+    ImageDecodeError {
+        sidecar: PathBuf,
+        id: String,
+        path: PathBuf,
+        error: String,
+    },
+    /// A rig-attachment record's `crop` rectangle (when known -- i.e. not
+    /// the literal `"unknown"`) is malformed or falls outside its source
+    /// sheet's bounds.
+    CropOutOfBounds {
+        sidecar: PathBuf,
+        id: String,
+        crop: String,
+        detail: String,
+    },
+    /// A rig-attachment record's `pivot` is implausibly far from its part's
+    /// own `dimensions` -- almost certainly a data-entry error rather than
+    /// a genuine rig offset.
+    PivotOutOfBounds {
+        sidecar: PathBuf,
+        id: String,
+        pivot: [f32; 2],
+        dimensions: [u32; 2],
+        tolerance: f32,
+    },
+    /// A rig-attachment record's `display` size is not a finite, positive
+    /// width and height.
+    InvalidDisplaySize {
+        sidecar: PathBuf,
+        id: String,
+        display: [f32; 2],
+    },
+    /// A runtime image is fully transparent: every decoded pixel has
+    /// alpha 0.
+    EmptyAlpha {
+        sidecar: PathBuf,
+        id: String,
+        path: PathBuf,
+    },
+    /// A runtime image contains chroma-key fringe pixels (magenta/green
+    /// background-removal remnants) above the documented visibility
+    /// tolerance.
+    ChromaKeyFringe {
+        sidecar: PathBuf,
+        id: String,
+        path: PathBuf,
+        count: usize,
+        max_alpha: u8,
+    },
+    /// A rig-attachment record's `display` aspect ratio is distorted from
+    /// its source `dimensions` aspect ratio beyond the documented
+    /// tolerance.
+    AspectDistortion {
+        sidecar: PathBuf,
+        id: String,
+        dimensions: [u32; 2],
+        display: [f32; 2],
+        ratio: f32,
+        tolerance: f32,
+    },
 }
 
 impl fmt::Display for Diagnostic {
@@ -157,6 +250,125 @@ impl fmt::Display for Diagnostic {
             Diagnostic::CreditsDrift { id, path, detail } => {
                 write!(f, "assets/CREDITS.md: {id} ({}): {detail}", path.display())
             }
+            Diagnostic::IllegalRuntimeReference {
+                file,
+                line,
+                reference,
+                id,
+                status,
+            } => write!(
+                f,
+                "{}:{line}: production reference {reference:?} resolves to asset `{id}` \
+                 with field `status` = {status:?}, expected `runtime` (or a named entry in \
+                 validate::refs::RUNTIME_REFERENCE_EXEMPTIONS)",
+                file.display()
+            ),
+            Diagnostic::UnresolvedRuntimeReference {
+                file,
+                line,
+                reference,
+            } => write!(
+                f,
+                "{}:{line}: production reference {reference:?} does not resolve to any \
+                 sidecar record or ignore entry under assets/",
+                file.display()
+            ),
+            Diagnostic::StaleRuntimeReferenceExemption { id } => write!(
+                f,
+                "validate::refs::RUNTIME_REFERENCE_EXEMPTIONS: entry for asset `{id}` no \
+                 longer matches any discovered production reference; remove it"
+            ),
+            Diagnostic::DimensionMismatch {
+                sidecar,
+                id,
+                recorded,
+                actual,
+            } => write!(
+                f,
+                "{}: {id}: field `dimensions` = {recorded:?} does not match the image's actual \
+                 decoded size {actual:?}",
+                sidecar.display()
+            ),
+            Diagnostic::ImageDecodeError {
+                sidecar,
+                id,
+                path,
+                error,
+            } => write!(
+                f,
+                "{}: {id}: field `path` = {} could not be decoded as a valid image: {error}",
+                sidecar.display(),
+                path.display()
+            ),
+            Diagnostic::CropOutOfBounds {
+                sidecar,
+                id,
+                crop,
+                detail,
+            } => write!(
+                f,
+                "{}: {id}: field `crop` = {crop:?} is out of bounds: {detail}",
+                sidecar.display()
+            ),
+            Diagnostic::PivotOutOfBounds {
+                sidecar,
+                id,
+                pivot,
+                dimensions,
+                tolerance,
+            } => write!(
+                f,
+                "{}: {id}: field `pivot` = {pivot:?} exceeds the sanity bound of \
+                 +/-{tolerance:.1} (derived from `dimensions` = {dimensions:?}); expected both \
+                 components within +/-{tolerance:.1}",
+                sidecar.display()
+            ),
+            Diagnostic::InvalidDisplaySize {
+                sidecar,
+                id,
+                display,
+            } => write!(
+                f,
+                "{}: {id}: field `display` = {display:?} is not a finite, positive width and \
+                 height",
+                sidecar.display()
+            ),
+            Diagnostic::EmptyAlpha { sidecar, id, path } => write!(
+                f,
+                "{}: {id}: field `path` = {} decodes to an image whose pixels are all fully \
+                 transparent (alpha 0 everywhere), expected at least one visible pixel",
+                sidecar.display(),
+                path.display()
+            ),
+            Diagnostic::ChromaKeyFringe {
+                sidecar,
+                id,
+                path,
+                count,
+                max_alpha,
+            } => write!(
+                f,
+                "{}: {id}: field `path` = {} contains {count} chroma-key-colored pixel(s) \
+                 (magenta/green, max alpha {max_alpha}/255) at or above the visibility floor; \
+                 expected no chroma-key remnants above that floor",
+                sidecar.display(),
+                path.display()
+            ),
+            Diagnostic::AspectDistortion {
+                sidecar,
+                id,
+                dimensions,
+                display,
+                ratio,
+                tolerance,
+            } => write!(
+                f,
+                "{}: {id}: field `display` = {display:?} distorts the aspect ratio of \
+                 `dimensions` = {dimensions:?} by a factor of {ratio:.2}x, expected within \
+                 [{:.2}x, {tolerance:.2}x]",
+                sidecar.display(),
+                1.0 / tolerance
+            ),
         }
     }
 }

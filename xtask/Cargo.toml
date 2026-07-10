@@ -24,10 +24,22 @@ description = "Root cargo-xtask dispatcher: focused Rust verification gates for 
 # the page. None of these are game-binary dependencies (the root `Cargo.toml`
 # has no browser/image deps) -- they live here, in the dev-tooling crate,
 # never in the shipped wasm/native binary.
+#
+# `image` is additionally used by #185
+# (`xtask/src/assets/validate/image_checks.rs`): validating
+# recorded-vs-actual dimensions, empty alpha, and chroma-key fringe requires
+# decoding real pixels, and a hand-rolled PNG decoder is not worth
+# maintaining for a dev-only tool. `default-features = false` plus
+# `features = ["png"]` keeps this to just the one codec every asset in this
+# repo actually uses (see `schema::expected_extensions`) -- no
+# jpeg/gif/tiff/webp/etc. decoders, in the same dependency-conservative
+# spirit as the rest of this file. Like every dependency above, it is
+# `xtask`-only; the game crate (root `Cargo.toml`) never depends on it and
+# must not gain it later either.
 [dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
 toml = { version = "0.9", default-features = false, features = ["parse", "display", "serde"] }
 headless_chrome = "1"
 tiny_http = "0.12"
-image = { version = "0.25", default-features = false, features = ["png"] }
 serde_json = "1"

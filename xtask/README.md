@@ -31,7 +31,7 @@ cargo xtask --help              # lists every command, including this file's and
 cargo xtask test logic          # fast pure-logic unit tests
 cargo xtask test journey        # one headless multi-step GameState journey
 cargo xtask check build-matrix  # native + release + wasm cargo check, no `dev` leakage
-cargo xtask assets check        # validate every assets/**/manifest.toml sidecar (#167)
+cargo xtask assets check        # validate every manifest.toml sidecar + runtime refs/image integrity (#167, #185)
 cargo xtask web-smoke --scenario cold-menu   # build+serve the wasm game, verify the first-painted menu in a real browser (#168)
 cargo xtask pre-push            # fmt check, clippy, cargo test, build-matrix -- stops at first failure
 ```
@@ -140,9 +140,69 @@ that honestly rather than inventing coordinates. `attachment`/`pivot`/
 `display` on the fighter body-part sidecars are point-in-time snapshots of
 the rest-pose values authored in `src/cutout.rs`, not cross-referenced
 against that live source by this check (a genuine future drift risk; see
-each `fighters/*/runtime/manifest.toml` for detail). This module also does
-not implement image-integrity rules (alpha/chroma-key/pixel decoding) or a
-review gallery -- those remain later, independently owned #141 children.
+each `fighters/*/runtime/manifest.toml` for detail). This module does not
+implement a review gallery -- that remains a later, independently owned
+#141 child. Runtime-reference and image-integrity validation *are*
+implemented, in `validate/` -- see the next section.
+
+### Runtime-reference and image-integrity validation (#185, a child of #141)
+
+`cargo xtask assets check` also runs `xtask/src/assets/validate/`'s rules
+against the same aggregate, in the same run (no new subcommand -- see
+`validate/mod.rs`'s doc comment for the module layout). This extends #167's
+sidecar contract without changing it: every rule below only reads the
+aggregate #167 already builds.
+
+**Production-reference discovery ([`validate/refs.rs`](src/assets/validate/refs.rs)).**
+Every `.rs` file under `src/` and `index.html` is scanned for asset-path-like
+string literals (one matching `schema::expected_extensions`, restricted to
+path-safe characters so prose that merely *mentions* a path -- e.g. the
+in-game credits line pointing at `assets/CREDITS.md` -- is never mistaken
+for a load path). A literal inside a `#[cfg(test)]`-attributed item is
+excluded (see [`validate/rust_scan.rs`](src/assets/validate/rust_scan.rs)
+for the small tokenizer that finds those item boundaries), so deliberately
+broken test fixtures (e.g. `"fonts/does-not-exist.ttf"` in
+`src/core/mod.rs`) are never flagged. Every discovered reference must
+resolve to a sidecar record with `status = "runtime"`; a reference to a
+`source`/`legacy` record fails unless a named, documented entry in
+`RUNTIME_REFERENCE_EXEMPTIONS` covers it (empty today -- every production
+reference in this repository already resolves to a runtime record), and a
+reference matching no record at all fails too. An exemption entry that
+stops matching any discovered reference is itself flagged
+(`StaleRuntimeReferenceExemption`), mirroring #167's `StaleIgnore`.
+
+**Metadata bounds ([`validate/bounds.rs`](src/assets/validate/bounds.rs)).**
+`pivot`/`display` are rig-space rest-pose values from `src/cutout.rs`/
+`src/items/visuals.rs`, not pixel coordinates inside the record's own
+image (see that file's module docs for the full argument, including why a
+literal "must be inside the image" reading of the issue would reject
+nearly every real rig part). What's checked: `display` must be a finite,
+positive size; `pivot` must be finite and within
+`PIVOT_SANITY_MULTIPLIER` (6x) times the part's own `dimensions` --
+generous headroom above the current inventory's highest ratio (~1.63x),
+catching only gross data-entry errors; `crop`, when known (not `"unknown"`
+-- see the existing known limitation above), is checked as a pixel
+rectangle against its `source_sheet`'s recorded dimensions; and
+`display`'s aspect ratio vs. `dimensions`'s aspect ratio must be within
+`ASPECT_DISTORTION_TOLERANCE` (3x) of each other, generous enough to
+accept this rig's intentional non-uniform limb scaling (currently up to
+2.27x) while still catching one genuine outlier
+(`fighters.strigoi.runtime.foot-back`, 4.13x), documented as a known
+failure in `ASPECT_DISTORTION_KNOWN_FAILURES` rather than swallowed by a
+looser tolerance.
+
+**Image integrity ([`validate/image_checks.rs`](src/assets/validate/image_checks.rs)).**
+The only module that decodes real pixels (the `image` crate, `png` feature
+only -- an `xtask`-only dependency, never added to the game crate). For
+every raster image record: recorded `dimensions` are compared against the
+actual decoded size; for `status = "runtime"` records only, every pixel is
+checked for full transparency (an all-alpha-0 image fails) and for
+chroma-key fringe -- a pixel within `CHROMA_KEY_TOLERANCE` (40, on a 0-255
+per-channel scale) of pure magenta or green *and* at or above
+`CHROMA_KEY_ALPHA_FLOOR` (8/255, ~3% opacity) fails. That floor is set from
+measurement: every chroma-key-colored pixel found across the current
+runtime PNG inventory sits at alpha <= 2/255, invisible background-removal
+dust that this check deliberately does not chase.
 
 ### `web-smoke --scenario cold-menu` (#168, a child of #144)
 

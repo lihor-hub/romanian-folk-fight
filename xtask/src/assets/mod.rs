@@ -1,17 +1,20 @@
 //! Asset manifest sidecars and the `cargo xtask assets check` validator
-//! (#167, a child of #141). Owned end to end by this module -- later,
-//! independently owned #141 children (image-integrity rules, the review
+//! (#167, a child of #141), plus runtime-reference and image-integrity
+//! validation (#185, a child of #141) in `validate/`. Owned end to end by
+//! this module -- later, independently owned #141 children (the review
 //! gallery) add their own modules alongside this one rather than editing it.
 //!
-//! See `schema.rs` for the sidecar schema/version and `aggregate.rs` for the
-//! aggregation/coverage/duplicate-detection pass. `xtask/README.md` documents
-//! the command surface and known limitations.
+//! See `schema.rs` for the sidecar schema/version, `aggregate.rs` for the
+//! aggregation/coverage/duplicate-detection pass, and `validate/` for the
+//! #185 rules. `xtask/README.md` documents the command surface and known
+//! limitations.
 
 pub mod aggregate;
 pub mod credits;
 pub mod diagnostics;
 pub mod discover;
 pub mod schema;
+pub mod validate;
 
 use std::fs;
 use std::path::Path;
@@ -21,10 +24,11 @@ use diagnostics::Diagnostic;
 
 /// Everything `cargo xtask assets check` needs to report: the aggregate
 /// (including its own diagnostics), the credits cross-check diagnostics,
-/// and the coverage summary.
+/// the #185 validation diagnostics, and the coverage summary.
 pub struct CheckResult {
     pub aggregate: Aggregate,
     pub credits_diagnostics: Vec<Diagnostic>,
+    pub validate_diagnostics: Vec<Diagnostic>,
     pub coverage: CoverageSummary,
 }
 
@@ -34,6 +38,7 @@ impl CheckResult {
             .diagnostics
             .iter()
             .chain(self.credits_diagnostics.iter())
+            .chain(self.validate_diagnostics.iter())
             .collect()
     }
 
@@ -43,9 +48,11 @@ impl CheckResult {
 }
 
 /// Runs the full check: builds the aggregate from every sidecar under
-/// `assets_root`, then cross-checks `assets/CREDITS.md` at `credits_path`
-/// against it.
-pub fn run_check(assets_root: &Path, credits_path: &Path) -> CheckResult {
+/// `assets_root`, cross-checks `assets/CREDITS.md` at `credits_path`
+/// against it, then runs #185's runtime-reference/image-integrity rules
+/// (which additionally need `workspace_root` to locate `src/` and
+/// `index.html`).
+pub fn run_check(assets_root: &Path, credits_path: &Path, workspace_root: &Path) -> CheckResult {
     let built = aggregate::build(assets_root);
     let coverage = aggregate::summarize(assets_root, &built);
 
@@ -57,9 +64,12 @@ pub fn run_check(assets_root: &Path, credits_path: &Path) -> CheckResult {
         }],
     };
 
+    let validate_diagnostics = validate::run(workspace_root, assets_root, &built);
+
     CheckResult {
         aggregate: built,
         credits_diagnostics,
+        validate_diagnostics,
         coverage,
     }
 }
