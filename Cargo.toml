@@ -42,6 +42,16 @@ syn = { version = "2", features = ["full", "visit"] }
 [features]
 # Fast incremental native builds; never enable for release or wasm builds.
 dev = ["bevy/dynamic_linking"]
+# Review-only deterministic seam (#187, `src/review/`): a JS<->game bridge
+# over `window.localStorage` that lets the browser-smoke harness
+# (`cargo xtask web-smoke --scenario gold-journey`) seed combat, pick a
+# creation preset, and drive navigation through the existing `FlowIntent`
+# vocabulary instead of pixel-coordinate clicking or random play. Never
+# enabled by `cargo build`/`--release` or the ordinary `trunk build
+# --release` (`Trunk.toml` never passes it): the module is `#[cfg(feature =
+# "review")]`-gated end to end, so it is structurally absent from the shipped
+# artifact, not merely hidden behind a runtime flag.
+review = []
 
 # Enable high optimizations for dependencies (including Bevy), but keep our code fast to build.
 [profile.dev]

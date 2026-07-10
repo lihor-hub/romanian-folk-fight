@@ -70,8 +70,11 @@ enum CreationLayoutRole {
 }
 
 /// Which appearance selector row a label or button belongs to.
+/// `pub(crate)` only because [`CreationAction`] (whose visibility the
+/// `review` seam needs, see its doc comment) carries it in two variants;
+/// nothing outside this module uses it.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-enum AppearanceField {
+pub(crate) enum AppearanceField {
     SkinTone,
     Build,
     Hair,
@@ -89,9 +92,13 @@ impl AppearanceField {
     }
 }
 
-/// What a creation-screen button does when pressed.
+/// What a creation-screen button does when pressed. `pub(crate)` (rather
+/// than private) solely so the `review`-feature seam (`src/review/mod.rs`,
+/// #187) can locate the Confirm/Back buttons and press them exactly like a
+/// player's click; nothing outside this module constructs or matches it
+/// otherwise.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-enum CreationAction {
+pub(crate) enum CreationAction {
     SelectChoice(HeroChoice),
     PreviousName,
     NextName,

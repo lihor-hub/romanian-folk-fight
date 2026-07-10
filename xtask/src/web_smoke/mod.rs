@@ -67,18 +67,20 @@ pub mod baseline;
 pub mod browser;
 mod cold_menu;
 pub mod error;
+mod gold_journey;
 pub mod server;
 
 pub use error::SmokeError;
 
-/// Dispatches `--scenario <name>` to the matching scenario module. The only
-/// scenario today is `cold-menu` (#168); see the module docs above for how a
-/// later scenario adds itself here without touching anything upstream.
+/// Dispatches `--scenario <name>` to the matching scenario module:
+/// `cold-menu` (#168) and `gold-journey` (#187, the exact extension pattern
+/// the module docs above describe -- a new module plus this one match arm).
 pub fn run_scenario(scenario: &str, update_baselines: bool) -> Result<(), SmokeError> {
     match scenario {
         "cold-menu" => cold_menu::run(update_baselines),
+        "gold-journey" => gold_journey::run(update_baselines),
         other => Err(SmokeError::usage(format!(
-            "unknown --scenario `{other}` (known scenarios: cold-menu)"
+            "unknown --scenario `{other}` (known scenarios: cold-menu, gold-journey)"
         ))),
     }
 }
