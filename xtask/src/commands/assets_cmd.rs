@@ -1,6 +1,8 @@
 //! `cargo xtask assets check` -- validates every per-directory manifest
-//! sidecar under `assets/`, derives one in-memory aggregate, and reports
-//! coverage (#167, a child of #141).
+//! sidecar under `assets/`, derives one in-memory aggregate, reports
+//! coverage (#167, a child of #141), and additionally validates production
+//! runtime references and image integrity against that same aggregate
+//! (#185, a child of #141; see `crate::assets::validate`).
 //!
 //! Unlike `test_cmd`/`check_cmd`, this command's work is pure in-process
 //! Rust (parsing TOML, walking the filesystem) rather than a spawned
@@ -20,11 +22,12 @@ use std::time::Instant;
 use crate::assets::CheckResult;
 use crate::process::{StepError, StepReport, artifacts_dir, print_summary};
 
-pub const ABOUT: &str = "Per-directory asset manifest sidecar inventory and validation.";
+pub const ABOUT: &str = "Per-directory asset manifest sidecar inventory, runtime-reference, and image-integrity validation.";
 
 pub const SUBCOMMANDS: &[(&str, &str)] = &[(
     "check",
-    "Load every assets/**/manifest.toml sidecar, derive the aggregate, and report coverage.",
+    "Load every assets/**/manifest.toml sidecar, derive the aggregate, validate runtime \
+     references and image integrity, and report coverage.",
 )];
 
 pub fn run(sub: &str) -> Result<(), StepError> {
@@ -38,11 +41,12 @@ fn check() -> Result<(), StepError> {
     let label = "assets check";
     println!("\n==> {label}");
 
-    let assets_root = workspace_root().join("assets");
+    let root = workspace_root();
+    let assets_root = root.join("assets");
     let credits_path = assets_root.join("CREDITS.md");
 
     let start = Instant::now();
-    let result = crate::assets::run_check(&assets_root, &credits_path);
+    let result = crate::assets::run_check(&assets_root, &credits_path, &root);
     let elapsed = start.elapsed();
 
     let report_text = render_report(&result);
@@ -142,6 +146,25 @@ fn render_report(result: &CheckResult) -> String {
                 ignore.full_path.display(),
                 ignore.reason
             ));
+        }
+    }
+
+    use crate::assets::validate::bounds::ASPECT_DISTORTION_KNOWN_FAILURES;
+    use crate::assets::validate::refs::RUNTIME_REFERENCE_EXEMPTIONS;
+
+    if !RUNTIME_REFERENCE_EXEMPTIONS.is_empty() {
+        out.push_str("\nRuntime-reference compatibility exemptions (#185):\n");
+        for (id, reason) in RUNTIME_REFERENCE_EXEMPTIONS {
+            out.push_str(&format!("  {id:<40} {reason}\n"));
+        }
+    }
+
+    if !ASPECT_DISTORTION_KNOWN_FAILURES.is_empty() {
+        out.push_str(
+            "\nAspect-distortion known failures (#185, see xtask/src/assets/validate/bounds.rs):\n",
+        );
+        for (id, reason) in ASPECT_DISTORTION_KNOWN_FAILURES {
+            out.push_str(&format!("  {id:<40} {reason}\n"));
         }
     }
 
