@@ -194,12 +194,15 @@ pub struct PanelTexture {
 }
 
 /// The 9-slice mode used everywhere the panel border is applied: corners stay
-/// crisp at any panel size, sides and center stretch to fill it.
+/// crisp at any panel size, the side embroidery tiles along each edge, and
+/// the center stretches to fill it.
 pub fn panel_slice_mode() -> NodeImageMode {
     NodeImageMode::Sliced(TextureSlicer {
         border: BorderRect::all(PANEL_BORDER_INSET),
+        // The texture center is a flat translucent dark drawn over
+        // `PANEL_LINEN`, so stretching it is correct.
         center_scale_mode: SliceScaleMode::Stretch,
-        sides_scale_mode: SliceScaleMode::Stretch,
+        sides_scale_mode: SliceScaleMode::Tile { stretch_value: 1.0 },
         max_corner_scale: 1.0,
     })
 }
@@ -265,6 +268,10 @@ mod tests {
             panic!("panel_slice_mode must be Sliced");
         };
         assert_eq!(slicer.border, BorderRect::all(PANEL_BORDER_INSET));
+        assert_eq!(
+            slicer.sides_scale_mode,
+            SliceScaleMode::Tile { stretch_value: 1.0 }
+        );
         assert_eq!(slicer.max_corner_scale, 1.0);
     }
 
