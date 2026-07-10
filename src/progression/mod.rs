@@ -4,8 +4,11 @@
 //!
 //! The plugin watches the same [`CombatLogEvent`] stream as the HUD log and
 //! the announcer; on [`CombatEvent::Defeated`] it records a [`FightOutcome`]
-//! and, after a short delay so the final blow stays visible, transitions to
-//! [`GameState::FightResult`] or [`GameState::GameOver`].
+//! and, after a short delay so the final blow stays visible, emits a
+//! [`FlowIntent`] (`ResolveVictory`, `ResolveDefeat`, or `RunWon`) for
+//! [`crate::flow::apply_flow_intents`] — the sole runtime writer of
+//! `NextState<GameState>` (#166) — to route to [`GameState::FightResult`],
+//! [`GameState::GameOver`], or [`GameState::Victory`].
 
 pub mod level;
 pub mod result_ui;
@@ -18,6 +21,7 @@ use bevy::prelude::*;
 use crate::combat::{CombatEvent, CombatLogEvent, CombatSide};
 use crate::core::{GameState, despawn_screen};
 use crate::creation::PlayerCharacter;
+use crate::flow::FlowIntent;
 use crate::roster::LadderProgress;
 use crate::save::SaveRequested;
 use crate::shop::{OwnedItems, PlayerEquipment};
@@ -119,7 +123,10 @@ impl Plugin for ProgressionPlugin {
             .add_systems(OnEnter(GameState::Fight), clear_fight_outcome)
             .add_systems(
                 Update,
-                (detect_fight_end, tick_fight_end_delay)
+                (
+                    detect_fight_end,
+                    tick_fight_end_delay.in_set(crate::flow::FlowIntentEmission),
+                )
                     .chain()
                     .run_if(in_state(GameState::Fight)),
             )
@@ -237,14 +244,23 @@ fn detect_fight_end(
 /// player's victory goes to the result screen — or, when the fallen opponent
 /// was the lap-1 final boss, to the victory ending (#26) — and their defeat
 /// to game over. Later laps keep the loop behavior.
+///
+/// #166: this no longer writes `NextState<GameState>` itself. It emits the
+/// matching automated [`FlowIntent`] (`ResolveVictory`/`ResolveDefeat`/
+/// `RunWon`) and joins the [`crate::flow::FlowIntentEmission`] system set, so
+/// [`crate::flow::apply_flow_intents`] — the sole runtime writer of
+/// `NextState<GameState>` — applies the transition later in the same
+/// `Update` pass, preserving the exact two-`app.update()` timing the fight-
+/// end delay had before (the transition is queued the frame the delay
+/// expires, and applied on the following frame's state-transition pass).
 fn tick_fight_end_delay(
     mut commands: Commands,
     time: Res<Time>,
     delay: Option<ResMut<FightEndDelay>>,
     outcome: Option<Res<FightOutcome>>,
     ladder: Option<Res<LadderProgress>>,
-    mut next_state: ResMut<NextState<GameState>>,
     mut victories: MessageWriter<VictoryEvent>,
+    mut flow_intents: MessageWriter<FlowIntent>,
 ) {
     let (Some(mut delay), Some(outcome)) = (delay, outcome) else {
         return;
@@ -255,14 +271,15 @@ fn tick_fight_end_delay(
     commands.remove_resource::<FightEndDelay>();
     let run_won = outcome.winner == CombatSide::Player
         && ladder.is_some_and(|ladder| ladder.is_final_lap_one_fight());
-    next_state.set(match outcome.winner {
+    let intent = match outcome.winner {
         CombatSide::Player if run_won => {
             victories.write(VictoryEvent);
-            GameState::Victory
+            FlowIntent::RunWon
         }
-        CombatSide::Player => GameState::FightResult,
-        CombatSide::Enemy => GameState::GameOver,
-    });
+        CombatSide::Player => FlowIntent::ResolveVictory,
+        CombatSide::Enemy => FlowIntent::ResolveDefeat,
+    };
+    flow_intents.write(intent);
 }
 
 /// Credits the victory payout — galbeni to the wallet, XP to [`Level`] with

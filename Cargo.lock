@@ -4722,6 +4722,7 @@ dependencies = [
  "rand_chacha 0.10.0",
  "serde",
  "serde_json",
+ "syn",
  "ttf-parser",
  "web-sys",
 ]
