@@ -15,10 +15,11 @@ use crate::character::{EnemyFighter, FighterName, Health, PlayerFighter, Stamina
 use crate::core::{LetterboxRect, UiFont, ViewportInfo};
 use crate::menu::DisabledButton;
 use crate::progression::Level;
+use crate::roster::Boss;
 use crate::theme::{
-    ACTION_BUTTON_TOUCH_TARGET, BAR_TRACK, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL,
-    BUTTON_PRESSED, CREAM, GOLD, HP_FILL, MOBILE_LOG_LINES, PANEL_LINEN, PanelTexture,
-    STAMINA_FILL, TEXT_DISABLED, WALNUT, panel_bundle,
+    ACTION_BUTTON_TOUCH_TARGET, BAR_TRACK, BOSS_LABEL_COLOR, BUTTON_DISABLED, BUTTON_HOVERED,
+    BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD, HP_FILL, MOBILE_LOG_LINES, PANEL_LINEN,
+    PanelTexture, STAMINA_FILL, TEXT_DISABLED, WALNUT, panel_bundle,
 };
 // Only used by the desktop-strip fit check and its test (#120): the runtime
 // paths never need to reason about the border inset directly.
@@ -727,26 +728,43 @@ pub(super) fn update_bar_fills(
 /// Query filter: any fighter datum a HUD label displays changed this frame.
 type FighterDataChanged = Or<(Changed<FighterName>, Changed<Health>, Changed<Stamina>)>;
 
+/// Query for optional Boss component on the enemy fighter.
+type EnemyWithMaybeBoss<'w, 's> = Query<'w, 's, Option<&'static Boss>, With<EnemyFighter>>;
+
 /// Refreshes the name and `current/max` labels from the fighter components.
 /// Skips frames where no fighter data changed, so the string formatting only
-/// runs when a label could actually differ.
+/// runs when a label could actually differ. For boss opponents, tints the name
+/// label with `BOSS_LABEL_COLOR`.
 pub(super) fn update_labels(
     player: PlayerData,
     enemy: EnemyData,
     level: Option<Res<Level>>,
+    enemy_boss: EnemyWithMaybeBoss,
     changed: Query<(), FighterDataChanged>,
-    mut labels: Query<(&HudLabel, &mut Text)>,
+    mut labels: Query<(&HudLabel, &mut Text, &mut TextColor)>,
 ) {
     if changed.is_empty() {
         return;
     }
-    for (label, mut text) in &mut labels {
+    let enemy_is_boss = enemy_boss.single().ok().flatten().is_some();
+    for (label, mut text, mut color) in &mut labels {
         let side = match label {
             HudLabel::Name(side) | HudLabel::Pool { side, .. } => *side,
         };
         let Some((name, health, stamina)) = side_data(side, &player, &enemy) else {
             continue;
         };
+        match label {
+            HudLabel::Name(CombatSide::Enemy) if enemy_is_boss => {
+                color.0 = BOSS_LABEL_COLOR;
+            }
+            HudLabel::Name(_) => {
+                color.0 = CREAM;
+            }
+            _ => {
+                // Pool labels stay as their default
+            }
+        }
         let value = match label {
             HudLabel::Name(_) => match level.as_deref() {
                 // The player's panel carries their level; enemy levels come
@@ -1656,5 +1674,55 @@ mod tests {
             .count();
         assert_eq!(buttons, 0);
         assert!(app.world().get_resource::<CombatLog>().is_none());
+    }
+
+    #[test]
+    fn regular_opponent_nameplate_uses_cream_text_color() {
+        let mut app = test_app();
+        // Find the enemy nameplate text
+        let enemy_name_color = app
+            .world_mut()
+            .query::<(&HudLabel, &TextColor)>()
+            .iter(app.world())
+            .find(|(label, _)| **label == HudLabel::Name(CombatSide::Enemy))
+            .map(|(_, color)| color.0)
+            .expect("enemy nameplate exists");
+        assert_eq!(
+            enemy_name_color, CREAM,
+            "regular opponent nameplate uses CREAM"
+        );
+    }
+
+    #[test]
+    fn boss_opponent_nameplate_uses_boss_label_color() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, FlowPlugin));
+        app.add_plugins((ArenaPlugin, CombatPlugin));
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.insert_resource(PlayerCharacter {
+            name: "Făt-Frumos".to_string(),
+            attributes: PLAYER_ATTRIBUTES,
+            appearance: crate::character::PlayerAppearance::default(),
+        });
+        app.insert_resource(crate::roster::LadderProgress(4)); // Muma Pădurii, the first boss
+        app.insert_resource(CombatRng(strikes_rng(4)));
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Fight);
+        app.update();
+
+        let enemy_name_color = app
+            .world_mut()
+            .query::<(&HudLabel, &TextColor)>()
+            .iter(app.world())
+            .find(|(label, _)| **label == HudLabel::Name(CombatSide::Enemy))
+            .map(|(_, color)| color.0)
+            .expect("enemy nameplate exists");
+        assert_eq!(
+            enemy_name_color,
+            crate::theme::BOSS_LABEL_COLOR,
+            "boss opponent nameplate uses BOSS_LABEL_COLOR"
+        );
     }
 }
