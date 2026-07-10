@@ -182,8 +182,10 @@ impl Default for ButtonStyle {
 pub const PANEL_BORDER_PATH: &str = "ui/panel_border.png";
 
 /// Pixel inset of the panel texture's 9-slice border (matches `BORDER` in
-/// `scripts/generate-ui-panel.py`).
-const PANEL_BORDER_INSET: f32 = 24.0;
+/// `scripts/generate-ui-panel.py`). `pub(crate)` so other modules (e.g. the
+/// combat HUD's desktop action-strip fit check) can reason about the
+/// effective content inset a paneled node ends up with.
+pub(crate) const PANEL_BORDER_INSET: f32 = 24.0;
 
 /// The panel-border texture handle, loaded at startup by [`ThemePlugin`].
 /// Defaults to `Handle::default()` so headless tests (no `AssetPlugin`) keep
@@ -217,10 +219,45 @@ pub fn panel_border(panel_texture: &PanelTexture) -> ImageNode {
     }
 }
 
+/// Raises a single padding side to at least `PANEL_BORDER_INSET`.
+///
+/// Only `Val::Px` values are compared against the inset: a caller's pixel
+/// padding smaller than the inset is raised to it, and one already at or
+/// above the inset is preserved untouched (never shrunk). Non-`Px` values
+/// (`Val::Percent`, `Val::Auto`, `Val::Vw`, ...) cannot be compared to a
+/// pixel inset without layout context, so they pass through unchanged —
+/// callers that give a paneled node non-`Px` padding remain responsible for
+/// clearing the border themselves.
+fn merge_inset_side(value: Val) -> Val {
+    match value {
+        Val::Px(px) if px < PANEL_BORDER_INSET => Val::Px(PANEL_BORDER_INSET),
+        other => other,
+    }
+}
+
+/// Merges caller-supplied padding with the minimum content inset every
+/// paneled node needs to clear the 9-slice embroidered border, per side. See
+/// [`merge_inset_side`] for the exact per-side rule (and its `Val` caveat).
+pub fn merge_panel_padding(caller: UiRect) -> UiRect {
+    UiRect {
+        left: merge_inset_side(caller.left),
+        right: merge_inset_side(caller.right),
+        top: merge_inset_side(caller.top),
+        bottom: merge_inset_side(caller.bottom),
+    }
+}
+
 /// A `node` decorated with the embroidery 9-slice panel border — the shape
 /// every menu panel, HUD fighter panel, shop row group, and result dialog
 /// uses instead of a flat `BackgroundColor`.
-pub fn panel_bundle(panel_texture: &PanelTexture, node: Node) -> impl Bundle {
+///
+/// The node's padding is merged with [`PANEL_BORDER_INSET`] (see
+/// [`merge_panel_padding`]) so panel content — text, bars, readouts — always
+/// clears the border art instead of being clipped by it (#120). Callers can
+/// still ask for more breathing room than the inset by setting a larger
+/// pixel padding; it will not be shrunk.
+pub fn panel_bundle(panel_texture: &PanelTexture, mut node: Node) -> impl Bundle {
+    node.padding = merge_panel_padding(node.padding);
     (node, panel_border(panel_texture))
 }
 
@@ -295,5 +332,105 @@ mod tests {
     fn touch_targets_meet_the_documented_minimums() {
         const { assert!(MIN_TOUCH_TARGET >= 44.0) };
         const { assert!(ACTION_BUTTON_TOUCH_TARGET >= 48.0) };
+    }
+
+    // --- panel content inset (#120) ---
+
+    /// A caller who sets no padding at all (the HUD's old bug) ends up with
+    /// the full border inset on every side, not clipped by the frame.
+    #[test]
+    fn panel_bundle_pads_unset_node_to_the_border_inset() {
+        let panel_texture = PanelTexture::default();
+        let node = Node::default();
+        assert_eq!(
+            node.padding,
+            UiRect::all(Val::Px(0.0)),
+            "sanity: starts at 0"
+        );
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let entity = app
+            .world_mut()
+            .spawn(panel_bundle(&panel_texture, node))
+            .id();
+        let spawned = app.world().get::<Node>(entity).expect("Node component");
+        for (side, val) in [
+            ("left", spawned.padding.left),
+            ("right", spawned.padding.right),
+            ("top", spawned.padding.top),
+            ("bottom", spawned.padding.bottom),
+        ] {
+            match val {
+                Val::Px(px) => assert!(
+                    px >= PANEL_BORDER_INSET,
+                    "{side} padding {px} below the {PANEL_BORDER_INSET}px border inset"
+                ),
+                other => panic!("expected Val::Px padding on {side}, got {other:?}"),
+            }
+        }
+    }
+
+    /// A caller-supplied padding smaller than the inset (e.g. the HUD's old
+    /// 10px) is raised to the inset, not left as-is.
+    #[test]
+    fn merge_panel_padding_raises_a_smaller_caller_value() {
+        let merged = merge_panel_padding(UiRect::all(Val::Px(10.0)));
+        assert_eq!(merged, UiRect::all(Val::Px(PANEL_BORDER_INSET)));
+    }
+
+    /// A caller-supplied padding larger than the inset (e.g. the menu's 28px
+    /// panels) is preserved, never shrunk down to the inset.
+    #[test]
+    fn merge_panel_padding_preserves_a_larger_caller_value() {
+        let larger = PANEL_BORDER_INSET + 6.0;
+        let merged = merge_panel_padding(UiRect::all(Val::Px(larger)));
+        assert_eq!(merged, UiRect::all(Val::Px(larger)));
+    }
+
+    /// A caller value exactly at the inset is left as-is (not bumped, not
+    /// shrunk) — the floor is inclusive.
+    #[test]
+    fn merge_panel_padding_leaves_an_exact_match_untouched() {
+        let merged = merge_panel_padding(UiRect::all(Val::Px(PANEL_BORDER_INSET)));
+        assert_eq!(merged, UiRect::all(Val::Px(PANEL_BORDER_INSET)));
+    }
+
+    /// Each side is merged independently, so a caller can be under the inset
+    /// on one edge and over it on another without cross-contamination.
+    #[test]
+    fn merge_panel_padding_merges_each_side_independently() {
+        let caller = UiRect {
+            left: Val::Px(4.0),
+            right: Val::Px(40.0),
+            top: Val::Px(0.0),
+            bottom: Val::Px(PANEL_BORDER_INSET),
+        };
+        let merged = merge_panel_padding(caller);
+        assert_eq!(merged.left, Val::Px(PANEL_BORDER_INSET), "raised to floor");
+        assert_eq!(
+            merged.right,
+            Val::Px(40.0),
+            "preserved, already above floor"
+        );
+        assert_eq!(merged.top, Val::Px(PANEL_BORDER_INSET), "raised to floor");
+        assert_eq!(
+            merged.bottom,
+            Val::Px(PANEL_BORDER_INSET),
+            "exact match left untouched"
+        );
+    }
+
+    /// Non-`Px` padding (e.g. `Val::Percent`) cannot be compared to a pixel
+    /// inset without layout context, so `merge_panel_padding` documents that
+    /// it leaves those values untouched rather than guessing.
+    #[test]
+    fn merge_panel_padding_leaves_non_px_values_untouched() {
+        let caller = UiRect::all(Val::Percent(5.0));
+        let merged = merge_panel_padding(caller);
+        assert_eq!(merged, caller, "non-Px padding passes through unchanged");
+
+        let auto = UiRect::all(Val::Auto);
+        assert_eq!(merge_panel_padding(auto), auto);
     }
 }
