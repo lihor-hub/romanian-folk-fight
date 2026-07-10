@@ -13,7 +13,7 @@ use bevy::prelude::*;
 
 use crate::character::{Attributes, EnemyFighter, PlayerFighter, spawn_fighter};
 use crate::combat::AiProfile;
-use crate::core::{GameState, UiFont, despawn_screen};
+use crate::core::{GameState, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::cutout::{
     CutoutPartMarker, CutoutRig, CutoutRigTemplate, CutoutTemplate, GearVisualLayer, boss_template,
@@ -22,7 +22,7 @@ use crate::cutout::{
 };
 use crate::items::{Equipment, GearMotion};
 use crate::roster::{Boss, LadderProgress, Opponent};
-use crate::theme::{BOSS_LABEL_COLOR, CREAM, GROUND_COLOR};
+use crate::theme::GROUND_COLOR;
 use animation::{AnimationSet, FighterClip, FighterSpriteSheets};
 use fx::{ArenaBackgrounds, background_tier, spawn_background};
 
@@ -46,9 +46,6 @@ const FIGHTER_Y: f32 = GROUND_TOP_Y + FIGHTER_SIZE.y / 2.0;
 pub const PLAYER_ANCHOR: Transform = Transform::from_xyz(-220.0, FIGHTER_Y, 0.0);
 /// Where the opponent stands, facing left; mirrors [`PLAYER_ANCHOR`].
 pub const ENEMY_ANCHOR: Transform = Transform::from_xyz(220.0, FIGHTER_Y, 0.0);
-
-/// Vertical offset of the name label above a fighter's body center.
-const LABEL_OFFSET_Y: f32 = FIGHTER_SIZE.y / 2.0 + 24.0;
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ArenaSet {
@@ -92,7 +89,6 @@ fn spawn_arena(
     sheets: Res<FighterSpriteSheets>,
     backgrounds: Res<ArenaBackgrounds>,
     asset_server: Option<Res<AssetServer>>,
-    ui_font: Res<UiFont>,
 ) {
     let Some(player) = player else {
         warn!("entered GameState::Fight without a PlayerCharacter; arena not spawned");
@@ -109,15 +105,12 @@ fn spawn_arena(
         &player,
         ladder,
         &backgrounds,
-        &ui_font,
         asset_server.as_deref(),
     );
 }
 
 /// The loading-guard retry: once the sheets finish loading mid-fight-screen,
 /// spawns the scene that [`spawn_arena`] skipped.
-// A Bevy system: each parameter is a distinct ECS handle the scene spawn needs.
-#[allow(clippy::too_many_arguments)]
 fn spawn_arena_when_ready(
     commands: Commands,
     player: Option<Res<PlayerCharacter>>,
@@ -126,7 +119,6 @@ fn spawn_arena_when_ready(
     backgrounds: Res<ArenaBackgrounds>,
     asset_server: Option<Res<AssetServer>>,
     spawned: Query<(), With<ArenaScreen>>,
-    ui_font: Res<UiFont>,
 ) {
     let Some(player) = player else {
         return; // spawn_arena already warned
@@ -139,21 +131,18 @@ fn spawn_arena_when_ready(
         &player,
         ladder,
         &backgrounds,
-        &ui_font,
         asset_server.as_deref(),
     );
 }
 
 /// Builds the whole fight scene: scenery quads, the player's fighter, and
 /// the current ladder opponent (attributes lap-scaled, AI profile and
-/// equipment from the roster data; bosses get the [`Boss`] tag and the
-/// distinct label color).
+/// equipment from the roster data; bosses get the [`Boss`] tag).
 fn spawn_scene(
     mut commands: Commands,
     player: &PlayerCharacter,
     ladder: Option<Res<LadderProgress>>,
     backgrounds: &ArenaBackgrounds,
-    ui_font: &UiFont,
     asset_server: Option<&AssetServer>,
 ) {
     let ladder = ladder.map(|ladder| *ladder).unwrap_or_default();
@@ -168,8 +157,6 @@ fn spawn_scene(
         PLAYER_ANCHOR,
         human_template_for(player.appearance),
         false,
-        CREAM,
-        ui_font,
         asset_server,
     );
     commands.entity(player_fighter).insert(player.appearance);
@@ -186,12 +173,6 @@ fn spawn_scene(
         ENEMY_ANCHOR,
         opponent_template(opponent),
         true,
-        if opponent.is_boss {
-            BOSS_LABEL_COLOR
-        } else {
-            CREAM
-        },
-        ui_font,
         asset_server,
     );
     let mut equipment = Equipment::default();
@@ -218,9 +199,7 @@ fn spawn_scenery(commands: &mut Commands) {
 
 /// Spawns one fighter through the shared [`spawn_fighter`] (so it carries the
 /// #8 components and full pools), then dresses it with the arena visuals: its
-/// animated sprite at its anchor (starting on the idle loop) and a
-/// world-space name label above (in `label_color`, so bosses read
-/// differently at a glance).
+/// animated sprite at its anchor (starting on the idle loop).
 // Each argument is one distinct piece of the fighter's dressing; bundling
 // them into a struct for one call site would only add indirection.
 #[allow(clippy::too_many_arguments)]
@@ -232,29 +211,16 @@ fn spawn_arena_fighter(
     anchor: Transform,
     template: CutoutRigTemplate,
     flip_x: bool,
-    label_color: Color,
-    ui_font: &UiFont,
     asset_server: Option<&AssetServer>,
 ) -> Entity {
     let name = name.into();
-    let label = name.clone();
     let fighter = spawn_fighter(commands, name, attrs, marker);
-    commands
-        .entity(fighter)
-        .insert((
-            ArenaScreen,
-            FighterClip::Idle,
-            FighterClip::Idle.animation(),
-            anchor,
-        ))
-        .with_children(|body| {
-            body.spawn((
-                Text2d::new(label),
-                ui_font.text_font(20.0),
-                TextColor(label_color),
-                Transform::from_xyz(0.0, LABEL_OFFSET_Y, 0.1),
-            ));
-        });
+    commands.entity(fighter).insert((
+        ArenaScreen,
+        FighterClip::Idle,
+        FighterClip::Idle.animation(),
+        anchor,
+    ));
     spawn_cutout_rig(commands, fighter, template, asset_server, flip_x);
     fighter
 }
@@ -707,46 +673,20 @@ mod tests {
     }
 
     #[test]
-    fn both_fighters_have_name_labels_above_them() {
+    fn arena_spawns_no_floating_name_labels() {
         let mut app = test_app();
-        let mut labels: Vec<String> = app
-            .world_mut()
-            .query::<(&Text2d, &ChildOf, &Transform)>()
-            .iter(app.world())
-            .map(|(text, child_of, transform)| {
-                assert!(
-                    app.world().entity(child_of.parent()).contains::<Fighter>(),
-                    "label is attached to a fighter"
-                );
-                assert!(transform.translation.y > 0.0, "label sits above the body");
-                text.0.clone()
-            })
-            .collect();
-        labels.sort();
-        assert_eq!(
-            labels,
-            vec!["Făt-Frumos".to_string(), "Hoț de codru".to_string()]
-        );
+        let labels = app.world_mut().query::<&Text2d>().iter(app.world()).count();
+        assert_eq!(labels, 0, "no floating Text2d name labels in the arena");
     }
 
-    /// The enemy's `(FighterName, Attributes, Equipment, Option<Boss>)` and
-    /// its label's `TextColor`.
-    fn enemy_snapshot(app: &mut App) -> (String, Attributes, Equipment, Option<Boss>, Color) {
-        let (entity, name, attrs, equipment, boss) = app
+    /// The enemy's `(FighterName, Attributes, Equipment, Option<Boss>)`.
+    fn enemy_snapshot(app: &mut App) -> (String, Attributes, Equipment, Option<Boss>) {
+        let (_entity, name, attrs, equipment, boss) = app
             .world_mut()
             .query_filtered::<(Entity, &FighterName, &Attributes, &Equipment, Option<&Boss>), With<EnemyFighter>>()
             .single(app.world())
             .expect("exactly one enemy fighter");
-        let (name, attrs, equipment, boss) =
-            (name.0.clone(), *attrs, equipment.clone(), boss.copied());
-        let label_color = app
-            .world_mut()
-            .query::<(&TextColor, &ChildOf)>()
-            .iter(app.world())
-            .find(|(_, child_of)| child_of.parent() == entity)
-            .map(|(color, _)| color.0)
-            .expect("the enemy has a name label");
-        (name, attrs, equipment, boss, label_color)
+        (name.0.clone(), *attrs, equipment.clone(), boss.copied())
     }
 
     #[test]
@@ -754,7 +694,7 @@ mod tests {
         // LadderProgress(4) is the acceptance-criteria fight: Muma Pădurii,
         // the first boss.
         let mut app = test_app_at(LadderProgress(4));
-        let (name, attrs, _, boss, label_color) = enemy_snapshot(&mut app);
+        let (name, attrs, _, boss) = enemy_snapshot(&mut app);
         let rig = app
             .world_mut()
             .query_filtered::<&CutoutRig, With<EnemyFighter>>()
@@ -769,7 +709,6 @@ mod tests {
             }),
             "the boss flag rides on the fighter"
         );
-        assert_eq!(label_color, BOSS_LABEL_COLOR, "boss label color");
         assert_eq!(rig.template, CutoutTemplate::Boss, "boss template");
     }
 
@@ -807,7 +746,7 @@ mod tests {
     #[test]
     fn a_large_non_boss_enemy_can_still_use_the_boss_template() {
         let mut app = test_app_at(LadderProgress(8));
-        let (name, _, _, boss, _) = enemy_snapshot(&mut app);
+        let (name, _, _, boss) = enemy_snapshot(&mut app);
         let (_, rig) = app
             .world_mut()
             .query_filtered::<(&FighterName, &CutoutRig), With<EnemyFighter>>()
@@ -819,19 +758,18 @@ mod tests {
     }
 
     #[test]
-    fn a_regular_opponent_carries_no_boss_tag_and_the_cream_label() {
+    fn a_regular_opponent_carries_no_boss_tag() {
         let mut app = test_app();
-        let (name, _, equipment, boss, label_color) = enemy_snapshot(&mut app);
+        let (name, _, equipment, boss) = enemy_snapshot(&mut app);
         assert_eq!(name, "Hoț de codru");
         assert_eq!(boss, None);
-        assert_eq!(label_color, CREAM);
         assert_eq!(equipment, Equipment::default(), "the Hoț fights bare");
     }
 
     #[test]
     fn equipped_opponents_spawn_with_their_roster_gear() {
         let mut app = test_app_at(LadderProgress(9));
-        let (name, _, equipment, boss, _) = enemy_snapshot(&mut app);
+        let (name, _, equipment, boss) = enemy_snapshot(&mut app);
         assert_eq!(name, "Zmeul Zmeilor");
         assert!(boss.is_some());
         assert_eq!(
@@ -888,7 +826,7 @@ mod tests {
     #[test]
     fn a_second_lap_opponent_is_stronger_and_labeled_with_the_lap() {
         let mut app = test_app_at(LadderProgress(10));
-        let (name, attrs, _, boss, _) = enemy_snapshot(&mut app);
+        let (name, attrs, _, boss) = enemy_snapshot(&mut app);
         assert_eq!(name, "Hoț de codru (Turul 2)");
         assert_eq!(boss, None);
         use crate::roster::attribute_total;
