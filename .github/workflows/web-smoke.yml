@@ -51,7 +51,11 @@ jobs:
       run: google-chrome-stable --version || google-chrome --version
 
     - name: Run the cold-menu browser smoke
-      run: cargo xtask web-smoke --scenario cold-menu
+      # No worktree bootstrap runs in CI, so the `cargo xtask` alias (a
+      # gitignored, bootstrap-generated `.cargo/config.toml` entry -- see
+      # xtask/README.md's "known limitation") does not exist here; invoke
+      # the crate directly instead, matching assets.yml.
+      run: cargo run --locked --package xtask -- web-smoke --scenario cold-menu
 
     - name: Upload smoke artifacts (always, for post-mortem on failure)
       if: always()
