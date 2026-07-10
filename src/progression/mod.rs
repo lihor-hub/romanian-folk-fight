@@ -143,6 +143,7 @@ impl Plugin for ProgressionPlugin {
                     result_ui::update_button_backgrounds,
                     result_ui::update_allocation_labels
                         .run_if(resource_exists_and_changed::<LevelUpDraft>),
+                    result_ui::resize_result_screens,
                 )
                     .chain()
                     .run_if(in_state(GameState::FightResult)),
@@ -163,6 +164,7 @@ impl Plugin for ProgressionPlugin {
                 (
                     result_ui::handle_game_over_actions.in_set(crate::flow::FlowIntentEmission),
                     result_ui::update_button_backgrounds,
+                    result_ui::resize_result_screens,
                 )
                     .run_if(in_state(GameState::GameOver)),
             )

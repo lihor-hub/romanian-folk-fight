@@ -166,6 +166,36 @@ impl Default for ViewportInfo {
     }
 }
 
+/// The centered 4:3 stage rect [`letterbox_camera`] fits the world camera's
+/// viewport to, in **logical** UI pixels — the same unit convention as
+/// [`ViewportInfo`] (#125). Every full-window UI overlay (the combat HUD, the
+/// pause overlay, the combat-result dialogs) must size and position its root
+/// node from this resource instead of `Val::Percent(100.0)`, or it bleeds
+/// past the letterbox seams onto the bars.
+///
+/// `position` is the top-left corner of the rect and `size` its width/height,
+/// both already converted from the physical pixels [`letterbox_camera`]
+/// computes for the camera's [`Viewport`] — divided once by the window's
+/// `scale_factor`, mirroring [`ViewportInfo::from_window`]'s single-conversion
+/// rule so downstream UI code never has to reason about DPI itself.
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub struct LetterboxRect {
+    pub position: Vec2,
+    pub size: Vec2,
+}
+
+impl Default for LetterboxRect {
+    /// The design resolution's own aspect ratio is exactly 4:3, so a rect at
+    /// the origin sized to it is consistent with "no bars" — matching
+    /// [`ViewportInfo::default`] before the real window size is known.
+    fn default() -> Self {
+        Self {
+            position: Vec2::ZERO,
+            size: Vec2::new(LOGICAL_WIDTH, LOGICAL_HEIGHT),
+        }
+    }
+}
+
 pub struct CorePlugin;
 
 impl Plugin for CorePlugin {
@@ -173,6 +203,15 @@ impl Plugin for CorePlugin {
         app.init_state::<GameState>()
             .init_resource::<UiFont>()
             .init_resource::<ViewportInfo>()
+            .init_resource::<LetterboxRect>()
+            // The letterbox bars need a deliberate, uniform treatment (#125)
+            // rather than Bevy's default clear color (a dark gray meant for
+            // its own docs, not this game's palette): the world camera's
+            // clear op covers the *entire* render target before its viewport
+            // restricts where it actually draws, so pinning `ClearColor`
+            // here is the simplest correct fix — no extra background node
+            // needed on top of every screen.
+            .insert_resource(ClearColor(crate::theme::NIGHT_BLACK))
             // Bevy multiplies every `Val::Px` by `window.scale_factor() *
             // UiScale` exactly once to get a HiDPI-crisp physical pixel
             // size (#115). `UiScale`'s own default is already `1.0`, but
@@ -238,10 +277,19 @@ fn track_viewport_size(
 /// logical resolution, and the camera's pixel [`Viewport`] is shrunk to the
 /// largest centered rectangle matching that aspect ratio, letterboxing the
 /// remainder instead of stretching or cropping the scene.
+///
+/// Also publishes that same rectangle as [`LetterboxRect`], in logical UI
+/// pixels, so full-window UI overlays can constrain themselves to it (#125).
+/// The rect is computed once in logical space (from [`ViewportInfo`]) and
+/// only then scaled to physical pixels for the camera's [`Viewport`] — the
+/// inverse of the usual physical-to-logical conversion direction, but
+/// equivalent by linearity, and it means the logical rect never has to be
+/// recovered by dividing an already-rounded physical value back down.
 fn letterbox_camera(
     viewport: Res<ViewportInfo>,
     mut cameras: Query<&mut Camera, With<WorldCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    mut letterbox_rect: ResMut<LetterboxRect>,
 ) {
     if !viewport.is_changed() {
         return;
@@ -250,23 +298,37 @@ fn letterbox_camera(
         return;
     };
     let scale_factor = window.scale_factor();
-    let physical_width = viewport.width * scale_factor;
-    let physical_height = viewport.height * scale_factor;
-    if physical_width <= 0.0 || physical_height <= 0.0 {
+    if viewport.width <= 0.0 || viewport.height <= 0.0 {
         return;
     }
     let target_aspect = LOGICAL_WIDTH / LOGICAL_HEIGHT;
-    let window_aspect = physical_width / physical_height;
-    let (viewport_w, viewport_h) = if window_aspect > target_aspect {
-        (physical_height * target_aspect, physical_height)
+    let window_aspect = viewport.width / viewport.height;
+    let (rect_w, rect_h) = if window_aspect > target_aspect {
+        (viewport.height * target_aspect, viewport.height)
     } else {
-        (physical_width, physical_width / target_aspect)
+        (viewport.width, viewport.width / target_aspect)
     };
-    let physical_position = UVec2::new(
-        ((physical_width - viewport_w) / 2.0).round() as u32,
-        ((physical_height - viewport_h) / 2.0).round() as u32,
+    let rect_position = Vec2::new(
+        (viewport.width - rect_w) / 2.0,
+        (viewport.height - rect_h) / 2.0,
     );
-    let physical_size = UVec2::new(viewport_w.round() as u32, viewport_h.round() as u32);
+    let rect_size = Vec2::new(rect_w, rect_h);
+    let next_rect = LetterboxRect {
+        position: rect_position,
+        size: rect_size,
+    };
+    if *letterbox_rect != next_rect {
+        *letterbox_rect = next_rect;
+    }
+
+    let physical_position = UVec2::new(
+        (rect_position.x * scale_factor).round() as u32,
+        (rect_position.y * scale_factor).round() as u32,
+    );
+    let physical_size = UVec2::new(
+        (rect_size.x * scale_factor).round() as u32,
+        (rect_size.y * scale_factor).round() as u32,
+    );
     for mut camera in &mut cameras {
         camera.viewport = Some(Viewport {
             physical_position,
@@ -541,15 +603,17 @@ mod tests {
     /// Builds a minimal app running only `letterbox_camera`, with a
     /// `PrimaryWindow` at the given `scale_factor` and a `ViewportInfo`
     /// fixed at `(logical_width, logical_height)`, and returns the
-    /// `WorldCamera`'s computed physical `Viewport` after one update.
+    /// `WorldCamera`'s computed physical `Viewport` alongside the published
+    /// [`LetterboxRect`] after one update.
     fn run_letterbox_camera(
         logical_width: f32,
         logical_height: f32,
         scale_factor: f32,
-    ) -> Viewport {
+    ) -> (Viewport, LetterboxRect) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.insert_resource(ViewportInfo::new(logical_width, logical_height));
+        app.init_resource::<LetterboxRect>();
         app.world_mut().spawn((
             window_at(logical_width, logical_height, scale_factor),
             PrimaryWindow,
@@ -557,10 +621,13 @@ mod tests {
         let camera = app.world_mut().spawn((Camera::default(), WorldCamera)).id();
         app.add_systems(Update, letterbox_camera);
         app.update();
-        app.world()
+        let viewport = app
+            .world()
             .get::<Camera>(camera)
             .and_then(|camera| camera.viewport.clone())
-            .expect("letterbox_camera must set a physical viewport")
+            .expect("letterbox_camera must set a physical viewport");
+        let rect = *app.world().resource::<LetterboxRect>();
+        (viewport, rect)
     }
 
     /// #115: `letterbox_camera` must keep computing the same *physical*
@@ -576,7 +643,7 @@ mod tests {
             (2.0, UVec2::new(400, 0), UVec2::new(2400, 1800)),
             (3.0, UVec2::new(600, 0), UVec2::new(3600, 2700)),
         ] {
-            let viewport = run_letterbox_camera(1600.0, 900.0, scale_factor);
+            let (viewport, _rect) = run_letterbox_camera(1600.0, 900.0, scale_factor);
             assert_eq!(
                 viewport.physical_position, expected_position,
                 "wrong physical_position at scale_factor {scale_factor}"
@@ -584,6 +651,56 @@ mod tests {
             assert_eq!(
                 viewport.physical_size, expected_size,
                 "wrong physical_size at scale_factor {scale_factor}"
+            );
+        }
+    }
+
+    /// #125: the published [`LetterboxRect`] (logical px) must convert back
+    /// to exactly the camera's physical `Viewport` at every aspect ratio the
+    /// issue calls out — 16:10, exact 4:3, and a tall portrait window — swept
+    /// across DPR 1/2/3, matching the existing scale-factor sweep above.
+    #[test]
+    fn letterbox_rect_converts_to_the_camera_viewport_across_aspects_and_scale_factors() {
+        let cases: [(f32, f32, &str); 3] = [
+            (1280.0, 800.0, "16:10 landscape"),
+            (800.0, 600.0, "exact 4:3"),
+            (375.0, 812.0, "tall portrait phone"),
+        ];
+        for (logical_width, logical_height, label) in cases {
+            for scale_factor in [1.0, 2.0, 3.0] {
+                let (viewport, rect) =
+                    run_letterbox_camera(logical_width, logical_height, scale_factor);
+                let expected_position = UVec2::new(
+                    (rect.position.x * scale_factor).round() as u32,
+                    (rect.position.y * scale_factor).round() as u32,
+                );
+                let expected_size = UVec2::new(
+                    (rect.size.x * scale_factor).round() as u32,
+                    (rect.size.y * scale_factor).round() as u32,
+                );
+                assert_eq!(
+                    viewport.physical_position, expected_position,
+                    "{label} at {scale_factor}x: rect position doesn't convert to the camera viewport"
+                );
+                assert_eq!(
+                    viewport.physical_size, expected_size,
+                    "{label} at {scale_factor}x: rect size doesn't convert to the camera viewport"
+                );
+            }
+        }
+    }
+
+    /// #125 acceptance criterion: at exactly 4:3 there must be no bars — the
+    /// rect spans the full logical window, at the origin.
+    #[test]
+    fn letterbox_rect_spans_the_full_window_at_exactly_4_3() {
+        for scale_factor in [1.0, 2.0, 3.0] {
+            let (_viewport, rect) = run_letterbox_camera(800.0, 600.0, scale_factor);
+            assert_eq!(rect.position, Vec2::ZERO, "no bars means no offset");
+            assert_eq!(
+                rect.size,
+                Vec2::new(800.0, 600.0),
+                "rect spans the full 4:3 window"
             );
         }
     }

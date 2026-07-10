@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use bevy::prelude::*;
 
 use crate::character::{EnemyFighter, FighterName, Health, PlayerFighter, Stamina};
-use crate::core::{UiFont, ViewportInfo};
+use crate::core::{LetterboxRect, UiFont, ViewportInfo};
 use crate::menu::DisabledButton;
 use crate::progression::Level;
 use crate::theme::{
@@ -225,22 +225,24 @@ pub fn log_line(actor: &str, opponent: &str, event: CombatEvent) -> String {
 }
 
 /// Spawns the HUD overlay and a fresh [`CombatLog`] on entering the fight.
+///
+/// The root node is sized and positioned from [`LetterboxRect`] (#125)
+/// instead of a full-window `Val::Percent(100.0)`, so every corner-anchored
+/// child (nameplates, the action bar) lands inside the same rect the arena
+/// art occupies rather than bleeding onto the letterbox bars.
+/// [`apply_letterbox_to_hud_root`] keeps it in sync across window resizes.
 pub(super) fn spawn_hud(
     mut commands: Commands,
     ui_font: Res<UiFont>,
     panel_texture: Res<PanelTexture>,
     viewport: Res<ViewportInfo>,
+    letterbox: Res<LetterboxRect>,
 ) {
     commands.insert_resource(CombatLog::default());
     let is_mobile = viewport.is_mobile;
     commands.spawn((
         HudScreen,
-        Node {
-            position_type: PositionType::Absolute,
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            ..default()
-        },
+        hud_root_node(&letterbox),
         children![
             fighter_panel(CombatSide::Player, &ui_font, &panel_texture, is_mobile),
             fighter_panel(CombatSide::Enemy, &ui_font, &panel_texture, is_mobile),
@@ -249,6 +251,39 @@ pub(super) fn spawn_hud(
             action_bar(&ui_font, &panel_texture, is_mobile),
         ],
     ));
+}
+
+/// The HUD root's `Node`: absolutely positioned and sized to the letterboxed
+/// stage rect (#125) rather than the full window, so the whole HUD — and
+/// every child anchored to one of its corners — stays inside the same
+/// centered 4:3 rect the world camera draws the arena into.
+fn hud_root_node(letterbox: &LetterboxRect) -> Node {
+    Node {
+        position_type: PositionType::Absolute,
+        left: Val::Px(letterbox.position.x),
+        top: Val::Px(letterbox.position.y),
+        width: Val::Px(letterbox.size.x),
+        height: Val::Px(letterbox.size.y),
+        ..default()
+    }
+}
+
+/// Re-fits the HUD root to [`LetterboxRect`] whenever it changes (a window
+/// resize) — the counterpart of [`apply_responsive_hud_layout`] for the
+/// letterbox stage bounds instead of the mobile breakpoint (#125).
+pub(super) fn apply_letterbox_to_hud_root(
+    letterbox: Res<LetterboxRect>,
+    mut roots: Query<&mut Node, With<HudScreen>>,
+) {
+    if !letterbox.is_changed() {
+        return;
+    }
+    for mut node in &mut roots {
+        node.left = Val::Px(letterbox.position.x);
+        node.top = Val::Px(letterbox.position.y);
+        node.width = Val::Px(letterbox.size.x);
+        node.height = Val::Px(letterbox.size.y);
+    }
 }
 
 /// The small, touch-friendly ⏸ button top-center of the HUD; clicking it
@@ -1337,6 +1372,34 @@ mod tests {
                 "action button min height {min_height} below the touch target"
             );
         }
+    }
+
+    /// #125: the HUD root must track [`crate::core::LetterboxRect`] instead
+    /// of spanning the full window, so a pillarboxed (non-4:3) viewport's
+    /// nameplates and action bar stay inside the same rect as the arena art.
+    #[test]
+    fn hud_root_matches_the_letterbox_rect_for_a_non_4_3_viewport() {
+        let mut app = test_app();
+
+        // A 1280x800 (16:10) window's pillarboxed 4:3 rect.
+        let rect = LetterboxRect {
+            position: Vec2::new(107.0, 0.0),
+            size: Vec2::new(1066.0, 800.0),
+        };
+        app.world_mut()
+            .resource_mut::<LetterboxRect>()
+            .set_if_neq(rect);
+        app.update();
+
+        let node = app
+            .world_mut()
+            .query_filtered::<&Node, With<HudScreen>>()
+            .single(app.world())
+            .expect("one HUD root");
+        assert_eq!(node.left, Val::Px(rect.position.x));
+        assert_eq!(node.top, Val::Px(rect.position.y));
+        assert_eq!(node.width, Val::Px(rect.size.x));
+        assert_eq!(node.height, Val::Px(rect.size.y));
     }
 
     #[test]
