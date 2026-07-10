@@ -20,8 +20,8 @@ use crate::menu::DisabledButton;
 use crate::save::SaveRequested;
 use crate::shop::{OwnedItems, PlayerEquipment};
 use crate::theme::{
-    ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, FOLK_BLUE,
-    GOLD, PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
+    ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD,
+    PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
 };
 use crate::ui_widgets::{
     attribute_row::spawn_attribute_row, button_bundle, scroll_with_wheel_and_touch, small_button,
@@ -302,7 +302,8 @@ fn spawn_preview_stage(
                                 align_items: AlignItems::Center,
                                 ..default()
                             },
-                            BackgroundColor(FOLK_BLUE),
+                            BackgroundColor(WALNUT),
+                            BorderColor::all(GOLD),
                             children![(
                                 Text::new(preview_stat_text(draft, stat)),
                                 ui_font.text_font(15.0),
