@@ -25,6 +25,7 @@ pub mod assets_cmd;
 pub mod check_cmd;
 pub mod pre_push;
 pub mod test_cmd;
+pub mod web_smoke_cmd;
 
 use crate::process::StepError;
 
@@ -61,6 +62,12 @@ const GROUPS: &[Group] = &[
         about: assets_cmd::ABOUT,
         subcommands: assets_cmd::SUBCOMMANDS,
         run: assets_cmd::run,
+    },
+    Group {
+        name: "web-smoke",
+        about: web_smoke_cmd::ABOUT,
+        subcommands: web_smoke_cmd::SUBCOMMANDS,
+        run: web_smoke_cmd::run,
     },
 ];
 
@@ -161,16 +168,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn help_lists_root_owned_and_asset_commands() {
+    fn help_lists_root_owned_commands_plus_landed_extension_groups() {
         let text = help_text();
         assert!(text.contains("test logic"));
         assert!(text.contains("test journey"));
         assert!(text.contains("check build-matrix"));
         assert!(text.contains("pre-push"));
-        // #167 (a child of #141) owns the `assets` group added here.
+        // #167 (a child of #141) owns the `assets` group.
         assert!(text.contains("assets check"));
-        // browser-smoke (#144) is still independently owned and unregistered.
-        assert!(!text.to_lowercase().contains("browser"));
+        // #144's browser-smoke landed as its own extension group (see
+        // `web_smoke_cmd`).
+        assert!(text.contains("web-smoke"));
     }
 
     #[test]

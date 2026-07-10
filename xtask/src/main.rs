@@ -5,6 +5,7 @@
 mod assets;
 mod commands;
 mod process;
+mod web_smoke;
 
 use std::process::ExitCode;
 

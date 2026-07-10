@@ -15,6 +15,19 @@ description = "Root cargo-xtask dispatcher: focused Rust verification gates for 
 # real error locations is far less maintenance than a hand-rolled parser.
 # `serde` is already a workspace dependency (root `Cargo.toml`), so this adds
 # only `toml` (and its own small dependency tree) to the lockfile.
+#
+# `headless_chrome`/`tiny_http`/`image`/`serde_json` were added for #144/#168
+# (`src/web_smoke/`): the browser smoke needs a CDP client to drive a real
+# browser (no separate chromedriver binary to install or version-match), an
+# HTTP server to serve `dist/` on an ephemeral port, a PNG decoder to compare
+# screenshots against baselines, and JSON for the status snapshot pulled from
+# the page. None of these are game-binary dependencies (the root `Cargo.toml`
+# has no browser/image deps) -- they live here, in the dev-tooling crate,
+# never in the shipped wasm/native binary.
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = { version = "0.9", default-features = false, features = ["parse", "display", "serde"] }
+headless_chrome = "1"
+tiny_http = "0.12"
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde_json = "1"
