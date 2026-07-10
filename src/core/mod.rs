@@ -407,6 +407,13 @@ mod tests {
             let mut ui_font = app.world_mut().resource_mut::<UiFont>();
             ui_font.font = asset_server.load("fonts/does-not-exist.ttf");
         }
+        // On a fast machine both original (real) assets can finish loading
+        // inside the very first `update()`, which queues the `MainMenu`
+        // transition before the broken handle above is even installed. The
+        // `State` assertion right after that update still passes — the
+        // transition is only *pending* — so discard any queued transition
+        // now; from here on the gate re-evaluates against the broken font.
+        *app.world_mut().resource_mut::<NextState<GameState>>() = NextState::Unchanged;
         for _ in 0..30 {
             app.update();
         }
