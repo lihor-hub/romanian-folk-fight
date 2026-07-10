@@ -27,8 +27,6 @@ pub const ARENA_BROWN: Color = Color::srgb(0.18, 0.11, 0.07);
 pub const PANEL_LINEN: Color = Color::srgba(0.22, 0.13, 0.08, 0.86);
 /// Dark walnut strip for icon wells and body-slot rows.
 pub const WALNUT: Color = Color::srgb(0.24, 0.13, 0.08);
-/// Muted border/secondary text accent that stays inside the folk palette.
-pub const FOLK_BLUE: Color = Color::srgb(0.13, 0.31, 0.38);
 
 /// Button background at rest.
 pub const BUTTON_NORMAL: Color = Color::srgb(0.50, 0.09, 0.08);
@@ -37,9 +35,9 @@ pub const BUTTON_HOVERED: Color = Color::srgb(0.64, 0.15, 0.11);
 /// Button background while pressed.
 pub const BUTTON_PRESSED: Color = Color::srgb(0.36, 0.05, 0.04);
 /// Greyed-out button background.
-pub const BUTTON_DISABLED: Color = Color::srgb(0.35, 0.33, 0.31);
+pub const BUTTON_DISABLED: Color = Color::srgb(0.25, 0.17, 0.13);
 /// Text color on a disabled button.
-pub const TEXT_DISABLED: Color = Color::srgb(0.60, 0.58, 0.55);
+pub const TEXT_DISABLED: Color = Color::srgb(0.76, 0.66, 0.61);
 
 /// HP bar fill.
 pub const HP_FILL: Color = Color::srgb(0.78, 0.16, 0.14);
@@ -297,6 +295,63 @@ mod tests {
         let style = ButtonStyle::default_style();
         assert_ne!(style.disabled, style.normal);
         assert_ne!(style.text_disabled, style.text_normal);
+    }
+
+    /// WCAG 2.1 relative luminance formula for a color component.
+    /// Used to compute contrast ratio between two colors.
+    fn relative_luminance(color: Color) -> f32 {
+        let [r, g, b, _] = color.to_linear().to_f32_array();
+        let r = if r <= 0.03928 {
+            r / 12.92
+        } else {
+            ((r + 0.055) / 1.055).powf(2.4)
+        };
+        let g = if g <= 0.03928 {
+            g / 12.92
+        } else {
+            ((g + 0.055) / 1.055).powf(2.4)
+        };
+        let b = if b <= 0.03928 {
+            b / 12.92
+        } else {
+            ((b + 0.055) / 1.055).powf(2.4)
+        };
+        0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+
+    /// Compute the contrast ratio between two colors using WCAG 2.1 formula.
+    fn contrast_ratio(lighter: Color, darker: Color) -> f32 {
+        let l_lighter = relative_luminance(lighter);
+        let l_darker = relative_luminance(darker);
+        let (l1, l2) = if l_lighter > l_darker {
+            (l_lighter, l_darker)
+        } else {
+            (l_darker, l_lighter)
+        };
+        (l1 + 0.05) / (l2 + 0.05)
+    }
+
+    #[test]
+    fn button_disabled_is_warm() {
+        let disabled = BUTTON_DISABLED.to_linear().to_f32_array();
+        let red = disabled[0];
+        let blue = disabled[2];
+        assert!(
+            red >= blue,
+            "BUTTON_DISABLED red channel ({}) should be >= blue channel ({})",
+            red,
+            blue
+        );
+    }
+
+    #[test]
+    fn text_disabled_has_sufficient_contrast_on_button_disabled() {
+        let ratio = contrast_ratio(TEXT_DISABLED, BUTTON_DISABLED);
+        assert!(
+            ratio >= 3.0,
+            "TEXT_DISABLED on BUTTON_DISABLED contrast ratio {} should be >= 3.0",
+            ratio
+        );
     }
 
     #[test]
