@@ -150,6 +150,7 @@ impl Plugin for CombatPlugin {
                     hud::update_button_backgrounds,
                     hud::update_action_buttons,
                     hud::apply_responsive_hud_layout,
+                    hud::apply_letterbox_to_hud_root,
                     (
                         hud::update_bar_fills,
                         hud::update_labels,

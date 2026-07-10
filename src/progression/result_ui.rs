@@ -7,7 +7,7 @@ use bevy::prelude::*;
 
 use crate::character::{AttributeKind, Health, PlayerFighter, Stamina, stats};
 use crate::combat::hud::bar_percent;
-use crate::core::UiFont;
+use crate::core::{LetterboxRect, UiFont};
 use crate::creation::PlayerCharacter;
 use crate::flow::FlowIntent;
 use crate::save::SaveRequested;
@@ -83,6 +83,10 @@ pub enum AllocationLabel {
 /// are unspent points, and the shop / next-fight buttons. Runs after the
 /// wallet and XP were credited, so the shown totals already include the
 /// award.
+// A Bevy system: each parameter is a distinct ECS handle the screen needs
+// (outcome, wallet, level, player, font, panel texture, the letterbox rect
+// added by #125) — the same shape as `handle_allocation_actions` below.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_result_screen(
     mut commands: Commands,
     outcome: Option<Res<FightOutcome>>,
@@ -91,6 +95,7 @@ pub(super) fn spawn_result_screen(
     player: Option<Res<PlayerCharacter>>,
     ui_font: Res<UiFont>,
     panel_texture: Res<PanelTexture>,
+    letterbox: Res<LetterboxRect>,
 ) {
     let (reward, xp) = match outcome {
         Some(outcome) => (outcome.reward, outcome.xp),
@@ -105,7 +110,7 @@ pub(super) fn spawn_result_screen(
         .filter(|_| level.unspent_points > 0)
         .map(|player| LevelUpDraft::new(player.attributes, level.unspent_points));
     commands
-        .spawn((screen_root(), ResultScreen))
+        .spawn((screen_root(&letterbox), ResultScreen))
         .with_children(|screen| {
             screen
                 .spawn(panel_bundle(
@@ -231,9 +236,10 @@ pub(super) fn spawn_game_over_screen(
     mut commands: Commands,
     wallet: Res<Wallet>,
     ui_font: Res<UiFont>,
+    letterbox: Res<LetterboxRect>,
 ) {
     commands
-        .spawn((screen_root(), GameOverScreen))
+        .spawn((screen_root(&letterbox), GameOverScreen))
         .with_children(|parent| {
             parent.spawn(screen_title("Ai fost răpus…", &ui_font));
             parent.spawn(screen_line(
@@ -247,12 +253,17 @@ pub(super) fn spawn_game_over_screen(
         });
 }
 
-/// Full-screen centered column, same layout as the main menu.
-fn screen_root() -> impl Bundle {
+/// Centered column constrained to the letterboxed stage rect (#125) rather
+/// than the full window, so the result/game-over dialog never bleeds past
+/// the same 4:3 bounds the arena art and the combat HUD use.
+fn screen_root(letterbox: &LetterboxRect) -> impl Bundle {
     (
         Node {
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
+            position_type: PositionType::Absolute,
+            left: Val::Px(letterbox.position.x),
+            top: Val::Px(letterbox.position.y),
+            width: Val::Px(letterbox.size.x),
+            height: Val::Px(letterbox.size.y),
             flex_direction: FlexDirection::Column,
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
@@ -261,6 +272,27 @@ fn screen_root() -> impl Bundle {
         },
         BackgroundColor(NIGHT_BLACK),
     )
+}
+
+/// Query filter: either end-of-fight screen's root node.
+type ResultOrGameOverRoot = Or<(With<ResultScreen>, With<GameOverScreen>)>;
+
+/// Re-fits the result/game-over screen root to [`LetterboxRect`] whenever it
+/// changes (a window resize on either screen) — the result-dialog
+/// counterpart of the combat HUD's own resize handling (#125).
+pub(super) fn resize_result_screens(
+    letterbox: Res<LetterboxRect>,
+    mut roots: Query<&mut Node, ResultOrGameOverRoot>,
+) {
+    if !letterbox.is_changed() {
+        return;
+    }
+    for mut node in &mut roots {
+        node.left = Val::Px(letterbox.position.x);
+        node.top = Val::Px(letterbox.position.y);
+        node.width = Val::Px(letterbox.size.x);
+        node.height = Val::Px(letterbox.size.y);
+    }
 }
 
 /// Large screen title with the same styling as the main-menu title.

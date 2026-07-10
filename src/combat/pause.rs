@@ -9,7 +9,7 @@
 
 use bevy::prelude::*;
 
-use crate::core::{GameState, UiFont, despawn_screen};
+use crate::core::{GameState, LetterboxRect, UiFont, despawn_screen};
 use crate::flow::FlowIntent;
 use crate::menu::DisabledButton;
 use crate::settings::SettingsOpen;
@@ -63,6 +63,7 @@ impl Plugin for PausePlugin {
                     handle_pause_button,
                     handle_overlay_buttons.in_set(crate::flow::FlowIntentEmission),
                     update_button_backgrounds,
+                    resize_pause_overlay,
                 )
                     .run_if(in_state(GameState::Fight)),
             );
@@ -150,14 +151,24 @@ fn update_button_backgrounds(
     }
 }
 
-/// Spawns the semi-transparent scrim and the pause panel.
-fn spawn_overlay(mut commands: Commands, ui_font: Res<UiFont>, panel_texture: Res<PanelTexture>) {
+/// Spawns the semi-transparent scrim and the pause panel, constrained to the
+/// letterboxed stage rect (#125) rather than the full window so the scrim —
+/// and the centered panel inside it — never bleed past the arena's own 4:3
+/// bounds onto the letterbox bars.
+fn spawn_overlay(
+    mut commands: Commands,
+    ui_font: Res<UiFont>,
+    panel_texture: Res<PanelTexture>,
+    letterbox: Res<LetterboxRect>,
+) {
     commands.spawn((
         PauseOverlay,
         Node {
             position_type: PositionType::Absolute,
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
+            left: Val::Px(letterbox.position.x),
+            top: Val::Px(letterbox.position.y),
+            width: Val::Px(letterbox.size.x),
+            height: Val::Px(letterbox.size.y),
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             ..default()
@@ -188,6 +199,24 @@ fn spawn_overlay(mut commands: Commands, ui_font: Res<UiFont>, panel_texture: Re
             ],
         )],
     ));
+}
+
+/// Re-fits the pause overlay to [`LetterboxRect`] whenever it changes (a
+/// window resize while paused) — the pause counterpart of the combat HUD's
+/// own resize handling (#125).
+fn resize_pause_overlay(
+    letterbox: Res<LetterboxRect>,
+    mut overlays: Query<&mut Node, With<PauseOverlay>>,
+) {
+    if !letterbox.is_changed() {
+        return;
+    }
+    for mut node in &mut overlays {
+        node.left = Val::Px(letterbox.position.x);
+        node.top = Val::Px(letterbox.position.y);
+        node.width = Val::Px(letterbox.size.x);
+        node.height = Val::Px(letterbox.size.y);
+    }
 }
 
 /// One wide, enabled overlay button in the main-menu style.
