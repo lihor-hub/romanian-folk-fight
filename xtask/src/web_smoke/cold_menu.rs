@@ -12,13 +12,20 @@
 //!    Trunk's `TrunkApplicationStarted` fired, meaning the wasm module
 //!    instantiated and started running -- and `#game-canvas` has a nonzero
 //!    backing size.
-//! 2. **Stabilized**: once booted, capture a screenshot every frame and
-//!    require [`STABLE_FRAMES_REQUIRED`] byte-identical captures in a row.
-//!    A screen that's still transitioning (e.g. the loading gate hasn't
-//!    actually finished spawning the menu's UI tree yet even though the
-//!    wasm app "started") keeps producing different frames and never hits
-//!    the streak; a genuinely painted, static menu does within a handful of
-//!    frames.
+//! 2. **Assets fetched**: every [`REQUIRED_ASSETS`] path has appeared in
+//!    the page's resource-timing entries. Without this, a CPU-saturated CI
+//!    runner can starve the wasm app's asset `fetch()` dispatch for 10+
+//!    seconds while the canvas keeps re-painting the byte-identical
+//!    `GameState::Loading` clear color -- which would satisfy the stability
+//!    streak below long before the menu ever had a chance to exist (see
+//!    [`required_assets_fetched`]).
+//! 3. **Stabilized**: once booted with assets fetched, capture a screenshot
+//!    every frame and require [`STABLE_FRAMES_REQUIRED`] byte-identical
+//!    captures in a row. A screen that's still transitioning (e.g. the
+//!    loading gate hasn't actually finished spawning the menu's UI tree yet
+//!    even though the wasm app "started") keeps producing different frames
+//!    and never hits the streak; a genuinely painted, static menu does
+//!    within a handful of frames.
 //!
 //! Both conditions are bounded by [`READY_MAX_FRAMES`]/[`READY_MAX_WALL_CLOCK`]
 //! -- exceeding the budget is a real, diagnosable checkpoint failure (with
@@ -221,6 +228,11 @@ fn run_checkpoint(
             "first paint never stabilized within {:?}/{} frames ({} observed)",
             READY_MAX_WALL_CLOCK, READY_MAX_FRAMES, readiness.frames_observed
         ));
+        // The streak is gated on the required assets having been fetched
+        // (see `required_assets_fetched`), so "never stabilized" is often
+        // really "the loading-gate assets never arrived" -- run the asset
+        // diagnosis too so the failure names the missing fetch directly.
+        check_required_assets(&status, &mut problems);
     } else {
         check_no_console_or_page_errors(&status, &mut problems);
         check_required_assets(&status, &mut problems);
@@ -357,7 +369,12 @@ fn wait_for_readiness(
         frames_observed += 1;
         let status = checkpoint.read_status()?;
 
-        if !status.app_booted() {
+        // The stability streak may only start once the app is booted AND the
+        // #114 loading-gate assets have actually been fetched -- see
+        // `required_assets_fetched` for the CI starvation failure mode this
+        // guards against (a stuck-in-`Loading` clear color is perfectly
+        // stable, but it is not the first paint this scenario is after).
+        if !status.app_booted() || !required_assets_fetched(&status) {
             stable_count = 0;
             last_screenshot = None;
             last_status = Some(status);
@@ -423,6 +440,29 @@ fn check_no_console_or_page_errors(status: &PageStatus, problems: &mut Vec<Strin
     if !console_errors.is_empty() {
         problems.push(format!("console.error observed: {console_errors:?}"));
     }
+}
+
+/// Whether every [`REQUIRED_ASSETS`] path has appeared in the page's
+/// resource-timing entries at all (any status; the post-ready
+/// [`check_required_assets`] still validates status/size). Part of the
+/// readiness gate, not just the assertions: on a CPU-saturated runner
+/// (SwiftShader software rendering on a busy CI host) the wasm app's asset
+/// load tasks can take 10+ seconds to even dispatch their `fetch()`es while
+/// the canvas keeps re-rendering the identical `GameState::Loading` clear
+/// color -- byte-identical frames that would otherwise satisfy the
+/// stability streak long before the app ever had a chance to paint the
+/// menu. Observed exactly so on CI runs 29083147501/29085154712 (and on an
+/// unrelated branch, 29083778372): "required asset never fetched:
+/// assets/fonts/Alegreya-Variable.ttf" plus a flat-clear-color screenshot,
+/// with the server receiving the font request moments *after* the
+/// checkpoint had already given up. Requiring the fetches before the streak
+/// may start keeps the readiness loop polling (bounded by the existing
+/// [`READY_MAX_WALL_CLOCK`]/[`READY_MAX_FRAMES`] caps) instead of
+/// stabilizing on the not-yet-loaded screen.
+fn required_assets_fetched(status: &PageStatus) -> bool {
+    REQUIRED_ASSETS
+        .iter()
+        .all(|(suffix, _)| status.resources.iter().any(|r| r.url.ends_with(suffix)))
 }
 
 fn check_required_assets(status: &PageStatus, problems: &mut Vec<String>) {
@@ -539,5 +579,103 @@ fn check_screenshot_pixels(
             "screenshot is >90% plain white ({white_pixels}/{total} px) -- panel artwork/text likely \
              fell back to an untextured white placeholder"
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::web_smoke::browser::ResourceEntry;
+
+    /// A `PageStatus` reporting a booted canvas and exactly `resources`.
+    fn status_with_resources(resources: Vec<ResourceEntry>) -> PageStatus {
+        PageStatus {
+            loading_gone: true,
+            canvas_present: true,
+            canvas_w: 1280.0,
+            canvas_h: 800.0,
+            inner_width: 1280.0,
+            inner_height: 800.0,
+            device_pixel_ratio: 1.0,
+            scroll_width: 1280.0,
+            scroll_height: 800.0,
+            client_width: 1280.0,
+            client_height: 800.0,
+            console: Vec::new(),
+            errors: Vec::new(),
+            resources,
+        }
+    }
+
+    fn entry(url: &str) -> ResourceEntry {
+        ResourceEntry {
+            url: url.to_string(),
+            status: 200,
+            transfer_size: 1024.0,
+        }
+    }
+
+    /// The CI starvation regression (runs 29083147501/29085154712, plus
+    /// 29083778372 on an unrelated branch): the app is booted and rendering
+    /// its flat `Loading` clear color, sibling assets have been fetched, but
+    /// the loading-gate font fetch hasn't dispatched yet. Readiness must not
+    /// consider that state fetch-complete, or the stability streak starts on
+    /// the blank canvas and the checkpoint fails as "never fetched".
+    #[test]
+    fn required_assets_fetched_is_false_while_the_font_fetch_is_still_pending() {
+        let status = status_with_resources(vec![
+            entry("http://127.0.0.1:8080/assets/ui/panel_border.png"),
+            entry("http://127.0.0.1:8080/assets/backgrounds/village_far.png"),
+            entry("http://127.0.0.1:8080/assets/sprites/player.png"),
+        ]);
+        assert!(
+            !required_assets_fetched(&status),
+            "a pending Alegreya fetch must keep the readiness loop polling"
+        );
+    }
+
+    #[test]
+    fn required_assets_fetched_requires_every_gate_asset_not_just_one() {
+        let status = status_with_resources(vec![entry(
+            "http://127.0.0.1:8080/assets/fonts/Alegreya-Variable.ttf",
+        )]);
+        assert!(
+            !required_assets_fetched(&status),
+            "the panel texture gates the menu exactly like the font does (#114)"
+        );
+    }
+
+    #[test]
+    fn required_assets_fetched_accepts_both_gate_assets_among_unrelated_entries() {
+        let status = status_with_resources(vec![
+            entry("http://127.0.0.1:8080/assets/sprites/player.png"),
+            entry("http://127.0.0.1:8080/assets/fonts/Alegreya-Variable.ttf"),
+            entry("http://127.0.0.1:8080/assets/ui/panel_border.png"),
+        ]);
+        assert!(required_assets_fetched(&status));
+    }
+
+    /// Presence is enough for *readiness* -- a 404 must not stall the loop
+    /// for the full wall-clock budget, because `check_required_assets` then
+    /// reports the non-success status precisely on the very next phase.
+    #[test]
+    fn required_assets_fetched_counts_a_failed_fetch_as_fetched() {
+        let mut font = entry("http://127.0.0.1:8080/assets/fonts/Alegreya-Variable.ttf");
+        font.status = 404;
+        font.transfer_size = 0.0;
+        let status = status_with_resources(vec![
+            font,
+            entry("http://127.0.0.1:8080/assets/ui/panel_border.png"),
+        ]);
+        assert!(required_assets_fetched(&status));
+
+        let mut problems = Vec::new();
+        check_required_assets(&status, &mut problems);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("non-success status 404")),
+            "the assertion phase still fails the checkpoint precisely: {problems:?}"
+        );
     }
 }
