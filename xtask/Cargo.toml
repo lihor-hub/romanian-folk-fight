@@ -36,10 +36,19 @@ description = "Root cargo-xtask dispatcher: focused Rust verification gates for 
 # spirit as the rest of this file. Like every dependency above, it is
 # `xtask`-only; the game crate (root `Cargo.toml`) never depends on it and
 # must not gain it later either.
+#
+# `ttf-parser` was added for #197 (`xtask/src/assets/gallery/probe.rs`): the
+# review gallery's font metadata pages want a cheap family name/glyph-count
+# readout, and this exact crate/version is already an accepted dependency
+# one level up (the root `Cargo.toml`'s `[dev-dependencies]`, backing the
+# Romanian-diacritics coverage test in `src/core/mod.rs`), so this adds zero
+# new transitive dependencies to the lockfile -- just a second edge to a
+# crate already resolved.
 [dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
 toml = { version = "0.9", default-features = false, features = ["parse", "display", "serde"] }
+ttf-parser = { version = "0.25", default-features = false, features = ["std", "variable-fonts"] }
 headless_chrome = "1"
 tiny_http = "0.12"
 serde_json = "1"
