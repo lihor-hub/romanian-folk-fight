@@ -31,6 +31,13 @@ web-sys = { version = "0.3", features = ["Storage", "Window"] }
 [dev-dependencies]
 # Cmap coverage check for the bundled UI font (Romanian diacritics), see src/core.
 ttf-parser = { version = "0.25", default-features = false, features = ["std", "variable-fonts"] }
+# AST-based (not textual) scan backing the #166 sole-owner regression check
+# in src/flow/mod.rs: parses every src/**/*.rs file to confirm FlowPlugin is
+# the only runtime writer of `NextState<GameState>`. Test-only; never a
+# dependency of the shipped game. Already in the dependency graph transitively
+# (bevy's own derive macros use it), so this just enables the "full"/"visit"
+# features this scan needs on top of the version already resolved.
+syn = { version = "2", features = ["full", "visit"] }
 
 [features]
 # Fast incremental native builds; never enable for release or wasm builds.
