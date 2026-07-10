@@ -32,6 +32,7 @@ cargo xtask test logic          # fast pure-logic unit tests
 cargo xtask test journey        # one headless multi-step GameState journey
 cargo xtask check build-matrix  # native + release + wasm cargo check, no `dev` leakage
 cargo xtask assets check        # validate every manifest.toml sidecar + runtime refs/image integrity (#167, #185)
+cargo xtask assets review       # generate the deterministic static asset review gallery (#197)
 cargo xtask web-smoke --scenario cold-menu   # build+serve the wasm game, verify the first-painted menu in a real browser (#168)
 cargo xtask pre-push            # fmt check, clippy, cargo test, build-matrix -- stops at first failure
 ```
@@ -140,10 +141,9 @@ that honestly rather than inventing coordinates. `attachment`/`pivot`/
 `display` on the fighter body-part sidecars are point-in-time snapshots of
 the rest-pose values authored in `src/cutout.rs`, not cross-referenced
 against that live source by this check (a genuine future drift risk; see
-each `fighters/*/runtime/manifest.toml` for detail). This module does not
-implement a review gallery -- that remains a later, independently owned
-#141 child. Runtime-reference and image-integrity validation *are*
-implemented, in `validate/` -- see the next section.
+each `fighters/*/runtime/manifest.toml` for detail). Runtime-reference and
+image-integrity validation are implemented in `validate/` (next section),
+and the review gallery in `gallery/` (see `assets review` below).
 
 ### Runtime-reference and image-integrity validation (#185, a child of #141)
 
@@ -203,6 +203,57 @@ per-channel scale) of pure magenta or green *and* at or above
 measurement: every chroma-key-colored pixel found across the current
 runtime PNG inventory sits at alpha <= 2/255, invisible background-removal
 dust that this check deliberately does not chase.
+
+### `assets review` -- the deterministic review gallery (#197, a child of #141)
+
+Owned by `xtask/src/assets/gallery/`. Generates a static, self-contained
+HTML gallery (inline CSS, relative `<img>` links back into `assets/`, no
+external CDNs, no JavaScript) into `target/xtask-artifacts/asset-gallery/`
+(under the git-ignored `target/`, wiped and regenerated on every run) and
+prints the index path. Every page derives from the same sidecar aggregate
+`assets check` builds -- no hand-maintained manifest, no metadata duplicated
+into templates. Generation never reads or writes anything under `assets/`
+beyond decoding-free `fs::read`s of font/audio bytes for metadata probes.
+
+**Page types** (full inventory in `gallery/mod.rs`'s module docs): rig-part
+pages (fighter body parts, gear runtime parts, the one still-runtime gear
+overlay) with source-sheet crop context, the runtime image at real game
+scale (1x game pixels) over a checkerboard and a representative background,
+a pixel-flipped mirrored review aid, and a rig-space pivot/attachment
+diagram; per-identity fighter compositions and per-gear-item equipped
+compositions rendered in both facings; a 9-slice UI panel preview at
+representative sizes; per-scene parallax background composites; metadata-only
+pages for fonts and audio (family/metrics and duration/sample-rate probes in
+`gallery/probe.rs` -- never a fake raster preview); and plain preview pages
+for everything else (source sheets, legacy overlays, placeholder sprites,
+web assets).
+
+**Coordinate convention** (documented in full in `gallery/layout.rs`):
+`pivot`/`display` are the same rig-space rest-pose values #185's bounds
+checks already interpret -- `pivot` is a translation from the rig root
+(`+x` toward the authored right-facing side, `+y` up), `display` the runtime
+sprite size. Compositions translate and size each part; they deliberately
+do **not** reproduce `src/cutout.rs`'s per-part rest-pose *rotations*
+(rotation is tracked in no sidecar field), so a composition is an unrotated
+approximation of the rest pose, stated as such on every composition page.
+Mirroring matches `part_transform` exactly: only `pivot.x` is negated, the
+part's own pixels are never flipped.
+
+**Determinism:** every iterated collection is sorted before writing, and
+nothing reads the clock, a random source, or unsorted filesystem order; the
+output directory is removed and recreated per run. Two clean runs produce
+byte-identical contents -- enforced by the
+`two_clean_runs_produce_byte_identical_output` test in `gallery/mod.rs`.
+
+**Documented snapshots** (same convention as the `pivot`/`display` known
+limitation above): `gallery/model.rs`'s `DRAW_ORDER` mirrors
+`human_parts()`'s authoring order in `src/cutout.rs`, and
+`gallery/pages.rs`'s `PANEL_BORDER_INSET_PX` mirrors `PANEL_BORDER_INSET`
+in `src/theme/mod.rs`; neither is cross-referenced against its live source
+by this command.
+
+This command renders the *full* gallery every run. Changed-asset filtering
+and CI artifact selection belong to the next #141 child, not here.
 
 ### `web-smoke --scenario cold-menu` (#168, a child of #144)
 

@@ -22,17 +22,25 @@ use std::time::Instant;
 use crate::assets::CheckResult;
 use crate::process::{StepError, StepReport, artifacts_dir, print_summary};
 
-pub const ABOUT: &str = "Per-directory asset manifest sidecar inventory, runtime-reference, and image-integrity validation.";
+pub const ABOUT: &str = "Per-directory asset manifest sidecar inventory, runtime-reference/image-integrity validation, and the review gallery.";
 
-pub const SUBCOMMANDS: &[(&str, &str)] = &[(
-    "check",
-    "Load every assets/**/manifest.toml sidecar, derive the aggregate, validate runtime \
-     references and image integrity, and report coverage.",
-)];
+pub const SUBCOMMANDS: &[(&str, &str)] = &[
+    (
+        "check",
+        "Load every assets/**/manifest.toml sidecar, derive the aggregate, validate runtime \
+         references and image integrity, and report coverage.",
+    ),
+    (
+        "review",
+        "Generate a deterministic static HTML asset review gallery from the sidecar aggregate \
+         into target/xtask-artifacts/asset-gallery/, printing the index path.",
+    ),
+];
 
 pub fn run(sub: &str) -> Result<(), StepError> {
     match sub {
         "check" => check(),
+        "review" => review(),
         other => unreachable!("dispatch validates subcommands before calling run; got {other}"),
     }
 }
@@ -82,6 +90,55 @@ fn check() -> Result<(), StepError> {
             exit_code: Some(1),
             artifact,
         })
+    }
+}
+
+/// `cargo xtask assets review` (#197, a child of #141): generates the
+/// static HTML gallery from `xtask/src/assets/gallery/` into
+/// `target/xtask-artifacts/asset-gallery/` and prints the index path. Like
+/// `check` above, this is pure in-process Rust (filesystem walking, string
+/// building), not a spawned subprocess, so it does not go through
+/// [`crate::process::run_step`], but still reports success/failure via the
+/// same [`StepReport`]/[`StepError::Failed`] shapes.
+fn review() -> Result<(), StepError> {
+    let label = "assets review";
+    println!("\n==> {label}");
+
+    let root = workspace_root();
+    let assets_root = root.join("assets");
+    let out_dir = root
+        .join("target")
+        .join("xtask-artifacts")
+        .join("asset-gallery");
+
+    let start = Instant::now();
+    let result = crate::assets::gallery::generate(&assets_root, &out_dir);
+    let elapsed = start.elapsed();
+
+    match result {
+        Ok(report) => {
+            println!(
+                "    ok ({:.2}s) -- {} page(s) generated",
+                elapsed.as_secs_f64(),
+                report.page_count
+            );
+            println!("Gallery index: {}", report.index_path.display());
+            print_summary(&[StepReport {
+                label: label.to_string(),
+                elapsed,
+                artifact: report.index_path,
+            }]);
+            Ok(())
+        }
+        Err(err) => {
+            println!("    FAILED ({:.2}s): {err}", elapsed.as_secs_f64());
+            Err(StepError::Failed {
+                label: label.to_string(),
+                elapsed,
+                exit_code: Some(1),
+                artifact: out_dir,
+            })
+        }
     }
 }
 

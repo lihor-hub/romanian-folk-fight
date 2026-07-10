@@ -1,18 +1,19 @@
 //! Asset manifest sidecars and the `cargo xtask assets check` validator
-//! (#167, a child of #141), plus runtime-reference and image-integrity
-//! validation (#185, a child of #141) in `validate/`. Owned end to end by
-//! this module -- later, independently owned #141 children (the review
-//! gallery) add their own modules alongside this one rather than editing it.
+//! (#167, a child of #141), runtime-reference and image-integrity
+//! validation (#185, a child of #141) in `validate/`, and the deterministic
+//! static review gallery (#197, a child of #141) in `gallery/`. Owned end
+//! to end by this module.
 //!
 //! See `schema.rs` for the sidecar schema/version, `aggregate.rs` for the
-//! aggregation/coverage/duplicate-detection pass, and `validate/` for the
-//! #185 rules. `xtask/README.md` documents the command surface and known
-//! limitations.
+//! aggregation/coverage/duplicate-detection pass, `validate/` for the #185
+//! rules, and `gallery/` for the #197 `cargo xtask assets review` gallery.
+//! `xtask/README.md` documents the command surface and known limitations.
 
 pub mod aggregate;
 pub mod credits;
 pub mod diagnostics;
 pub mod discover;
+pub mod gallery;
 pub mod schema;
 pub mod validate;
 
