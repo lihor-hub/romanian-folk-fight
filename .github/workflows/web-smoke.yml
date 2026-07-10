@@ -1,0 +1,63 @@
+name: Browser smoke (cold menu)
+
+# Separate from `ci.yml` (native/wasm build+test) and `deploy.yml` (GitHub
+# Pages publish): this workflow builds+serves the WASM game and drives a
+# real, freshly-launched Chrome against it via `cargo xtask web-smoke
+# --scenario cold-menu` (#144/#168). It never touches #141's future asset
+# workflow.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cold-menu:
+    name: cold-menu (desktop + phone)
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Add wasm target
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.8
+
+    - name: Set up Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "sccache"
+
+    - name: Install Trunk
+      uses: taiki-e/install-action@v2
+      with:
+        tool: trunk
+
+    # ubuntu-latest ships a recent stable Chrome at google-chrome-stable;
+    # headless_chrome's `default_executable()` finds it on PATH directly
+    # (see `xtask/src/web_smoke/browser.rs`'s module docs for why no
+    # chromedriver install/version-matching step is needed here).
+    - name: Verify Chrome is available
+      run: google-chrome-stable --version || google-chrome --version
+
+    - name: Run the cold-menu browser smoke
+      run: cargo xtask web-smoke --scenario cold-menu
+
+    - name: Upload smoke artifacts (always, for post-mortem on failure)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: web-smoke-cold-menu
+        path: target/xtask-artifacts/web-smoke/
+        if-no-files-found: ignore
+        retention-days: 14

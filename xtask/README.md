@@ -32,6 +32,7 @@ cargo xtask test logic          # fast pure-logic unit tests
 cargo xtask test journey        # one headless multi-step GameState journey
 cargo xtask check build-matrix  # native + release + wasm cargo check, no `dev` leakage
 cargo xtask assets check        # validate every assets/**/manifest.toml sidecar (#167)
+cargo xtask web-smoke --scenario cold-menu   # build+serve the wasm game, verify the first-painted menu in a real browser (#168)
 cargo xtask pre-push            # fmt check, clippy, cargo test, build-matrix -- stops at first failure
 ```
 
@@ -143,14 +144,40 @@ each `fighters/*/runtime/manifest.toml` for detail). This module also does
 not implement image-integrity rules (alpha/chroma-key/pixel decoding) or a
 review gallery -- those remain later, independently owned #141 children.
 
+### `web-smoke --scenario cold-menu` (#168, a child of #144)
+
+Owned by `xtask/src/web_smoke/` (the dispatcher shim is
+`commands/web_smoke_cmd.rs`), independent of every module above. Builds the
+release wasm bundle (`trunk build --release`, never with the `dev` feature),
+serves `dist/` on a random free `127.0.0.1` port, launches a headless
+system Chrome/Chromium with a **fresh profile** (genuinely cold cache) via
+CDP (`headless_chrome`; no chromedriver install/version-matching), and
+verifies the first-painted main menu at two checkpoints: 1280x800 desktop
+and 390x844 phone, both DPR 1 (enforced via CDP device-metrics override and
+asserted from the page). Readiness is a per-frame observable contract (no
+time-only sleeps): the wasm app booted (loading screen removed itself,
+canvas has a backing size) and the paint stabilized (byte-identical
+screenshots across consecutive `requestAnimationFrame`s), bounded by a
+frame/wall-clock budget that fails loudly. A checkpoint fails on console/
+page errors, missing/failed required asset fetches (the #114-gated font and
+panel texture), unexpected document scroll/viewport mismatch, or a blank/
+plain-white paint. Failure diagnostics (screenshot, console/network/
+viewport/server logs) are always retained under
+`target/xtask-artifacts/web-smoke/cold-menu/<checkpoint>/`. Accepted
+baselines live at `tests/visual/baselines/cold-menu/<checkpoint>.png`;
+normal runs never write them -- `--update-baselines` is the only thing that
+does. Dedicated workflow: `.github/workflows/web-smoke.yml`. See
+`src/web_smoke/mod.rs` for how a later scenario registers without touching
+the harness core.
+
 ### `pre-push`
 
 The full repository-native gate, in order, stopping at the first failure:
 `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
 `cargo test`, then `check build-matrix`. This mirrors what the git
 `pre-push` hook and CI expect a clean tree to pass. It does not run
-`assets check`, which has its own dedicated workflow
-(`.github/workflows/assets.yml`).
+`assets check` or `web-smoke`, which have their own dedicated workflows
+(`.github/workflows/assets.yml`, `.github/workflows/web-smoke.yml`).
 
 ## Process/result conventions
 
@@ -211,7 +238,9 @@ the path on both success and failure.
 `xtask` is root-owned (#152/#163). Later, independently owned work adds its
 own command group as a new module without editing any existing feature
 module (`test_cmd.rs`, `check_cmd.rs`, `pre_push.rs`) -- #167 (a child of
-#141) added `assets_cmd.rs` this way; #144 (`browser-smoke`) is next:
+#141) added `assets_cmd.rs` this way, and #168 (a child of #144) added
+`web_smoke_cmd.rs` (whose scenario logic lives in its own
+`xtask/src/web_smoke/` module tree, keeping the command shim thin):
 
 1. Add a new file under `xtask/src/commands/`, e.g. `assets_cmd.rs`.
 2. In it, expose the same shape every group exposes:
@@ -229,6 +258,7 @@ A standalone command with no subcommands (like `pre-push`) follows the same
 shape minus the subcommand list: `pub const ABOUT`, `pub fn run() ->
 Result<(), StepError>`, and one entry in `ROOT_COMMANDS` instead of `GROUPS`.
 
-This module deliberately contains no placeholder `browser-smoke` module or
-subcommands -- that is #144's to add, following the same pattern `assets_cmd.rs`
-(#167) already demonstrates.
+Later `web-smoke` *scenarios* (more #144 children) extend at a finer grain
+still: a new module inside `xtask/src/web_smoke/` plus one match arm in
+`web_smoke::run_scenario` -- no dispatcher, CLI, or harness-core change; see
+`src/web_smoke/mod.rs`.
