@@ -461,6 +461,7 @@ mod tests {
     use crate::core::CorePlugin;
     use crate::creation::PlayerCharacter;
     use crate::flow::FlowPlugin;
+    use crate::settings::AccessibilityPreferences;
     use bevy::state::app::StatesPlugin;
     use rand::RngExt as _;
 
@@ -498,6 +499,20 @@ mod tests {
             .resource_mut::<NextState<GameState>>()
             .set(GameState::Fight);
         app.update(); // transition + OnEnter + first combat frame
+        app
+    }
+
+    /// Same fixture as [`test_app_with`], with [`AccessibilityPreferences`]
+    /// pinned to a chosen `reduced_motion` value -- used by the #200 timing-
+    /// invariance test below. `insert_resource` unconditionally overwrites
+    /// whatever `ArenaPlugin`'s `FxPlugin`/`AnimationPlugin` already
+    /// idempotently initialized, regardless of plugin registration order.
+    fn test_app_with_motion(attributes: Attributes, reduced_motion: bool) -> App {
+        let mut app = test_app_with(attributes);
+        app.insert_resource(AccessibilityPreferences {
+            reduced_motion,
+            high_contrast: false,
+        });
         app
     }
 
@@ -871,5 +886,59 @@ mod tests {
         app.update();
         assert!(app.world().get_resource::<CombatTurn>().is_none());
         assert!(app.world().get_resource::<CombatRng>().is_none());
+    }
+
+    /// #200's critical invariant, proven end-to-end through the real ECS
+    /// schedule (not just the pure `combat::engine`/`combat::ai` functions
+    /// `review::gold_journey_seed` pins): with the exact same `CombatRng`
+    /// seed and the exact same sequence of player actions, reduced motion
+    /// changes only `arena::fx`/`arena::animation`'s *presentation*
+    /// (parallax hold, no camera shake, shrunk lunge/footwork) and never
+    /// the duel itself -- costs, outcomes, RNG-driven rolls (crit/hit/AI
+    /// choice), and the `CombatPresentation` gating duration are all
+    /// bit-for-bit identical. `advance_presentation` always waits out the
+    /// full `PRESENTATION_DELAY_SECONDS` window in both runs, so a
+    /// regression that made presentation gating itself motion-dependent
+    /// would desync the two apps' turn order and fail this test too.
+    #[test]
+    fn seeded_combat_is_bit_for_bit_identical_with_and_without_reduced_motion() {
+        let actions = [
+            CombatAction::QuickStrike,
+            CombatAction::QuickStrike,
+            CombatAction::HeavyStrike,
+            CombatAction::Block,
+            CombatAction::QuickStrike,
+        ];
+
+        let mut full_motion = test_app_with_motion(PLAYER_ATTRIBUTES, false);
+        let mut reduced_motion = test_app_with_motion(PLAYER_ATTRIBUTES, true);
+
+        for &action in &actions {
+            for app in [&mut full_motion, &mut reduced_motion] {
+                if turn(app).over {
+                    continue;
+                }
+                app.world_mut().write_message(PlayerActionEvent(action));
+                app.update();
+                advance_presentation(app);
+                advance_presentation(app);
+            }
+        }
+
+        assert_eq!(
+            player_pools(&mut full_motion),
+            player_pools(&mut reduced_motion),
+            "player health/stamina match regardless of the motion preference"
+        );
+        assert_eq!(
+            enemy_pools(&mut full_motion),
+            enemy_pools(&mut reduced_motion),
+            "enemy health/stamina (and thus every RNG-driven roll) match"
+        );
+        assert_eq!(
+            turn(&full_motion),
+            turn(&reduced_motion),
+            "turn side, block flags, over flag, and duel distance all match"
+        );
     }
 }

@@ -144,6 +144,15 @@
           transform: translateX(250%);
         }
       }
+      /* #200: honor the OS reduced-motion preference before wasm even
+         starts -- a pure CSS media query, no JS. The bar itself (and its
+         folk-palette gradient) stays visible as a static indeterminate
+         cue; only the sliding animation is removed. */
+      @media (prefers-reduced-motion: reduce) {
+        .progress::before {
+          animation: none;
+        }
+      }
       #loading.failed .progress,
       #loading.failed .status {
         display: none;
