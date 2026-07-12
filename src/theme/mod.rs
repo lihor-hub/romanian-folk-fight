@@ -185,6 +185,12 @@ pub const PANEL_BORDER_PATH: &str = "ui/panel_border.png";
 /// effective content inset a paneled node ends up with.
 pub(crate) const PANEL_BORDER_INSET: f32 = 24.0;
 
+/// Pixel size of the (square) panel-border texture — matches `SIZE` in
+/// `scripts/generate-ui-panel.py`. Together with [`PANEL_BORDER_INSET`] it
+/// pins down the sub-rects [`motif_band`] and [`motif_emblem`] sample, so a
+/// re-authored texture only has to update these two constants.
+pub(crate) const PANEL_TEXTURE_SIZE: f32 = 96.0;
+
 /// The panel-border texture handle, loaded at startup by [`ThemePlugin`].
 /// Defaults to `Handle::default()` so headless tests (no `AssetPlugin`) keep
 /// working, matching [`UiFont`]'s pattern.
@@ -213,6 +219,45 @@ pub fn panel_border(panel_texture: &PanelTexture) -> ImageNode {
     ImageNode {
         image: panel_texture.image.clone(),
         image_mode: panel_slice_mode(),
+        ..default()
+    }
+}
+
+/// An [`ImageNode`] sampling the horizontal embroidery band from the
+/// panel-border texture's top edge, between the two corner blocks: the
+/// repeating gold cross-stitch (ii) diamonds on the deep-red band with its
+/// gold trim lines. Tiles horizontally to whatever width the caller's `Node`
+/// gives it, so it reads as a continuous embroidered strip (#121). Give the
+/// node a height of [`PANEL_BORDER_INSET`] px to keep the stitches at their
+/// authored 1:1 pixel scale.
+pub fn motif_band(panel_texture: &PanelTexture) -> ImageNode {
+    ImageNode {
+        image: panel_texture.image.clone(),
+        rect: Some(Rect::new(
+            PANEL_BORDER_INSET,
+            0.0,
+            PANEL_TEXTURE_SIZE - PANEL_BORDER_INSET,
+            PANEL_BORDER_INSET,
+        )),
+        image_mode: NodeImageMode::Tiled {
+            tile_x: true,
+            tile_y: false,
+            stretch_value: 1.0,
+        },
+        ..default()
+    }
+}
+
+/// An [`ImageNode`] cropping a single embroidered diamond emblem from the
+/// panel-border texture's corner motif: the gold cross-stitch diamond with a
+/// cream heart on its black corner block. Stretches to the caller's `Node`
+/// size; keep that a multiple of [`PANEL_BORDER_INSET`] so the linear-sampled
+/// upscale stays even (#121).
+pub fn motif_emblem(panel_texture: &PanelTexture) -> ImageNode {
+    ImageNode {
+        image: panel_texture.image.clone(),
+        rect: Some(Rect::new(0.0, 0.0, PANEL_BORDER_INSET, PANEL_BORDER_INSET)),
+        image_mode: NodeImageMode::Stretch,
         ..default()
     }
 }
@@ -365,6 +410,42 @@ mod tests {
             SliceScaleMode::Tile { stretch_value: 1.0 }
         );
         assert_eq!(slicer.max_corner_scale, 1.0);
+    }
+
+    /// #121: the divider band samples the top border strip between the two
+    /// corner blocks, at its authored height, and tiles only horizontally.
+    #[test]
+    fn motif_band_samples_the_top_embroidery_strip_and_tiles_horizontally() {
+        let band = motif_band(&PanelTexture::default());
+        assert_eq!(
+            band.rect,
+            Some(Rect::new(
+                PANEL_BORDER_INSET,
+                0.0,
+                PANEL_TEXTURE_SIZE - PANEL_BORDER_INSET,
+                PANEL_BORDER_INSET
+            ))
+        );
+        assert!(matches!(
+            band.image_mode,
+            NodeImageMode::Tiled {
+                tile_x: true,
+                tile_y: false,
+                ..
+            }
+        ));
+    }
+
+    /// #121: the emblem crops exactly one corner block, which carries the
+    /// full corner diamond motif.
+    #[test]
+    fn motif_emblem_crops_the_corner_motif() {
+        let emblem = motif_emblem(&PanelTexture::default());
+        assert_eq!(
+            emblem.rect,
+            Some(Rect::new(0.0, 0.0, PANEL_BORDER_INSET, PANEL_BORDER_INSET))
+        );
+        assert!(matches!(emblem.image_mode, NodeImageMode::Stretch));
     }
 
     #[test]
