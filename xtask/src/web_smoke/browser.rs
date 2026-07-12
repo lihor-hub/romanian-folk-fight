@@ -305,6 +305,32 @@ pub fn launch(width: u32, height: u32, profile_dir: &Path) -> Result<Checkpoint,
 }
 
 impl Checkpoint {
+    /// Registers a `localStorage.setItem(key, value)` call to run before any
+    /// of the page's own scripts on the *next* navigation (via the same
+    /// `Page.AddScriptToEvaluateOnNewDocument` mechanism [`launch`] already
+    /// uses for `INSTRUMENTATION_SCRIPT`). Used by the `reduced-motion-fight`
+    /// scenario (#200) to seed the persisted `rff_settings_v1` blob with
+    /// `reduced_motion: true` *before* the wasm app's `Startup` schedule
+    /// runs `settings::load_settings` -- reading `localStorage` after the
+    /// fact would be too late, since the preference must already be applied
+    /// when the arena's motion systems spawn.
+    pub fn seed_local_storage_before_load(&self, key: &str, value: &str) -> Result<(), String> {
+        // `{key:?}`/`{value:?}` render as double-quoted, backslash-escaped
+        // Rust string literals, which are also valid JS string literals --
+        // the same trick `gold_journey::send_command` uses for its command
+        // payload.
+        let script = format!("try {{ localStorage.setItem({key:?}, {value:?}); }} catch (e) {{}}");
+        self.tab
+            .call_method(Page::AddScriptToEvaluateOnNewDocument {
+                source: script,
+                world_name: None,
+                include_command_line_api: None,
+                run_immediately: None,
+            })
+            .map_err(|e| format!("failed to seed localStorage[{key:?}] before load: {e}"))?;
+        Ok(())
+    }
+
     pub fn navigate(&self, url: &str) -> Result<(), String> {
         self.tab
             .navigate_to(url)

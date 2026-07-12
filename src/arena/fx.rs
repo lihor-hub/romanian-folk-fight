@@ -12,6 +12,7 @@ use crate::character::{EnemyFighter, PlayerFighter};
 use crate::combat::{CombatAction, CombatEvent, CombatLogEvent, CombatSide};
 use crate::core::{GameState, UiFont};
 use crate::roster::LadderProgress;
+use crate::settings::AccessibilityPreferences;
 use crate::theme::{BLOCKED_GRAY, CREAM, CRIT_GOLD};
 
 use super::{ARENA_HEIGHT, ArenaScreen, FIGHTER_SIZE};
@@ -186,8 +187,23 @@ pub(super) fn spawn_background(
 }
 
 /// The subtle idle drift: each layer sways around its base at its own
-/// parallax rate.
-fn drift_parallax_layers(time: Res<Time>, mut layers: Query<(&ParallaxLayer, &mut Transform)>) {
+/// parallax rate. Reduced motion (#200) holds every layer at its exact rest
+/// `base_x` instead -- computed fresh every frame from `time`/the
+/// preference (no drift phase or offset is ever stored on the component),
+/// so flipping the preference mid-scene has nothing to "un-stick": the very
+/// next frame either resumes the sway at whatever phase `time.elapsed_secs()`
+/// is now at, or snaps straight to rest.
+fn drift_parallax_layers(
+    time: Res<Time>,
+    accessibility: Res<AccessibilityPreferences>,
+    mut layers: Query<(&ParallaxLayer, &mut Transform)>,
+) {
+    if accessibility.reduced_motion {
+        for (layer, mut transform) in &mut layers {
+            transform.translation.x = layer.base_x;
+        }
+        return;
+    }
     let sway = (time.elapsed_secs() * DRIFT_FREQUENCY).sin() * DRIFT_AMPLITUDE;
     for (layer, mut transform) in &mut layers {
         transform.translation.x = layer.base_x + sway * layer.rate;
@@ -354,9 +370,20 @@ fn shake_amplitude(dmg: i32) -> f32 {
 
 /// Applies decaying pseudo-noise to the camera while a shake is active and
 /// restores the camera exactly to its rest translation when it ends.
+///
+/// Reduced motion (#200) still ticks `shake.timer` at the same rate and
+/// deactivates it after exactly [`SHAKE_DURATION`] -- the shake's
+/// bookkeeping (and thus every other system's `ScreenShake::is_active`
+/// read) is identical either way, per the issue's timing invariant -- but
+/// the camera itself is pinned to `shake.rest` for the whole duration
+/// instead of receiving the noise offset. Because the camera transform is
+/// recomputed from `shake` fresh every frame (never accumulated), flipping
+/// the preference mid-shake immediately snaps the camera back to rest with
+/// nothing left stuck off-center.
 fn apply_screen_shake(
     time: Res<Time>,
     mut shake: ResMut<ScreenShake>,
+    accessibility: Res<AccessibilityPreferences>,
     mut cameras: Query<&mut Transform, With<crate::core::WorldCamera>>,
 ) {
     if !shake.active {
@@ -370,6 +397,10 @@ fn apply_screen_shake(
         camera.translation = shake.rest;
         shake.active = false;
         shake.amplitude = 0.0;
+        return;
+    }
+    if accessibility.reduced_motion {
+        camera.translation = shake.rest;
         return;
     }
     // Deterministic offset noise: two incommensurate sine taps, decaying
@@ -490,6 +521,11 @@ pub struct FxPlugin;
 impl Plugin for FxPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ScreenShake>()
+            // Idempotent with SettingsPlugin's registration (the same
+            // pattern AnimationPlugin already uses for CombatLogEvent):
+            // keeps the arena's motion systems usable in apps/tests built
+            // without SettingsPlugin, defaulting to full motion.
+            .init_resource::<AccessibilityPreferences>()
             .add_message::<CombatLogEvent>()
             .add_systems(Startup, load_backgrounds)
             .add_systems(
@@ -708,6 +744,51 @@ mod tests {
     }
 
     #[test]
+    fn reduced_motion_holds_parallax_layers_at_their_exact_rest_offset() {
+        let mut app = test_app();
+        app.insert_resource(AccessibilityPreferences {
+            reduced_motion: true,
+            high_contrast: false,
+        });
+        advance(&mut app, 5.0);
+        let offsets: Vec<f32> = app
+            .world_mut()
+            .query::<(&ParallaxLayer, &Transform)>()
+            .iter(app.world())
+            .map(|(layer, transform)| (transform.translation.x - layer.base_x).abs())
+            .collect();
+        assert!(
+            offsets.iter().all(|offset| *offset == 0.0),
+            "reduced motion holds every layer exactly at rest: {offsets:?}"
+        );
+    }
+
+    #[test]
+    fn toggling_reduced_motion_off_mid_scene_resumes_parallax_drift() {
+        let mut app = test_app();
+        app.insert_resource(AccessibilityPreferences {
+            reduced_motion: true,
+            high_contrast: false,
+        });
+        advance(&mut app, 5.0);
+        app.insert_resource(AccessibilityPreferences {
+            reduced_motion: false,
+            high_contrast: false,
+        });
+        advance(&mut app, 3.0);
+        let offsets: Vec<f32> = app
+            .world_mut()
+            .query::<(&ParallaxLayer, &Transform)>()
+            .iter(app.world())
+            .map(|(layer, transform)| (transform.translation.x - layer.base_x).abs())
+            .collect();
+        assert!(
+            offsets.iter().any(|offset| *offset > 0.0),
+            "drift resumes once reduced motion is turned back off: {offsets:?}"
+        );
+    }
+
+    #[test]
     fn a_hit_shows_its_damage_number_and_a_small_spark_burst() {
         let mut app = test_app();
         send_event(
@@ -845,6 +926,62 @@ mod tests {
             "after the shake the camera is exactly at rest"
         );
         assert!(!app.world().resource::<ScreenShake>().is_active());
+    }
+
+    #[test]
+    fn reduced_motion_disables_camera_displacement_but_the_shake_still_times_out_identically() {
+        let mut app = test_app();
+        app.insert_resource(AccessibilityPreferences {
+            reduced_motion: true,
+            high_contrast: false,
+        });
+        let rest = camera_at(&mut app);
+        send_event(
+            &mut app,
+            CombatSide::Player,
+            CombatAction::HeavyStrike,
+            CombatEvent::Hit { dmg: 12 },
+        );
+        advance(&mut app, 0.1);
+        assert_eq!(
+            camera_at(&mut app),
+            rest,
+            "reduced motion never displaces the camera"
+        );
+        assert!(
+            app.world().resource::<ScreenShake>().is_active(),
+            "the shake's own bookkeeping (and thus its timing) is unaffected"
+        );
+        advance(&mut app, SHAKE_DURATION);
+        assert_eq!(camera_at(&mut app), rest);
+        assert!(
+            !app.world().resource::<ScreenShake>().is_active(),
+            "the shake deactivates after exactly SHAKE_DURATION, same as full motion"
+        );
+    }
+
+    #[test]
+    fn toggling_reduced_motion_on_mid_shake_snaps_the_camera_back_to_rest() {
+        let mut app = test_app();
+        let rest = camera_at(&mut app);
+        send_event(
+            &mut app,
+            CombatSide::Player,
+            CombatAction::HeavyStrike,
+            CombatEvent::Hit { dmg: 12 },
+        );
+        advance(&mut app, 0.1);
+        assert_ne!(camera_at(&mut app), rest, "mid-shake the camera is offset");
+        app.insert_resource(AccessibilityPreferences {
+            reduced_motion: true,
+            high_contrast: false,
+        });
+        advance(&mut app, 0.01);
+        assert_eq!(
+            camera_at(&mut app),
+            rest,
+            "flipping the preference mid-shake restores the camera immediately, nothing stuck off-center"
+        );
     }
 
     #[test]

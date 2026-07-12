@@ -85,11 +85,13 @@ use bevy::prelude::*;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use crate::character::{PlayerFighter, Stamina};
+use crate::arena::fx::ParallaxLayer;
+use crate::arena::{ENEMY_ANCHOR, PLAYER_ANCHOR};
+use crate::character::{EnemyFighter, PlayerFighter, Stamina};
 use crate::combat::engine::QUICK_STRIKE_COST;
 use crate::combat::systems::{CombatPresentation, PlayerActionEvent};
 use crate::combat::{CombatAction, CombatRng, CombatSide, CombatTurn};
-use crate::core::GameState;
+use crate::core::{GameState, WorldCamera};
 use crate::creation::{CharacterDraft, CreationAction, HeroChoice, HeroPreset};
 use crate::menu::{DisabledButton, MenuAction};
 use crate::progression::result_ui::{GameOverAction, ResultAction};
@@ -107,6 +109,14 @@ pub const REVIEW_COMMAND_KEY: &str = "rff_review_cmd_v1";
 /// `Debug` name to, every frame. See [`REVIEW_COMMAND_KEY`]'s doc comment
 /// for why this is duplicated as a plain string on the `xtask` side.
 pub const REVIEW_SCREEN_KEY: &str = "rff_review_screen_v1";
+/// `localStorage` key this seam publishes a [`MotionSnapshot`] to every
+/// frame the arena is up (cleared otherwise) -- added for #200's
+/// `reduced-motion-fight` browser scenario, which needs exact fighter/
+/// camera/parallax positions to assert the reduced-motion treatment
+/// precisely instead of diffing screenshots. See [`REVIEW_COMMAND_KEY`]'s
+/// doc comment for why this is duplicated as a plain string on the `xtask`
+/// side.
+pub const REVIEW_MOTION_KEY: &str = "rff_review_motion_v1";
 
 /// One command the harness can queue through [`REVIEW_COMMAND_KEY`]. Plain
 /// JSON via `serde`, tagged by `cmd` so the wire format is a flat, readable
@@ -173,9 +183,74 @@ impl Plugin for ReviewPlugin {
                     // write must land within the same `Update` pass.
                     poll_review_commands.before(crate::flow::FlowIntentEmission),
                     publish_current_screen,
+                    publish_motion_state,
                     autoplay_player_turn,
                 ),
             );
+    }
+}
+
+/// One parallax layer's rest and current x, published as part of a
+/// [`MotionSnapshot`].
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq)]
+struct ParallaxSample {
+    base_x: f32,
+    x: f32,
+}
+
+/// Everything the `reduced-motion-fight` scenario (#200) needs to assert the
+/// reduced-motion treatment precisely: both fighters' root transform (and
+/// their rest anchors, so the scenario can compute an exact offset without
+/// duplicating `arena`'s anchor constants), the camera translation (screen
+/// shake's target), and every parallax layer's rest/current x. Published
+/// under [`REVIEW_MOTION_KEY`] every frame the arena is up.
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+struct MotionSnapshot {
+    player_x: f32,
+    player_anchor_x: f32,
+    enemy_x: f32,
+    enemy_anchor_x: f32,
+    camera_x: f32,
+    camera_y: f32,
+    parallax: Vec<ParallaxSample>,
+}
+
+/// Publishes a [`MotionSnapshot`] every frame the arena's fighters/camera
+/// exist (outside the fight, e.g. on the menu, clears the key instead so a
+/// scenario can't mistake a stale snapshot from a previous fight for the
+/// current one).
+fn publish_motion_state(
+    players: Query<&Transform, (With<PlayerFighter>, Without<EnemyFighter>)>,
+    enemies: Query<&Transform, (With<EnemyFighter>, Without<PlayerFighter>)>,
+    cameras: Query<&Transform, With<WorldCamera>>,
+    parallax: Query<(&ParallaxLayer, &Transform)>,
+) {
+    let (Ok(player), Ok(enemy)) = (players.single(), enemies.single()) else {
+        clear_motion();
+        return;
+    };
+    let (camera_x, camera_y) = cameras
+        .single()
+        .map(|transform| (transform.translation.x, transform.translation.y))
+        .unwrap_or((0.0, 0.0));
+    let snapshot = MotionSnapshot {
+        player_x: player.translation.x,
+        player_anchor_x: PLAYER_ANCHOR.translation.x,
+        enemy_x: enemy.translation.x,
+        enemy_anchor_x: ENEMY_ANCHOR.translation.x,
+        camera_x,
+        camera_y,
+        parallax: parallax
+            .iter()
+            .map(|(layer, transform)| ParallaxSample {
+                base_x: layer.base_x,
+                x: transform.translation.x,
+            })
+            .collect(),
+    };
+    match serde_json::to_string(&snapshot) {
+        Ok(json) => publish_motion(&json),
+        Err(_) => clear_motion(),
     }
 }
 
@@ -395,6 +470,29 @@ fn publish_screen(screen: &str) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn publish_screen(_screen: &str) {}
+
+#[cfg(target_arch = "wasm32")]
+fn publish_motion(json: &str) {
+    if let Some(storage) = local_storage() {
+        let _ = storage.set_item(REVIEW_MOTION_KEY, json);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_motion(_json: &str) {}
+
+/// Clears [`REVIEW_MOTION_KEY`] so a scenario polling outside the fight (or
+/// after a snapshot failed to serialize) never reads a stale motion
+/// snapshot from a previous fight.
+#[cfg(target_arch = "wasm32")]
+fn clear_motion() {
+    if let Some(storage) = local_storage() {
+        let _ = storage.remove_item(REVIEW_MOTION_KEY);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clear_motion() {}
 
 #[cfg(test)]
 mod tests {

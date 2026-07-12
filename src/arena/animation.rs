@@ -13,6 +13,7 @@ use crate::character::{EnemyFighter, PlayerFighter};
 use crate::combat::{CombatAction, CombatEvent, CombatLogEvent, CombatSide};
 use crate::cutout::{CutoutPartMarker, CutoutPartRestPose, CutoutPose, CutoutRig};
 use crate::roster::LADDER;
+use crate::settings::AccessibilityPreferences;
 
 use super::{ENEMY_ANCHOR, PLAYER_ANCHOR};
 
@@ -49,6 +50,18 @@ const LUNGE_FRACTION: f32 = 0.35;
 
 /// Presentation-only horizontal distance of a footwork step, in world units.
 const FOOTWORK_DISTANCE: f32 = 28.0;
+
+/// Reduced-motion (#200) displacement for both the attack lunge and
+/// footwork steps, in world units (the codebase treats one world unit as
+/// one logical pixel for presentation-scale distances -- see
+/// `fx::DRIFT_AMPLITUDE`'s doc comment for the same convention). Chosen as
+/// the documented safe treatment: a small, barely-there nudge (well under
+/// the issue's "≤8px" ceiling) that still gives the strike/step a readable
+/// beat instead of removing displacement entirely, while never approaching
+/// the full lunge (up to ~185 world units) or footwork (28 units)
+/// distance. Applies with the exact same easing curve and timer duration as
+/// full motion -- only the peak distance shrinks.
+const REDUCED_MOTION_DISPLACEMENT: f32 = 6.0;
 
 /// Duration of a footwork step-in or step-back tween.
 const FOOTWORK_DURATION: Duration = Duration::from_millis(500);
@@ -262,14 +275,26 @@ impl AttackLunge {
 }
 
 /// Position of a lunging fighter at `progress` in `0..=1`: an out-and-back
-/// arc peaking at [`LUNGE_FRACTION`] of the way to the opponent's anchor.
-pub fn lunge_position(from: Vec3, toward: Vec3, progress: f32) -> Vec3 {
+/// arc peaking at [`LUNGE_FRACTION`] of the way to the opponent's anchor
+/// (or, under reduced motion, at [`REDUCED_MOTION_DISPLACEMENT`] along the
+/// same direction -- see that constant's docs). Recomputed from `from`/
+/// `toward`/`progress`/`reduced_motion` alone every call, with no state of
+/// its own, so a caller re-evaluating this mid-lunge with a flipped
+/// `reduced_motion` gets a consistent position for the new mode
+/// immediately -- nothing to restore separately.
+pub fn lunge_position(from: Vec3, toward: Vec3, progress: f32, reduced_motion: bool) -> Vec3 {
     // `sin(PI)` is a hair negative in f32; the clamp keeps the endpoints
     // exactly on the anchor.
     let arc = (progress.clamp(0.0, 1.0) * std::f32::consts::PI)
         .sin()
         .max(0.0);
-    let mut position = from + (toward - from) * (LUNGE_FRACTION * arc);
+    let full_delta = (toward - from) * LUNGE_FRACTION;
+    let delta = if reduced_motion {
+        full_delta.normalize_or_zero() * REDUCED_MOTION_DISPLACEMENT
+    } else {
+        full_delta
+    };
+    let mut position = from + delta * arc;
     position.z = from.z;
     position
 }
@@ -309,15 +334,24 @@ impl FootworkStep {
         }
     }
 
-    fn position(&self) -> Vec3 {
-        footwork_position(self.anchor, self.direction, self.timer.fraction())
+    fn position(&self, reduced_motion: bool) -> Vec3 {
+        footwork_position(
+            self.anchor,
+            self.direction,
+            self.timer.fraction(),
+            reduced_motion,
+        )
     }
 }
 
 /// Position of a fighter during footwork at `progress` in `0..=1`.
-/// Movement eases out to [`FOOTWORK_DISTANCE`] at the midpoint, then returns
-/// to the exact anchor by the end.
-fn footwork_position(anchor: Vec3, direction: f32, progress: f32) -> Vec3 {
+/// Movement eases out to [`FOOTWORK_DISTANCE`] at the midpoint (or, under
+/// reduced motion, to [`REDUCED_MOTION_DISPLACEMENT`] -- see that
+/// constant's docs), then returns to the exact anchor by the end. Like
+/// [`lunge_position`], this is a pure function of its inputs with no stored
+/// state, so a flipped `reduced_motion` mid-step is reflected immediately
+/// on the very next call.
+fn footwork_position(anchor: Vec3, direction: f32, progress: f32, reduced_motion: bool) -> Vec3 {
     let progress = progress.clamp(0.0, 1.0);
     let leg = if progress <= 0.5 {
         progress * 2.0
@@ -325,8 +359,13 @@ fn footwork_position(anchor: Vec3, direction: f32, progress: f32) -> Vec3 {
         (1.0 - progress) * 2.0
     };
     let eased = (leg * std::f32::consts::FRAC_PI_2).sin();
+    let distance = if reduced_motion {
+        REDUCED_MOTION_DISPLACEMENT
+    } else {
+        FOOTWORK_DISTANCE
+    };
     let mut position = anchor;
-    position.x += FOOTWORK_DISTANCE * direction.signum() * eased;
+    position.x += distance * direction.signum() * eased;
     position
 }
 
@@ -711,10 +750,15 @@ fn jointed_part_delta(kind: crate::cutout::CutoutPartKind, pose: CutoutPose) -> 
 }
 
 /// Tweens lunging fighters along [`lunge_position`] and snaps them back to
-/// their anchor when the lunge ends.
+/// their anchor when the lunge ends. The lunge's own timer (paced by the
+/// attack clip's duration, see [`AttackLunge::for_side`]) ticks identically
+/// regardless of [`AccessibilityPreferences::reduced_motion`] -- only the
+/// peak displacement `lunge_position` computes changes; presentation timing
+/// never does.
 fn apply_lunges(
     time: Res<Time>,
     mut commands: Commands,
+    accessibility: Res<AccessibilityPreferences>,
     mut query: Query<(Entity, &mut AttackLunge, &mut Transform)>,
 ) {
     for (entity, mut lunge, mut transform) in &mut query {
@@ -723,17 +767,24 @@ fn apply_lunges(
             transform.translation = lunge.from;
             commands.entity(entity).remove::<AttackLunge>();
         } else {
-            transform.translation =
-                lunge_position(lunge.from, lunge.toward, lunge.timer.fraction());
+            transform.translation = lunge_position(
+                lunge.from,
+                lunge.toward,
+                lunge.timer.fraction(),
+                accessibility.reduced_motion,
+            );
         }
     }
 }
 
 /// Applies presentation-only footwork and snaps fighters exactly back to
-/// their anchors at the end.
+/// their anchors at the end. Same timing invariant as [`apply_lunges`]:
+/// [`FOOTWORK_DURATION`] never changes with the preference, only the peak
+/// displacement.
 fn apply_footwork(
     time: Res<Time>,
     mut commands: Commands,
+    accessibility: Res<AccessibilityPreferences>,
     mut query: Query<(Entity, &mut FootworkStep, &mut Transform)>,
 ) {
     for (entity, mut footwork, mut transform) in &mut query {
@@ -742,7 +793,7 @@ fn apply_footwork(
             transform.translation = footwork.anchor;
             commands.entity(entity).remove::<FootworkStep>();
         } else {
-            transform.translation = footwork.position();
+            transform.translation = footwork.position(accessibility.reduced_motion);
         }
     }
 }
@@ -761,6 +812,10 @@ impl Plugin for AnimationPlugin {
         // Idempotent with CombatPlugin's registration; keeps the arena
         // usable in apps built without the combat plugin (tests).
         app.add_message::<CombatLogEvent>();
+        // Idempotent with SettingsPlugin's registration (#200): keeps the
+        // reduced-motion systems below usable in apps/tests built without
+        // it, defaulting to full motion.
+        app.init_resource::<AccessibilityPreferences>();
         app.add_systems(Startup, load_fighter_sheets).add_systems(
             Update,
             (
@@ -851,17 +906,40 @@ mod tests {
     fn the_lunge_arcs_out_and_back_between_the_anchors() {
         let from = PLAYER_ANCHOR.translation;
         let toward = ENEMY_ANCHOR.translation;
-        assert_eq!(lunge_position(from, toward, 0.0), from);
-        assert_eq!(lunge_position(from, toward, 1.0), from);
-        let peak = lunge_position(from, toward, 0.5);
+        assert_eq!(lunge_position(from, toward, 0.0, false), from);
+        assert_eq!(lunge_position(from, toward, 1.0, false), from);
+        let peak = lunge_position(from, toward, 0.5, false);
         assert!(peak.x > from.x, "the player lunges rightwards");
         assert!(
             (peak.x - (from.x + (toward.x - from.x) * LUNGE_FRACTION)).abs() < 1e-3,
             "peaks at the lunge fraction"
         );
         assert_eq!(peak.z, from.z, "z never changes");
-        let quarter = lunge_position(from, toward, 0.25);
+        let quarter = lunge_position(from, toward, 0.25, false);
         assert!(from.x < quarter.x && quarter.x < peak.x, "smooth arc out");
+    }
+
+    #[test]
+    fn reduced_motion_shrinks_the_lunge_to_the_documented_nudge_on_the_same_arc() {
+        let from = PLAYER_ANCHOR.translation;
+        let toward = ENEMY_ANCHOR.translation;
+        assert_eq!(
+            lunge_position(from, toward, 0.0, true),
+            from,
+            "endpoints stay exactly on the anchor in either mode"
+        );
+        assert_eq!(lunge_position(from, toward, 1.0, true), from);
+        let peak = lunge_position(from, toward, 0.5, true);
+        assert!(peak.x > from.x, "still lunges towards the opponent");
+        assert!(
+            (peak.x - from.x - REDUCED_MOTION_DISPLACEMENT).abs() < 1e-3,
+            "peaks at exactly the documented reduced-motion nudge, not the lunge fraction"
+        );
+        let full_peak = lunge_position(from, toward, 0.5, false);
+        assert!(
+            peak.x < full_peak.x,
+            "reduced motion is a strictly smaller displacement than full motion"
+        );
     }
 
     /// Headless app inside the fight with both fighters spawned as animated
@@ -958,6 +1036,81 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(lunges, 1, "the attacker lunges");
+    }
+
+    /// Advances the clock by exactly `seconds` and runs a frame -- the same
+    /// deterministic-tick helper `arena::fx`'s tests use, needed here so the
+    /// reduced-motion displacement assertions below aren't at the mercy of
+    /// real wall-clock jitter between `app.update()` calls.
+    fn advance(app: &mut App, seconds: f32) {
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::from_secs_f32(seconds),
+        ));
+        app.update();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::ZERO,
+        ));
+    }
+
+    fn player_transform_x(app: &mut App) -> f32 {
+        app.world_mut()
+            .query_filtered::<&Transform, With<PlayerFighter>>()
+            .single(app.world())
+            .expect("player fighter exists")
+            .translation
+            .x
+    }
+
+    #[test]
+    fn reduced_motion_shrinks_the_attack_lunge_on_the_actual_fighter() {
+        let mut app = test_app();
+        app.insert_resource(AccessibilityPreferences {
+            reduced_motion: true,
+            high_contrast: false,
+        });
+        write_event(&mut app, CombatSide::Player, CombatEvent::Missed);
+        let anchor_x = PLAYER_ANCHOR.translation.x;
+        let half_clip = FighterClip::Attack
+            .animation()
+            .clip_duration()
+            .as_secs_f32()
+            / 2.0;
+        advance(&mut app, half_clip);
+        let offset = (player_transform_x(&mut app) - anchor_x).abs();
+        assert!(
+            offset <= REDUCED_MOTION_DISPLACEMENT + 0.5,
+            "the lunge stays within the documented reduced-motion nudge: {offset}"
+        );
+    }
+
+    #[test]
+    fn toggling_reduced_motion_on_mid_lunge_shrinks_the_fighter_offset_immediately() {
+        let mut app = test_app();
+        write_event(&mut app, CombatSide::Player, CombatEvent::Missed);
+        let anchor_x = PLAYER_ANCHOR.translation.x;
+        let half_clip = FighterClip::Attack
+            .animation()
+            .clip_duration()
+            .as_secs_f32()
+            / 2.0;
+        advance(&mut app, half_clip);
+        let full_offset = (player_transform_x(&mut app) - anchor_x).abs();
+        assert!(
+            full_offset > REDUCED_MOTION_DISPLACEMENT,
+            "full motion lunges past the reduced-motion nudge: {full_offset}"
+        );
+
+        app.insert_resource(AccessibilityPreferences {
+            reduced_motion: true,
+            high_contrast: false,
+        });
+        advance(&mut app, 0.001);
+        let reduced_offset = (player_transform_x(&mut app) - anchor_x).abs();
+        assert!(
+            reduced_offset <= REDUCED_MOTION_DISPLACEMENT + 0.5,
+            "flipping the preference mid-lunge snaps the fighter's offset down \
+             immediately, nothing stuck at the full-motion displacement: {reduced_offset}"
+        );
     }
 
     #[test]
@@ -1141,7 +1294,7 @@ mod tests {
         let mut lunge = AttackLunge::for_side(CombatSide::Player);
         let half = lunge.timer.duration() / 2;
         lunge.timer.tick(half);
-        let mid = lunge_position(lunge.from, lunge.toward, lunge.timer.fraction());
+        let mid = lunge_position(lunge.from, lunge.toward, lunge.timer.fraction(), false);
         assert!(
             mid.x > PLAYER_ANCHOR.translation.x,
             "moved towards the enemy"
@@ -1153,12 +1306,12 @@ mod tests {
     #[test]
     fn footwork_positions_ease_out_and_restore_the_anchor() {
         let anchor = PLAYER_ANCHOR.translation;
-        assert_eq!(footwork_position(anchor, 1.0, 0.0), anchor);
-        assert_eq!(footwork_position(anchor, 1.0, 1.0), anchor);
+        assert_eq!(footwork_position(anchor, 1.0, 0.0, false), anchor);
+        assert_eq!(footwork_position(anchor, 1.0, 1.0, false), anchor);
 
-        let quarter = footwork_position(anchor, 1.0, 0.25);
-        let half = footwork_position(anchor, 1.0, 0.5);
-        let three_quarters = footwork_position(anchor, 1.0, 0.75);
+        let quarter = footwork_position(anchor, 1.0, 0.25, false);
+        let half = footwork_position(anchor, 1.0, 0.5, false);
+        let three_quarters = footwork_position(anchor, 1.0, 0.75, false);
         assert!(quarter.x > anchor.x, "forward footwork starts rightward");
         assert!(
             (half.x - (anchor.x + FOOTWORK_DISTANCE)).abs() < 1e-3,
@@ -1172,13 +1325,30 @@ mod tests {
     }
 
     #[test]
+    fn reduced_motion_shrinks_footwork_to_the_documented_nudge() {
+        let anchor = PLAYER_ANCHOR.translation;
+        assert_eq!(footwork_position(anchor, 1.0, 0.0, true), anchor);
+        assert_eq!(footwork_position(anchor, 1.0, 1.0, true), anchor);
+        let half = footwork_position(anchor, 1.0, 0.5, true);
+        assert!(
+            (half.x - (anchor.x + REDUCED_MOTION_DISPLACEMENT)).abs() < 1e-3,
+            "midpoint reaches exactly the documented reduced-motion nudge"
+        );
+        let full_half = footwork_position(anchor, 1.0, 0.5, false);
+        assert!(
+            half.x < full_half.x,
+            "reduced motion is a strictly smaller displacement than full motion"
+        );
+    }
+
+    #[test]
     fn enemy_forward_footwork_mirrors_towards_the_player() {
         let mut player = FootworkStep::for_side(CombatSide::Player, FighterClip::StepForward);
         let mut enemy = FootworkStep::for_side(CombatSide::Enemy, FighterClip::StepForward);
         player.timer.tick(player.timer.duration() / 2);
         enemy.timer.tick(enemy.timer.duration() / 2);
-        let player_mid = player.position();
-        let enemy_mid = enemy.position();
+        let player_mid = player.position(false);
+        let enemy_mid = enemy.position(false);
         assert!(player_mid.x > PLAYER_ANCHOR.translation.x);
         assert!(enemy_mid.x < ENEMY_ANCHOR.translation.x);
     }
@@ -1205,6 +1375,38 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(footwork, 1, "the actor gets a footwork tween");
+    }
+
+    #[test]
+    fn reduced_motion_shrinks_footwork_on_the_actual_fighter() {
+        let mut app = test_app();
+        app.insert_resource(AccessibilityPreferences {
+            reduced_motion: true,
+            high_contrast: false,
+        });
+        app.world_mut().write_message(CombatLogEvent {
+            actor: CombatSide::Player,
+            action: crate::combat::CombatAction::StepForward,
+            event: CombatEvent::Moved {
+                from: crate::combat::DuelDistance::NEAR,
+                to: crate::combat::DuelDistance::CLOSE,
+            },
+        });
+        app.update();
+        let anchor_x = PLAYER_ANCHOR.translation.x;
+        advance(&mut app, FOOTWORK_DURATION.as_secs_f32() / 2.0);
+        let offset = (player_transform_x(&mut app) - anchor_x).abs();
+        assert!(
+            offset <= REDUCED_MOTION_DISPLACEMENT + 0.5,
+            "footwork stays within the documented reduced-motion nudge: {offset}"
+        );
+
+        advance(&mut app, FOOTWORK_DURATION.as_secs_f32() / 2.0 + 0.01);
+        assert_eq!(
+            player_transform_x(&mut app),
+            anchor_x,
+            "the step still snaps exactly back to the anchor when it ends"
+        );
     }
 
     #[test]
