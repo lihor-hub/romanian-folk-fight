@@ -88,10 +88,11 @@ use rand_chacha::ChaCha8Rng;
 use crate::arena::fx::ParallaxLayer;
 use crate::arena::{ENEMY_ANCHOR, PLAYER_ANCHOR};
 use crate::character::{EnemyFighter, PlayerFighter, Stamina};
+use crate::combat::action_palette::ActionButton;
 use crate::combat::engine::QUICK_STRIKE_COST;
 use crate::combat::systems::{CombatPresentation, PlayerActionEvent};
 use crate::combat::{CombatAction, CombatRng, CombatSide, CombatTurn};
-use crate::core::{GameState, WorldCamera};
+use crate::core::{GameState, LetterboxRect, WorldCamera};
 use crate::creation::{CharacterDraft, CreationAction, HeroChoice, HeroPreset};
 use crate::menu::{DisabledButton, MenuAction};
 use crate::progression::result_ui::{GameOverAction, ResultAction};
@@ -117,6 +118,18 @@ pub const REVIEW_SCREEN_KEY: &str = "rff_review_screen_v1";
 /// doc comment for why this is duplicated as a plain string on the `xtask`
 /// side.
 pub const REVIEW_MOTION_KEY: &str = "rff_review_motion_v1";
+/// `localStorage` key this seam publishes a [`PaletteSnapshot`] to every
+/// frame the fight HUD's action bar is up (cleared otherwise) -- added for
+/// #189's `fight-palette-desktop` browser scenario. The overflow/clipping
+/// check the scenario needs ("does every action button render inside the
+/// letterboxed stage rect") is computed once here, in native Bevy space with
+/// real `ComputedNode`/`UiGlobalTransform` values, rather than duplicated as
+/// pixel-math on the `xtask` side (which would have to guess this crate's UI
+/// coordinate conventions) -- the same reasoning [`REVIEW_MOTION_KEY`]
+/// documents for reduced-motion displacement. See [`REVIEW_COMMAND_KEY`]'s
+/// doc comment for why the key itself is duplicated as a plain string on the
+/// `xtask` side.
+pub const REVIEW_PALETTE_KEY: &str = "rff_review_palette_v1";
 
 /// One command the harness can queue through [`REVIEW_COMMAND_KEY`]. Plain
 /// JSON via `serde`, tagged by `cmd` so the wire format is a flat, readable
@@ -184,6 +197,7 @@ impl Plugin for ReviewPlugin {
                     poll_review_commands.before(crate::flow::FlowIntentEmission),
                     publish_current_screen,
                     publish_motion_state,
+                    publish_palette_state,
                     autoplay_player_turn,
                 ),
             );
@@ -251,6 +265,73 @@ fn publish_motion_state(
     match serde_json::to_string(&snapshot) {
         Ok(json) => publish_motion(&json),
         Err(_) => clear_motion(),
+    }
+}
+
+/// Everything the `fight-palette-desktop` scenario (#189) needs to assert
+/// the desktop action bar renders without overflow/clipping: how many
+/// [`ActionButton`] entities exist right now, and whether every one of them
+/// rendered entirely inside the letterboxed stage rect
+/// ([`crate::core::LetterboxRect`]). `fits` is computed here (in native Bevy
+/// UI space, from real `ComputedNode`/`UiGlobalTransform` values) rather
+/// than left for the browser harness to re-derive from duplicated layout
+/// constants -- see [`REVIEW_PALETTE_KEY`]'s doc comment. Published under
+/// [`REVIEW_PALETTE_KEY`] every frame the fight HUD's action bar is up.
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq)]
+struct PaletteSnapshot {
+    /// How many action buttons currently exist (spawned = rendered; #189's
+    /// palette never despawns/hides a button to make it fit).
+    button_count: usize,
+    /// Whether every button's on-screen box lies entirely within the
+    /// letterboxed stage rect -- `false` (or `button_count == 0`) means the
+    /// scenario must fail: an overflowing or clipped action bar.
+    fits: bool,
+}
+
+/// The `Rect` a UI node actually occupies on screen, in the same logical-
+/// pixel space [`LetterboxRect`] is expressed in: `ComputedNode::size` is in
+/// physical pixels and `UiGlobalTransform`'s translation places the node's
+/// center in physical-pixel space (matching `ComputedNode::contains_point`'s
+/// own convention), so both are scaled back to logical pixels by the node's
+/// own `inverse_scale_factor` before building the rect.
+fn logical_node_rect(transform: &UiGlobalTransform, node: &ComputedNode) -> Rect {
+    let scale = node.inverse_scale_factor();
+    Rect::from_center_size(transform.translation * scale, node.size() * scale)
+}
+
+/// Publishes a [`PaletteSnapshot`] every frame at least one [`ActionButton`]
+/// exists (clears the key otherwise, e.g. outside the fight screen, so a
+/// scenario can't mistake a stale snapshot from a previous fight for the
+/// current one).
+fn publish_palette_state(
+    letterbox: Option<Res<LetterboxRect>>,
+    buttons: Query<(&UiGlobalTransform, &ComputedNode), With<ActionButton>>,
+) {
+    let Some(letterbox) = letterbox else {
+        clear_palette();
+        return;
+    };
+    let stage = Rect::from_corners(letterbox.position, letterbox.position + letterbox.size);
+    let mut button_count = 0usize;
+    let mut extent: Option<Rect> = None;
+    for (transform, node) in &buttons {
+        button_count += 1;
+        let rect = logical_node_rect(transform, node);
+        extent = Some(match extent {
+            Some(union) => union.union(rect),
+            None => rect,
+        });
+    }
+    if button_count == 0 {
+        clear_palette();
+        return;
+    }
+    let fits =
+        extent.is_some_and(|extent| stage.contains(extent.min) && stage.contains(extent.max));
+    let snapshot = PaletteSnapshot { button_count, fits };
+    match serde_json::to_string(&snapshot) {
+        Ok(json) => publish_palette(&json),
+        Err(_) => clear_palette(),
     }
 }
 
@@ -494,9 +575,61 @@ fn clear_motion() {
 #[cfg(not(target_arch = "wasm32"))]
 fn clear_motion() {}
 
+#[cfg(target_arch = "wasm32")]
+fn publish_palette(json: &str) {
+    if let Some(storage) = local_storage() {
+        let _ = storage.set_item(REVIEW_PALETTE_KEY, json);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_palette(_json: &str) {}
+
+/// Clears [`REVIEW_PALETTE_KEY`] so a scenario polling outside the fight (or
+/// with zero buttons spawned) never reads a stale palette snapshot from a
+/// previous fight.
+#[cfg(target_arch = "wasm32")]
+fn clear_palette() {
+    if let Some(storage) = local_storage() {
+        let _ = storage.remove_item(REVIEW_PALETTE_KEY);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clear_palette() {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::math::Affine2;
+
+    // --- `fight-palette-desktop` (#189) geometry helper ---
+
+    #[test]
+    fn logical_node_rect_centers_the_computed_node_at_the_transform() {
+        let transform = UiGlobalTransform::from(Affine2::from_translation(Vec2::new(100.0, 50.0)));
+        let node = ComputedNode {
+            size: Vec2::new(40.0, 20.0),
+            inverse_scale_factor: 1.0,
+            ..Default::default()
+        };
+        let rect = logical_node_rect(&transform, &node);
+        assert_eq!(rect, Rect::new(80.0, 40.0, 120.0, 60.0));
+    }
+
+    #[test]
+    fn logical_node_rect_scales_physical_pixels_down_to_logical() {
+        // A 2x DPR node: 80x40 physical pixels is 40x20 logical, centered on
+        // a transform whose translation is itself in physical pixels.
+        let transform = UiGlobalTransform::from(Affine2::from_translation(Vec2::new(200.0, 100.0)));
+        let node = ComputedNode {
+            size: Vec2::new(80.0, 40.0),
+            inverse_scale_factor: 0.5,
+            ..Default::default()
+        };
+        let rect = logical_node_rect(&transform, &node);
+        assert_eq!(rect, Rect::new(80.0, 40.0, 120.0, 60.0));
+    }
 
     #[test]
     fn seed_combat_command_parses() {

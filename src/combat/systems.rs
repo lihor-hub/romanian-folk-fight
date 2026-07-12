@@ -13,6 +13,8 @@ use crate::character::{Attributes, EnemyFighter, Health, PlayerFighter, Stamina}
 use crate::core::{GameState, despawn_screen};
 use crate::items::Equipment;
 
+use super::action_palette;
+use super::actions::ExtraDescriptors;
 use super::ai::{self, AiProfile};
 use super::engine::{self, CombatAction, CombatEvent, DuelDistance};
 use super::hud;
@@ -120,6 +122,7 @@ pub struct CombatPlugin;
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(pause::PausePlugin)
+            .init_resource::<ExtraDescriptors>()
             .add_message::<PlayerActionEvent>()
             .add_message::<CombatLogEvent>()
             .add_systems(OnEnter(GameState::Fight), (setup_combat, hud::spawn_hud))
@@ -140,16 +143,17 @@ impl Plugin for CombatPlugin {
                     // systems below keep running under the overlay.
                     (
                         tick_presentation,
-                        hud::handle_action_buttons,
+                        action_palette::handle_action_buttons,
                         resolve_player_action,
                         enemy_turn,
                     )
                         .chain()
                         .run_if(in_state(PauseState::Running)),
                     hud::collect_log_lines,
-                    hud::update_button_backgrounds,
-                    hud::update_action_buttons,
+                    action_palette::update_button_backgrounds,
+                    action_palette::update_action_buttons,
                     hud::apply_responsive_hud_layout,
+                    action_palette::apply_responsive_action_buttons,
                     hud::apply_letterbox_to_hud_root,
                     (
                         hud::update_bar_fills,

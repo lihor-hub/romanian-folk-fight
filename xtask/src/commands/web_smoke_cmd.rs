@@ -40,7 +40,7 @@ const WEB_SMOKE_BUDGET_MS: u64 = 10 * 60 * 1000;
 
 pub const SUBCOMMANDS: &[(&str, &str)] = &[(
     "--scenario",
-    "Run a named scenario (cold-menu, gold-journey, accessibility-settings-reload). Usage: cargo xtask web-smoke --scenario cold-menu [--update-baselines]",
+    "Run a named scenario (cold-menu, gold-journey, accessibility-settings-reload, reduced-motion-fight, fight-palette-desktop). Usage: cargo xtask web-smoke --scenario cold-menu [--update-baselines]",
 )];
 
 pub fn run(sub: &str) -> Result<(), StepError> {
