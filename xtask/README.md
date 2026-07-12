@@ -33,6 +33,7 @@ cargo xtask test journey        # one headless multi-step GameState journey
 cargo xtask check build-matrix  # native + release + wasm cargo check, no `dev` leakage
 cargo xtask assets check        # validate every manifest.toml sidecar + runtime refs/image integrity (#167, #185)
 cargo xtask assets review       # generate the deterministic static asset review gallery (#197)
+cargo xtask assets review --changed [--base <ref>]  # focused gallery: only changed assets + dependent compositions (#211)
 cargo xtask web-smoke --scenario cold-menu   # build+serve the wasm game, verify the first-painted menu in a real browser (#168)
 cargo xtask web-smoke --scenario gold-journey  # deterministic menu->creation->fight->result->shop journey, review build (#187)
 cargo xtask web-smoke --scenario accessibility-settings-reload  # click both a11y toggles, reload, verify persistence + zoom (#191)
@@ -254,8 +255,62 @@ limitation above): `gallery/model.rs`'s `DRAW_ORDER` mirrors
 in `src/theme/mod.rs`; neither is cross-referenced against its live source
 by this command.
 
-This command renders the *full* gallery every run. Changed-asset filtering
-and CI artifact selection belong to the next #141 child, not here.
+Plain `assets review` renders the *full* gallery every run; changed-asset
+filtering is the `--changed` flag below.
+
+### `assets review --changed` -- the focused changed-asset gallery (#211, a child of #141)
+
+Owned by `xtask/src/assets/changed.rs` (base resolution, diff mapping,
+dependency closure) plus the `filter` parameter of
+`gallery::generate_filtered`. Generates **only** the gallery pages dirtied
+by assets changed since a git comparison base, into its own output
+directory `target/xtask-artifacts/asset-gallery-changed/` (separate from
+the full gallery's, so a focused CI artifact never mixes with a full local
+run), printing the comparison base, the directly changed record ids, every
+included page id, and the index path.
+
+**Base resolution precedence** (first match wins; documented in
+`changed.rs`'s module docs):
+
+1. An explicit `--base <ref>` flag (any ref/sha `git rev-parse --verify`
+   accepts).
+2. `GITHUB_BASE_REF` (set by GitHub Actions on `pull_request` events),
+   tried both as given and as `origin/<ref>`.
+3. `git merge-base HEAD origin/main`.
+
+A missing or invalid base is an **actionable failure** naming everything
+that was tried and how to pass `--base`; the command never silently falls
+back to reviewing every asset (#211's explicit "must not").
+
+**Changed-file mapping:** `git diff --name-status -M <base>...HEAD --
+assets` handles additions, modifications, deletions, and renames. A changed
+content file maps to its one sidecar record; a changed `manifest.toml`
+conservatively maps to *every* record that sidecar declares. A deleted (or
+renamed-away) file whose path no longer resolves to any current record is
+surfaced in a "Removed assets" section on the focused index -- its old
+record id recovered, best-effort, by reading the base commit's sidecar --
+rather than silently vanishing from review.
+
+**Dependency closure** (the full rules live in `changed.rs`'s module docs):
+a changed record dirties its own page; a fighter part additionally dirties
+its identity's composition (and, for `human` parts, every
+`composition.gear.<slug>` page, since every gear composition renders the
+full human rig); composable gear dirties its own equipped composition; a
+background layer dirties its parallax scene composite -- and the one
+representative background (`pages::REPRESENTATIVE_BACKGROUND_ID`)
+additionally dirties every fighter/gear part and composition page, which
+all embed it as a rendered image dependency even though no HTML byte of
+theirs names it; a source sheet transitively dirties every record naming
+it as `source_sheet` (cascading through the rules above); `index.html` is
+always included.
+
+Warm-run budget: 30 seconds (`docs/feedback-budgets.md`'s changed-asset
+gallery loop), enforced via the same `warn_if_over_budget` convention as
+every other command. CI: `.github/workflows/assets.yml` runs `assets
+check` on every PR and additionally `assets review --changed` on
+`pull_request`/`merge_group` events, uploading the focused gallery (plus
+`assets/` so the artifact's relative image links resolve standalone) and
+the `assets check` diagnostics log as artifacts with `if: always()`.
 
 ### `web-smoke --scenario cold-menu` (#168, a child of #144)
 

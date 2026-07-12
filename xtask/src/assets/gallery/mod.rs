@@ -49,7 +49,7 @@ pub mod model;
 pub mod pages;
 pub mod probe;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -80,6 +80,22 @@ impl fmt::Display for GalleryError {
 pub struct GalleryReport {
     pub index_path: PathBuf,
     pub page_count: usize,
+    /// Every page id actually written this run, sorted. For the full,
+    /// unfiltered gallery this is every page; for a `--changed`-filtered
+    /// run (#211, see `crate::assets::changed`) this is exactly the
+    /// dependency closure's page set (never "index" -- that id is a
+    /// bookkeeping sentinel for `index.html`, not its own `.html` page).
+    pub included_page_ids: Vec<String>,
+}
+
+/// One deleted/renamed-away asset to surface on the gallery index rather
+/// than silently drop (#211's "a deleted asset must surface" requirement).
+/// `id` is `Some` when the record id could be resolved (typically by
+/// reading the comparison base's sidecar; see `crate::assets::changed`),
+/// `None` when the path could not be tied back to any record.
+pub struct RemovedAssetNote {
+    pub path: String,
+    pub id: Option<String>,
 }
 
 fn write_page(out_dir: &Path, id: &str, html: &str) -> Result<(), GalleryError> {
@@ -87,9 +103,79 @@ fn write_page(out_dir: &Path, id: &str, html: &str) -> Result<(), GalleryError> 
     fs::write(&path, html).map_err(|error| GalleryError::Io { path, error })
 }
 
+/// Accumulates output pages, applying an optional page-id filter (#211's
+/// `--changed` mode) uniformly at every write site: `emit` is the single
+/// place that decides whether a page is actually written to `out_dir`,
+/// counted, and indexed. When `filter` is `None` every page is written --
+/// the original, unfiltered `cargo xtask assets review` behavior.
+struct GalleryWriter<'a> {
+    filter: Option<&'a BTreeSet<String>>,
+    page_count: usize,
+    written_ids: BTreeSet<String>,
+    index: IndexBuilder,
+}
+
+impl<'a> GalleryWriter<'a> {
+    fn new(filter: Option<&'a BTreeSet<String>>) -> Self {
+        Self {
+            filter,
+            page_count: 0,
+            written_ids: BTreeSet::new(),
+            index: IndexBuilder::default(),
+        }
+    }
+
+    fn included(&self, id: &str) -> bool {
+        match self.filter {
+            Some(ids) => ids.contains(id),
+            None => true,
+        }
+    }
+
+    fn emit(
+        &mut self,
+        out_dir: &Path,
+        section: &str,
+        id: &str,
+        html: &str,
+    ) -> Result<(), GalleryError> {
+        if !self.included(id) {
+            return Ok(());
+        }
+        write_page(out_dir, id, html)?;
+        self.page_count += 1;
+        self.written_ids.insert(id.to_string());
+        self.index.push(section, id, id);
+        Ok(())
+    }
+}
+
 /// Generates the full gallery into `out_dir` (removed and recreated first),
 /// deriving every page from the sidecar aggregate rooted at `assets_root`.
 pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, GalleryError> {
+    generate_filtered(assets_root, out_dir, None, &[])
+}
+
+/// Generates the gallery into `out_dir`, restricted to `filter` when it is
+/// `Some` (#211's `cargo xtask assets review --changed`: only the
+/// transitive dependency closure's page ids are written; see
+/// `crate::assets::changed::page_closure`). `out_dir` is still removed and
+/// recreated first (so a focused run never leaves stale pages from a
+/// previous full run alongside it), `index.html` is always written (listing
+/// only the included pages when filtered), and `removed` surfaces deleted
+/// assets that have no page of their own to link to.
+///
+/// Every page's *content* is still computed from the complete aggregate --
+/// composition pages assemble every layer regardless of which asset
+/// actually changed -- only whether a given page is written to disk is
+/// filtered. This keeps one code path for both modes instead of a second,
+/// reduced-data generator that could drift from the full one.
+pub fn generate_filtered(
+    assets_root: &Path,
+    out_dir: &Path,
+    filter: Option<&BTreeSet<String>>,
+    removed: &[RemovedAssetNote],
+) -> Result<GalleryReport, GalleryError> {
     if out_dir.exists() {
         fs::remove_dir_all(out_dir).map_err(|error| GalleryError::Io {
             path: out_dir.to_path_buf(),
@@ -107,8 +193,7 @@ pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, Gal
     let by_id: BTreeMap<&str, &ResolvedRecord> =
         records.iter().map(|r| (r.record.id.as_str(), *r)).collect();
 
-    let mut page_count = 0usize;
-    let mut index = IndexBuilder::default();
+    let mut writer = GalleryWriter::new(filter);
 
     // --- Fighter identity compositions + parts ---
     let identities = model::fighter_identities(&records);
@@ -131,13 +216,12 @@ pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, Gal
                      sidecar pivot and sized to its display, in the documented anatomical draw order. Rotation \
                      is not tracked in any sidecar field, so this is an unrotated approximation of the rest \
                      pose -- see layout.rs's module docs.";
-        write_page(
+        writer.emit(
             out_dir,
+            "Fighter compositions",
             &comp_id,
             &pages::render_composition_page(&title, &comp_id, &layers, note),
         )?;
-        page_count += 1;
-        index.push("Fighter compositions", &comp_id, &comp_id);
 
         for part in &parts {
             let composition_links =
@@ -154,13 +238,12 @@ pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, Gal
                 &representative_background_href(&by_id),
                 &composition_links,
             );
-            write_page(out_dir, &part.record.id, &html)?;
-            page_count += 1;
-            index.push(
+            writer.emit(
+                out_dir,
                 &format!("Fighter parts: {identity}"),
                 &part.record.id,
-                &part.record.id,
-            );
+                &html,
+            )?;
         }
     }
 
@@ -229,13 +312,12 @@ pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, Gal
                      relationship with rest-pose rotation omitted -- see layout.rs). The same attachment \
                      point exists on the strigoi/zmeu identities using their own pivots; this page shows the \
                      human rig as the representative composition.";
-        write_page(
+        writer.emit(
             out_dir,
+            "Gear compositions",
             &comp_id,
             &pages::render_composition_page(&title, &comp_id, &layers, note),
         )?;
-        page_count += 1;
-        index.push("Gear compositions", &comp_id, &comp_id);
 
         let composition_links = vec![(
             format!("Human + {slug} composition"),
@@ -253,9 +335,7 @@ pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, Gal
             &representative_background_href(&by_id),
             &composition_links,
         );
-        write_page(out_dir, &gear.record.id, &html)?;
-        page_count += 1;
-        index.push("Gear parts", &gear.record.id, &gear.record.id);
+        writer.emit(out_dir, "Gear parts", &gear.record.id, &html)?;
     }
 
     // --- Gear without rig metadata (legacy overlays) ---
@@ -270,13 +350,12 @@ pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, Gal
             continue;
         }
         let html = pages::render_generic_asset_page(record, &[]);
-        write_page(out_dir, &record.record.id, &html)?;
-        page_count += 1;
-        index.push(
+        writer.emit(
+            out_dir,
             "Gear (legacy, unreferenced)",
             &record.record.id,
-            &record.record.id,
-        );
+            &html,
+        )?;
     }
 
     // --- UI ---
@@ -284,21 +363,15 @@ pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, Gal
         match record.record.category {
             Category::UiIcon => {
                 let html = pages::render_ui_icon_page(record);
-                write_page(out_dir, &record.record.id, &html)?;
-                page_count += 1;
-                index.push("UI icons", &record.record.id, &record.record.id);
+                writer.emit(out_dir, "UI icons", &record.record.id, &html)?;
             }
             Category::UiPanel => {
                 let html = pages::render_ui_panel_page(record);
-                write_page(out_dir, &record.record.id, &html)?;
-                page_count += 1;
-                index.push("UI panels", &record.record.id, &record.record.id);
+                writer.emit(out_dir, "UI panels", &record.record.id, &html)?;
             }
             Category::UiSourceSheet => {
                 let html = pages::render_generic_asset_page(record, &[]);
-                write_page(out_dir, &record.record.id, &html)?;
-                page_count += 1;
-                index.push("UI", &record.record.id, &record.record.id);
+                writer.emit(out_dir, "UI", &record.record.id, &html)?;
             }
             _ => {}
         }
@@ -309,9 +382,7 @@ pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, Gal
     for scene in &scenes {
         let scene_id = format!("composition.background.{}", scene.scene);
         let html = pages::render_background_scene_page(&scene.scene, &scene.layers);
-        write_page(out_dir, &scene_id, &html)?;
-        page_count += 1;
-        index.push("Background scenes", &scene_id, &scene_id);
+        writer.emit(out_dir, "Background scenes", &scene_id, &html)?;
 
         let related = vec![(
             format!("{} scene composition", scene.scene),
@@ -319,9 +390,7 @@ pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, Gal
         )];
         for layer in &scene.layers {
             let html = pages::render_generic_asset_page(layer, &related);
-            write_page(out_dir, &layer.record.id, &html)?;
-            page_count += 1;
-            index.push("Background layers", &layer.record.id, &layer.record.id);
+            writer.emit(out_dir, "Background layers", &layer.record.id, &html)?;
         }
     }
 
@@ -335,9 +404,7 @@ pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, Gal
         };
         if let Some(section) = section {
             let html = pages::render_generic_asset_page(record, &[]);
-            write_page(out_dir, &record.record.id, &html)?;
-            page_count += 1;
-            index.push(section, &record.record.id, &record.record.id);
+            writer.emit(out_dir, section, &record.record.id, &html)?;
         }
     }
 
@@ -348,33 +415,25 @@ pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, Gal
                 let bytes = fs::read(assets_root.join(&record.full_path)).unwrap_or_default();
                 let probe = probe::probe_font(&bytes);
                 let html = pages::render_font_page(record, &probe);
-                write_page(out_dir, &record.record.id, &html)?;
-                page_count += 1;
-                index.push("Fonts", &record.record.id, &record.record.id);
+                writer.emit(out_dir, "Fonts", &record.record.id, &html)?;
             }
             (Kind::Document, Category::FontLicense) => {
                 let html = pages::render_document_page(record);
-                write_page(out_dir, &record.record.id, &html)?;
-                page_count += 1;
-                index.push("Fonts", &record.record.id, &record.record.id);
+                writer.emit(out_dir, "Fonts", &record.record.id, &html)?;
             }
             (Kind::Audio, _) => {
                 let bytes = fs::read(assets_root.join(&record.full_path)).unwrap_or_default();
                 let probe = probe::probe_ogg(&bytes);
                 let html = pages::render_audio_page(record, &probe);
-                write_page(out_dir, &record.record.id, &html)?;
-                page_count += 1;
-                index.push(
-                    section_for_audio(record),
-                    &record.record.id,
-                    &record.record.id,
-                );
+                writer.emit(out_dir, section_for_audio(record), &record.record.id, &html)?;
             }
             _ => {}
         }
     }
 
-    let index_html = index.render(&records, &built.diagnostics);
+    let index_html = writer
+        .index
+        .render(&records, &built.diagnostics, removed, filter.is_some());
     let index_path = out_dir.join("index.html");
     fs::write(&index_path, index_html).map_err(|error| GalleryError::Io {
         path: index_path.clone(),
@@ -383,7 +442,8 @@ pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, Gal
 
     Ok(GalleryReport {
         index_path,
-        page_count,
+        page_count: writer.page_count,
+        included_page_ids: writer.written_ids.into_iter().collect(),
     })
 }
 
@@ -428,14 +488,45 @@ impl IndexBuilder {
         &self,
         records: &[&ResolvedRecord],
         diagnostics: &[super::diagnostics::Diagnostic],
+        removed: &[RemovedAssetNote],
+        focused: bool,
     ) -> String {
         let mut body = String::from("<h1>Asset review gallery</h1>\n");
-        body.push_str(&format!(
-            "<p class=\"caption\">{} record(s) from the sidecar aggregate. \
-             {} sidecar diagnostic(s) (see <code>cargo xtask assets check</code> for detail).</p>\n",
-            records.len(),
-            diagnostics.len()
-        ));
+        if focused {
+            let included: usize = self.sections.iter().map(|(_, entries)| entries.len()).sum();
+            body.push_str(&format!(
+                "<p class=\"caption\">Focused review (#211, <code>cargo xtask assets review --changed</code>): \
+                 {included} page(s) included out of {} record(s) in the full sidecar aggregate -- only the \
+                 changed assets and their transitive dependent compositions/scenes are shown here. \
+                 {} sidecar diagnostic(s) (see <code>cargo xtask assets check</code> for detail).</p>\n",
+                records.len(),
+                diagnostics.len()
+            ));
+        } else {
+            body.push_str(&format!(
+                "<p class=\"caption\">{} record(s) from the sidecar aggregate. \
+                 {} sidecar diagnostic(s) (see <code>cargo xtask assets check</code> for detail).</p>\n",
+                records.len(),
+                diagnostics.len()
+            ));
+        }
+        if !removed.is_empty() {
+            body.push_str("<section>\n<h2>Removed assets</h2>\n<p class=\"caption\">Deleted or renamed-away in this change -- no page exists for these any more, so they are listed here rather than silently dropped from the review.</p>\n<ul>\n");
+            for note in removed {
+                match &note.id {
+                    Some(id) => body.push_str(&format!(
+                        "<li><code>{}</code> (was <code>{}</code>)</li>\n",
+                        pages::escape_html(&note.path),
+                        pages::escape_html(id)
+                    )),
+                    None => body.push_str(&format!(
+                        "<li><code>{}</code> (previous record id unknown)</li>\n",
+                        pages::escape_html(&note.path)
+                    )),
+                }
+            }
+            body.push_str("</ul>\n</section>\n");
+        }
         for (section, entries) in &self.sections {
             body.push_str(&format!(
                 "<section>\n<h2>{}</h2>\n<ul>\n",
@@ -645,5 +736,90 @@ mod tests {
             !out.root.join("stale-leftover.html").exists(),
             "generate must wipe out_dir before writing"
         );
+    }
+
+    // ---------------- #211: filtered (focused) generation ----------------
+
+    #[test]
+    fn a_filter_writes_only_the_named_pages_plus_index() {
+        let assets_root = real_assets_root();
+        let out = TempOut::new("filtered");
+        let filter: BTreeSet<String> = [
+            "fighters.human.runtime.head".to_string(),
+            "composition.human".to_string(),
+        ]
+        .into();
+        let report = generate_filtered(&assets_root, &out.root, Some(&filter), &[]).unwrap();
+
+        assert!(out.root.join("fighters.human.runtime.head.html").exists());
+        assert!(out.root.join("composition.human.html").exists());
+        assert!(out.root.join("index.html").exists());
+        // Unrelated pages must be absent from the output directory.
+        assert!(!out.root.join("fighters.strigoi.runtime.head.html").exists());
+        assert!(!out.root.join("composition.gear.palos.html").exists());
+        assert!(!out.root.join("ui.panel-border.html").exists());
+        assert!(!out.root.join("audio.music-menu.html").exists());
+
+        let mut on_disk: Vec<String> = fs::read_dir(&out.root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        on_disk.sort();
+        assert_eq!(
+            on_disk,
+            vec![
+                "composition.human.html",
+                "fighters.human.runtime.head.html",
+                "index.html"
+            ]
+        );
+
+        assert_eq!(report.page_count, 2);
+        assert_eq!(
+            report.included_page_ids,
+            vec![
+                "composition.human".to_string(),
+                "fighters.human.runtime.head".to_string()
+            ]
+        );
+
+        // The focused index links only the included pages and says so.
+        let index_html = fs::read_to_string(out.root.join("index.html")).unwrap();
+        assert!(index_html.contains("Focused review"));
+        assert!(index_html.contains("fighters.human.runtime.head.html"));
+        assert!(!index_html.contains("fighters.strigoi.runtime.head.html"));
+    }
+
+    #[test]
+    fn removed_assets_are_surfaced_on_the_focused_index() {
+        let assets_root = real_assets_root();
+        let out = TempOut::new("removed-note");
+        let filter: BTreeSet<String> = BTreeSet::new();
+        let removed = vec![RemovedAssetNote {
+            path: "assets/fighters/human/runtime/gone.png".to_string(),
+            id: Some("fighters.human.runtime.gone".to_string()),
+        }];
+        generate_filtered(&assets_root, &out.root, Some(&filter), &removed).unwrap();
+        let index_html = fs::read_to_string(out.root.join("index.html")).unwrap();
+        assert!(index_html.contains("Removed assets"));
+        assert!(index_html.contains("assets/fighters/human/runtime/gone.png"));
+        assert!(index_html.contains("fighters.human.runtime.gone"));
+    }
+
+    #[test]
+    fn unfiltered_generate_reports_every_written_page_id() {
+        let assets_root = real_assets_root();
+        let out = TempOut::new("full-page-ids");
+        let report = generate(&assets_root, &out.root).unwrap();
+        assert_eq!(report.included_page_ids.len(), report.page_count);
+        assert!(
+            report
+                .included_page_ids
+                .contains(&"composition.human".to_string())
+        );
+        // The full index must not carry the focused-review banner.
+        let index_html = fs::read_to_string(out.root.join("index.html")).unwrap();
+        assert!(!index_html.contains("Focused review"));
+        assert!(!index_html.contains("Removed assets"));
     }
 }
