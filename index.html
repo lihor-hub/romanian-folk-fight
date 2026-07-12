@@ -2,10 +2,10 @@
 <html lang="ro">
   <head>
     <meta charset="utf-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
-    />
+    <!-- #191: no maximum-scale/user-scalable=no -- browser pinch/page zoom
+         stays available; the #115 ViewportInfo contract handles logical
+         sizing regardless of the page zoom level. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Romanian Folk Fight</title>
     <meta
       name="description"

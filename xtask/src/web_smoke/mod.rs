@@ -15,13 +15,13 @@
 //!
 //! ## Server lifecycle
 //!
-//! `cold_menu::build_release` runs `trunk build --release` (through
-//! `crate::process::run_step`, so it gets the same artifact-log/timing
-//! treatment as every other xtask step). `server::StaticServer` then serves
-//! the resulting `dist/` on `127.0.0.1:<random free port>` (`TcpListener`
-//! bound to port 0 -- no manual port picking) from its own background
-//! thread until dropped, which happens automatically at the end of
-//! `cold_menu::run` (including on an early failure) since it's a plain
+//! [`build_release`] (shared by every scenario) runs `trunk build --release`
+//! (through `crate::process::run_step`, so it gets the same artifact-log/
+//! timing treatment as every other xtask step). `server::StaticServer` then
+//! serves the resulting `dist/` on `127.0.0.1:<random free port>`
+//! (`TcpListener` bound to port 0 -- no manual port picking) from its own
+//! background thread until dropped, which happens automatically at the end
+//! of a scenario's `run` (including on an early failure) since it's a plain
 //! stack value with an RAII `Drop` impl. Deliberately not `trunk serve` --
 //! see `server`'s module docs.
 //!
@@ -62,6 +62,7 @@
 //! `commands::mod.rs`, and not the shared `browser`/`server`/`artifacts`/
 //! `baseline` building blocks this module already provides.
 
+mod accessibility_settings_reload;
 pub mod artifacts;
 pub mod baseline;
 pub mod browser;
@@ -70,17 +71,51 @@ pub mod error;
 mod gold_journey;
 pub mod server;
 
+use std::path::PathBuf;
+use std::process::Command;
+
 pub use error::SmokeError;
 
-/// Dispatches `--scenario <name>` to the matching scenario module:
-/// `cold-menu` (#168) and `gold-journey` (#187, the exact extension pattern
-/// the module docs above describe -- a new module plus this one match arm).
+/// Dispatches `--scenario <name>` to the matching scenario module. Known
+/// scenarios: `cold-menu` (#168), `gold-journey` (#187), and
+/// `accessibility-settings-reload` (#191) -- each one the exact extension
+/// pattern the module docs above describe: a new module plus one match arm
+/// here, nothing else touched upstream.
 pub fn run_scenario(scenario: &str, update_baselines: bool) -> Result<(), SmokeError> {
     match scenario {
         "cold-menu" => cold_menu::run(update_baselines),
         "gold-journey" => gold_journey::run(update_baselines),
+        "accessibility-settings-reload" => accessibility_settings_reload::run(update_baselines),
         other => Err(SmokeError::usage(format!(
-            "unknown --scenario `{other}` (known scenarios: cold-menu, gold-journey)"
+            "unknown --scenario `{other}` (known scenarios: cold-menu, gold-journey, accessibility-settings-reload)"
         ))),
     }
+}
+
+/// The workspace root (`xtask/`'s parent), used by every scenario to locate
+/// `trunk build --release`'s working directory and the `dist/` it produces.
+pub(crate) fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask/Cargo.toml always has a parent workspace root")
+        .to_path_buf()
+}
+
+/// Runs `trunk build --release` (through `crate::process::run_step`, so it
+/// gets the same artifact-log/timing treatment as every other xtask step)
+/// and returns the `dist/` directory it produced. Shared by every scenario
+/// that serves the plain release bundle (`cold_menu`,
+/// `accessibility_settings_reload`); `gold_journey` deliberately keeps its
+/// own `build_review_release` (a `--features review` build into its own
+/// `dist-gold-journey/`) instead.
+pub(crate) fn build_release(label: &str) -> Result<PathBuf, SmokeError> {
+    let mut cmd = Command::new("trunk");
+    cmd.arg("build").arg("--release");
+    cmd.current_dir(workspace_root());
+    // Deliberately not `--features dev`: that Cargo feature (Bevy dynamic
+    // linking) exists only for fast native iteration and must never leak
+    // into a release/wasm artifact (see `AGENTS.md`); `Trunk.toml` and this
+    // invocation never pass it.
+    crate::process::run_step(label, cmd)?;
+    Ok(workspace_root().join("dist"))
 }

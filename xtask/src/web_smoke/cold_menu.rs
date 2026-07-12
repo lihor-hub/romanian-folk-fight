@@ -55,11 +55,9 @@
 //! that glyph-coverage guarantee via OCR/pixel-shape inspection; see the PR
 //! description's "known limitations" for what this does and doesn't catch.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::process::run_step;
 use crate::web_smoke::browser::{self, Checkpoint, PageStatus};
 use crate::web_smoke::error::SmokeError;
 use crate::web_smoke::{artifacts, baseline, server::StaticServer};
@@ -111,7 +109,7 @@ const READY_MAX_WALL_CLOCK: Duration = Duration::from_secs(120);
 const STABLE_FRAMES_REQUIRED: usize = 3;
 
 pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
-    let dist_dir = build_release()?;
+    let dist_dir = crate::web_smoke::build_release("web-smoke: trunk build --release")?;
 
     let server = StaticServer::start(dist_dir).map_err(|e| {
         SmokeError::scenario(
@@ -142,25 +140,6 @@ pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
         println!("\ncold-menu: all checkpoints passed against their accepted baselines.");
     }
     Ok(())
-}
-
-fn build_release() -> Result<PathBuf, SmokeError> {
-    let mut cmd = Command::new("trunk");
-    cmd.arg("build").arg("--release");
-    cmd.current_dir(workspace_root());
-    // Deliberately not `--features dev`: that Cargo feature (Bevy dynamic
-    // linking) exists only for fast native iteration and must never leak
-    // into a release/wasm artifact (see `AGENTS.md`); `Trunk.toml` and this
-    // invocation never pass it.
-    run_step("web-smoke: trunk build --release", cmd)?;
-    Ok(workspace_root().join("dist"))
-}
-
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask/Cargo.toml always has a parent workspace root")
-        .to_path_buf()
 }
 
 struct Readiness {

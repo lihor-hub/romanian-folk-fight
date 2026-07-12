@@ -1,15 +1,37 @@
-//! Settings overlay (#30): music / SFX volume steppers and a master mute
-//! toggle, opened over the main menu (its **Setări** button) or over the
-//! pause overlay mid-fight (its **Setări** button). It is an overlay, not a
+//! Settings overlay (#30, #191): music / SFX volume steppers, a master mute
+//! toggle, and the reduced-motion / high-contrast accessibility toggles,
+//! opened over the main menu (its **Setări** button) or over the pause
+//! overlay mid-fight (its **Setări** button). It is an overlay, not a
 //! `GameState`: opening it never transitions state, so a paused fight
 //! stays exactly as it was and **Înapoi** simply despawns the panel.
 //!
 //! Volumes are discrete steps `0..=10` mapped linearly onto the
 //! [`AudioSettings`] `0.0..=1.0` volumes; changes hit the resource directly,
 //! and the audio plugin's sink-sync system applies them to the playing track
-//! immediately. Every change is persisted under its own key
-//! ([`SETTINGS_KEY`]) via the #21 storage backends, separate from the run
-//! save — game over deletes the run, never the settings.
+//! immediately. The two accessibility toggles (#191) work the same way
+//! against [`AccessibilityPreferences`]: this module only persists the
+//! *preference* and exposes the resource — it deliberately does not act on
+//! it. Later systems (#200 reduced-motion suppression, #214 high-contrast
+//! tokens) read `Res<AccessibilityPreferences>` and change their own
+//! behavior; nothing here changes game presentation.
+//!
+//! Every change is persisted under its own key ([`SETTINGS_KEY`]) via the
+//! #21 storage backends, separate from the run save — game over deletes the
+//! run, never the settings (see [`SettingsStore`] and #191's added test
+//! coverage for that separation).
+//!
+//! ## Versioning and migration (#191)
+//!
+//! [`SETTINGS_VERSION`] moved from `1` (audio-only: music/sfx/muted) to `2`
+//! (adds `reduced_motion`/`high_contrast`), but [`SETTINGS_KEY`] is
+//! unchanged — the same stored blob is upgraded in place, never relocated.
+//! [`SettingsSave::from_json`] reads the blob's own `version` field first and
+//! dispatches: a current-version (`2`) blob deserializes directly; a `1`
+//! blob upgrades through [`SettingsSaveV1`], keeping every audio value
+//! byte-for-byte and defaulting both new accessibility fields to `false`;
+//! any other version (corrupt JSON, a future version this build doesn't
+//! know about, or a missing/garbled `version` field) yields `None`, so the
+//! documented defaults apply — never a panic.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -22,9 +44,15 @@ use crate::theme::{
 };
 use crate::ui_widgets::{attribute_row::spawn_stepper_row, wide_button, wide_button_labeled};
 
-/// The version written into every stored settings blob; any other version is
-/// discarded and the defaults apply.
-pub const SETTINGS_VERSION: u32 = 1;
+/// The version written into every stored settings blob. Version `1`
+/// (audio-only) safely migrates to this version (see [`SettingsSaveV1`] and
+/// [`SettingsSave::from_json`]); any other version is discarded and the
+/// defaults apply.
+pub const SETTINGS_VERSION: u32 = 2;
+
+/// The prior, audio-only settings version (#30), kept around only as the one
+/// migration source [`SettingsSave::from_json`] upgrades from.
+const SETTINGS_VERSION_V1_AUDIO_ONLY: u32 = 1;
 
 /// The settings' own storage key (`localStorage` on wasm); native stores the
 /// blob in `settings.json` next to the run save.
@@ -52,10 +80,27 @@ pub fn volume_to_step(volume: f32) -> u32 {
 #[derive(Resource, Debug)]
 pub struct SettingsOpen;
 
-/// Serde snapshot of [`AudioSettings`], stored under [`SETTINGS_KEY`].
+/// Runtime accessibility preferences (#191): whether the player asked for
+/// reduced motion and/or high contrast. This module owns only the
+/// preference itself — persisting it and exposing it here as a plain
+/// `Resource` for later systems to *observe*. It never suppresses motion or
+/// re-themes anything; #200 (motion suppression) and #214 (contrast tokens)
+/// are the systems that read `Res<AccessibilityPreferences>` and change
+/// their own behavior accordingly.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AccessibilityPreferences {
+    /// The player asked for reduced motion (safe default: `false`).
+    pub reduced_motion: bool,
+    /// The player asked for high contrast (safe default: `false`).
+    pub high_contrast: bool,
+}
+
+/// Serde snapshot of [`AudioSettings`] and [`AccessibilityPreferences`],
+/// stored under [`SETTINGS_KEY`].
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct SettingsSave {
-    /// Always [`SETTINGS_VERSION`]; any other value discards the blob.
+    /// Always [`SETTINGS_VERSION`]; any other value (except the migratable
+    /// [`SETTINGS_VERSION_V1_AUDIO_ONLY`]) discards the blob.
     pub version: u32,
     /// Music volume step `0..=10`.
     pub music: u32,
@@ -63,16 +108,38 @@ pub struct SettingsSave {
     pub sfx: u32,
     /// Master mute.
     pub muted: bool,
+    /// Reduced-motion preference (#191); defaults to `false` on a v1 blob
+    /// that predates it.
+    #[serde(default)]
+    pub reduced_motion: bool,
+    /// High-contrast preference (#191); defaults to `false` on a v1 blob
+    /// that predates it.
+    #[serde(default)]
+    pub high_contrast: bool,
+}
+
+/// The audio-only settings blob written by #30, before #191 added the
+/// accessibility fields. [`SettingsSave::from_json`] is the only reader of
+/// this shape, upgrading it into a current [`SettingsSave`] with both new
+/// fields defaulted to `false` and every audio value carried over intact.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+struct SettingsSaveV1 {
+    version: u32,
+    music: u32,
+    sfx: u32,
+    muted: bool,
 }
 
 impl SettingsSave {
-    /// Snapshots the live [`AudioSettings`].
-    pub fn capture(settings: &AudioSettings) -> Self {
+    /// Snapshots the live [`AudioSettings`] and [`AccessibilityPreferences`].
+    pub fn capture(audio: &AudioSettings, accessibility: &AccessibilityPreferences) -> Self {
         Self {
             version: SETTINGS_VERSION,
-            music: volume_to_step(settings.music_volume),
-            sfx: volume_to_step(settings.sfx_volume),
-            muted: settings.muted,
+            music: volume_to_step(audio.music_volume),
+            sfx: volume_to_step(audio.sfx_volume),
+            muted: audio.muted,
+            reduced_motion: accessibility.reduced_motion,
+            high_contrast: accessibility.high_contrast,
         }
     }
 
@@ -85,23 +152,50 @@ impl SettingsSave {
         }
     }
 
+    /// The snapshot back as live [`AccessibilityPreferences`].
+    pub fn accessibility_preferences(&self) -> AccessibilityPreferences {
+        AccessibilityPreferences {
+            reduced_motion: self.reduced_motion,
+            high_contrast: self.high_contrast,
+        }
+    }
+
     /// The snapshot as JSON; `None` only if serialization itself fails.
     pub fn to_json(&self) -> Option<String> {
         serde_json::to_string(self).ok()
     }
 
-    /// Parses and validates a snapshot: corrupt JSON or a version other than
-    /// [`SETTINGS_VERSION`] yields `None` — never a panic.
+    /// Parses and validates a stored blob: a current-version ([`SETTINGS_VERSION`])
+    /// blob deserializes directly; a [`SETTINGS_VERSION_V1_AUDIO_ONLY`] blob
+    /// migrates (audio values kept, accessibility fields default to `false`);
+    /// anything else — corrupt JSON, a missing/non-numeric `version`, or any
+    /// other version number (including a future one this build doesn't know
+    /// about) — yields `None` so the documented defaults apply. Never
+    /// panics.
     pub fn from_json(json: &str) -> Option<Self> {
-        let save: Self = serde_json::from_str(json).ok()?;
-        if save.version != SETTINGS_VERSION {
-            warn!(
-                "settings version {} does not match {}; using defaults",
-                save.version, SETTINGS_VERSION
-            );
-            return None;
+        let value: serde_json::Value = serde_json::from_str(json).ok()?;
+        let version = value.get("version")?.as_u64()?;
+        match u32::try_from(version) {
+            Ok(SETTINGS_VERSION) => serde_json::from_value(value).ok(),
+            Ok(SETTINGS_VERSION_V1_AUDIO_ONLY) => {
+                let v1: SettingsSaveV1 = serde_json::from_value(value).ok()?;
+                Some(Self {
+                    version: SETTINGS_VERSION,
+                    music: v1.music,
+                    sfx: v1.sfx,
+                    muted: v1.muted,
+                    reduced_motion: false,
+                    high_contrast: false,
+                })
+            }
+            Ok(other) => {
+                warn!(
+                    "settings version {other} is not the current version ({SETTINGS_VERSION}) or a migratable one ({SETTINGS_VERSION_V1_AUDIO_ONLY}); using defaults"
+                );
+                None
+            }
+            Err(_) => None,
         }
-        Some(save)
     }
 }
 
@@ -148,12 +242,17 @@ pub enum SettingsAction {
     SfxStep(i32),
     /// «Sunet: Pornit/Oprit» master mute toggle.
     ToggleMute,
+    /// «Mișcare redusă: Pornit/Oprit» reduced-motion preference toggle (#191).
+    ToggleReducedMotion,
+    /// «Contrast ridicat: Pornit/Oprit» high-contrast preference toggle (#191).
+    ToggleHighContrast,
     /// «Înapoi» — close the overlay, back to wherever it was opened from.
     Back,
 }
 
 /// Which live value a text label shows; `update_labels` refreshes every
-/// carrier whenever [`AudioSettings`] changes.
+/// carrier whenever [`AudioSettings`] or [`AccessibilityPreferences`]
+/// changes.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsLabel {
     /// The music volume step `0..=10`.
@@ -162,6 +261,10 @@ enum SettingsLabel {
     Sfx,
     /// The mute toggle's «Sunet: Pornit/Oprit» text.
     Mute,
+    /// The reduced-motion toggle's «Mișcare redusă: Pornit/Oprit» text (#191).
+    ReducedMotion,
+    /// The high-contrast toggle's «Contrast ridicat: Pornit/Oprit» text (#191).
+    HighContrast,
 }
 
 pub struct SettingsPlugin;
@@ -169,6 +272,7 @@ pub struct SettingsPlugin;
 impl Plugin for SettingsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SettingsStore>()
+            .init_resource::<AccessibilityPreferences>()
             .add_systems(Startup, load_settings)
             .add_systems(
                 Update,
@@ -185,23 +289,37 @@ impl Plugin for SettingsPlugin {
     }
 }
 
-/// Applies the stored settings to [`AudioSettings`] at startup. A missing,
-/// corrupt, or version-mismatched blob leaves the defaults in place.
-fn load_settings(store: Res<SettingsStore>, mut audio: ResMut<AudioSettings>) {
+/// Applies the stored settings to [`AudioSettings`] and
+/// [`AccessibilityPreferences`] at startup. A missing, corrupt, or
+/// unmigratable-version blob leaves the defaults in place for both.
+fn load_settings(
+    store: Res<SettingsStore>,
+    mut audio: ResMut<AudioSettings>,
+    mut accessibility: ResMut<AccessibilityPreferences>,
+) {
     let Some(save) = store.load().as_deref().and_then(SettingsSave::from_json) else {
         return;
     };
     *audio = save.audio_settings();
+    *accessibility = save.accessibility_preferences();
 }
 
-/// Persists [`AudioSettings`] whenever they change (steppers, the mute
-/// toggle, the M key alike). The startup tick is skipped: loading the stored
-/// settings must not immediately rewrite them.
-fn persist_on_change(audio: Res<AudioSettings>, store: Res<SettingsStore>) {
-    if !audio.is_changed() || audio.is_added() {
+/// Persists [`AudioSettings`] and [`AccessibilityPreferences`] whenever
+/// either changes (steppers, the mute toggle, the M key, or the two
+/// accessibility toggles alike). The startup tick is skipped for each: the
+/// values `load_settings` just applied must not immediately rewrite the
+/// store.
+fn persist_on_change(
+    audio: Res<AudioSettings>,
+    accessibility: Res<AccessibilityPreferences>,
+    store: Res<SettingsStore>,
+) {
+    let audio_dirty = audio.is_changed() && !audio.is_added();
+    let accessibility_dirty = accessibility.is_changed() && !accessibility.is_added();
+    if !audio_dirty && !accessibility_dirty {
         return;
     }
-    match SettingsSave::capture(&audio).to_json() {
+    match SettingsSave::capture(&audio, &accessibility).to_json() {
         Some(json) => store.store(&json),
         None => warn!("could not serialize the settings; nothing stored"),
     }
@@ -216,11 +334,30 @@ fn mute_label(muted: bool) -> &'static str {
     }
 }
 
+/// The reduced-motion toggle's label for the current state (#191).
+fn reduced_motion_label(enabled: bool) -> &'static str {
+    if enabled {
+        "Mișcare redusă: Pornit"
+    } else {
+        "Mișcare redusă: Oprit"
+    }
+}
+
+/// The high-contrast toggle's label for the current state (#191).
+fn high_contrast_label(enabled: bool) -> &'static str {
+    if enabled {
+        "Contrast ridicat: Pornit"
+    } else {
+        "Contrast ridicat: Oprit"
+    }
+}
+
 /// Spawns the settings scrim and panel above everything else (the pause
 /// overlay sits at `GlobalZIndex(10)`).
 fn spawn_overlay(
     mut commands: Commands,
     audio: Res<AudioSettings>,
+    accessibility: Res<AccessibilityPreferences>,
     ui_font: Res<UiFont>,
     panel_texture: Res<PanelTexture>,
 ) {
@@ -278,6 +415,22 @@ fn spawn_overlay(
                         wide_button_labeled(mute_label(audio.muted), SettingsLabel::Mute, &ui_font),
                         SettingsAction::ToggleMute,
                     ));
+                    panel.spawn((
+                        wide_button_labeled(
+                            reduced_motion_label(accessibility.reduced_motion),
+                            SettingsLabel::ReducedMotion,
+                            &ui_font,
+                        ),
+                        SettingsAction::ToggleReducedMotion,
+                    ));
+                    panel.spawn((
+                        wide_button_labeled(
+                            high_contrast_label(accessibility.high_contrast),
+                            SettingsLabel::HighContrast,
+                            &ui_font,
+                        ),
+                        SettingsAction::ToggleHighContrast,
+                    ));
                     panel.spawn((wide_button("Înapoi", &ui_font), SettingsAction::Back));
                 });
         });
@@ -314,12 +467,16 @@ fn despawn_overlay(mut commands: Commands, overlays: Query<Entity, With<Settings
 }
 
 /// Applies a clicked settings action: step a volume (clamped at 0/10), flip
-/// the mute, or close the overlay. All changes go through [`AudioSettings`],
-/// which the audio plugin applies to live sinks the same frame.
+/// the mute or an accessibility toggle, or close the overlay. Audio changes
+/// go through [`AudioSettings`], which the audio plugin applies to live
+/// sinks the same frame; the two accessibility toggles only flip
+/// [`AccessibilityPreferences`] — nothing here reacts to them (see the
+/// module docs).
 fn handle_settings_buttons(
     mut commands: Commands,
     interactions: Query<(&Interaction, &SettingsAction), ChangedSettingsButton>,
     mut audio: ResMut<AudioSettings>,
+    mut accessibility: ResMut<AccessibilityPreferences>,
 ) {
     for (interaction, action) in &interactions {
         if *interaction != Interaction::Pressed {
@@ -335,15 +492,26 @@ fn handle_settings_buttons(
                 audio.sfx_volume = step_to_volume(step);
             }
             SettingsAction::ToggleMute => audio.muted = !audio.muted,
+            SettingsAction::ToggleReducedMotion => {
+                accessibility.reduced_motion = !accessibility.reduced_motion;
+            }
+            SettingsAction::ToggleHighContrast => {
+                accessibility.high_contrast = !accessibility.high_contrast;
+            }
             SettingsAction::Back => commands.remove_resource::<SettingsOpen>(),
         }
     }
 }
 
-/// Keeps the two step values and the mute label in sync with
-/// [`AudioSettings`] (M-key mutes included).
-fn update_labels(audio: Res<AudioSettings>, mut labels: Query<(&mut Text, &SettingsLabel)>) {
-    if !audio.is_changed() {
+/// Keeps the step values, the mute label, and the two accessibility toggle
+/// labels in sync with [`AudioSettings`] (M-key mutes included) and
+/// [`AccessibilityPreferences`].
+fn update_labels(
+    audio: Res<AudioSettings>,
+    accessibility: Res<AccessibilityPreferences>,
+    mut labels: Query<(&mut Text, &SettingsLabel)>,
+) {
+    if !audio.is_changed() && !accessibility.is_changed() {
         return;
     }
     for (mut text, label) in &mut labels {
@@ -351,6 +519,12 @@ fn update_labels(audio: Res<AudioSettings>, mut labels: Query<(&mut Text, &Setti
             SettingsLabel::Music => volume_to_step(audio.music_volume).to_string(),
             SettingsLabel::Sfx => volume_to_step(audio.sfx_volume).to_string(),
             SettingsLabel::Mute => mute_label(audio.muted).to_string(),
+            SettingsLabel::ReducedMotion => {
+                reduced_motion_label(accessibility.reduced_motion).to_string()
+            }
+            SettingsLabel::HighContrast => {
+                high_contrast_label(accessibility.high_contrast).to_string()
+            }
         };
     }
 }
@@ -404,12 +578,16 @@ mod tests {
     #[test]
     fn settings_roundtrip_through_the_storage_backend() {
         let (store, _cell) = in_memory_store();
-        let settings = AudioSettings {
+        let audio = AudioSettings {
             music_volume: 0.3,
             sfx_volume: 0.9,
             muted: true,
         };
-        let save = SettingsSave::capture(&settings);
+        let accessibility = AccessibilityPreferences {
+            reduced_motion: true,
+            high_contrast: false,
+        };
+        let save = SettingsSave::capture(&audio, &accessibility);
         store.store(&save.to_json().expect("plain data serializes"));
         let restored = store
             .load()
@@ -417,18 +595,73 @@ mod tests {
             .and_then(SettingsSave::from_json)
             .expect("own JSON loads");
         assert_eq!(restored, save);
-        assert_eq!(restored.audio_settings(), settings);
+        assert_eq!(restored.audio_settings(), audio);
+        assert_eq!(restored.accessibility_preferences(), accessibility);
     }
 
     #[test]
-    fn corrupt_or_mismatched_settings_fall_back_to_none() {
+    fn accessibility_preferences_default_to_false() {
+        assert_eq!(
+            AccessibilityPreferences::default(),
+            AccessibilityPreferences {
+                reduced_motion: false,
+                high_contrast: false,
+            }
+        );
+    }
+
+    /// A #30-era, audio-only blob (no `reduced_motion`/`high_contrast` at
+    /// all) migrates: every audio value carries over exactly, and both new
+    /// accessibility fields default to `false` — never a panic, never a
+    /// dropped audio value.
+    #[test]
+    fn v1_audio_only_settings_migrate_with_defaulted_accessibility() {
+        let fixture = r#"{"version":1,"music":7,"sfx":2,"muted":true}"#;
+        let migrated = SettingsSave::from_json(fixture).expect("a v1 blob migrates");
+        assert_eq!(
+            migrated,
+            SettingsSave {
+                version: SETTINGS_VERSION,
+                music: 7,
+                sfx: 2,
+                muted: true,
+                reduced_motion: false,
+                high_contrast: false,
+            }
+        );
+        assert_eq!(
+            migrated.audio_settings(),
+            AudioSettings {
+                music_volume: 0.7,
+                sfx_volume: 0.2,
+                muted: true,
+            },
+            "audio values survive the migration byte-for-byte"
+        );
+        assert_eq!(
+            migrated.accessibility_preferences(),
+            AccessibilityPreferences::default(),
+            "accessibility fields default safely on a pre-#191 blob"
+        );
+    }
+
+    #[test]
+    fn corrupt_or_future_versioned_settings_fall_back_to_none() {
         for bad in [
             "",
             "not json",
             "{",
-            r#"{"version":2,"music":5,"sfx":5,"muted":false}"#,
+            "null",
+            "[]",
+            r#"{"music":5,"sfx":5,"muted":false}"#,
+            r#"{"version":"nope","music":5,"sfx":5,"muted":false}"#,
+            r#"{"version":0,"music":5,"sfx":5,"muted":false}"#,
+            r#"{"version":3,"music":5,"sfx":5,"muted":false,"reduced_motion":false,"high_contrast":false}"#,
         ] {
-            assert!(SettingsSave::from_json(bad).is_none(), "{bad:?}");
+            assert!(
+                SettingsSave::from_json(bad).is_none(),
+                "expected None for {bad:?}"
+            );
         }
     }
 
@@ -473,6 +706,10 @@ mod tests {
         *app.world().resource::<AudioSettings>()
     }
 
+    fn accessibility(app: &App) -> AccessibilityPreferences {
+        *app.world().resource::<AccessibilityPreferences>()
+    }
+
     #[test]
     fn stored_settings_load_at_startup() {
         let mut app = App::new();
@@ -485,6 +722,8 @@ mod tests {
                 music: 2,
                 sfx: 10,
                 muted: true,
+                reduced_motion: true,
+                high_contrast: true,
             }
             .to_json()
             .expect("plain data serializes"),
@@ -500,6 +739,16 @@ mod tests {
                 muted: true,
             }
         );
+        assert_eq!(
+            accessibility(&app),
+            AccessibilityPreferences {
+                reduced_motion: true,
+                high_contrast: true,
+            },
+            "both accessibility preferences load from the stored blob \
+             (this is the app-level analogue of a browser reload: a fresh \
+             app reading the same stored blob at Startup)"
+        );
     }
 
     #[test]
@@ -508,6 +757,7 @@ mod tests {
         *cell.lock().expect("test store lock") = Some("garbage".to_string());
         app.update();
         assert_eq!(audio(&app), AudioSettings::default());
+        assert_eq!(accessibility(&app), AccessibilityPreferences::default());
     }
 
     #[test]
@@ -566,6 +816,44 @@ mod tests {
     }
 
     #[test]
+    fn the_reduced_motion_toggle_flips_independently_of_high_contrast() {
+        let (mut app, _cell) = test_app();
+        app.update();
+        app.insert_resource(SettingsOpen);
+        app.update();
+        let toggle = find_button(&mut app, SettingsAction::ToggleReducedMotion);
+        click(&mut app, toggle);
+        assert_eq!(
+            accessibility(&app),
+            AccessibilityPreferences {
+                reduced_motion: true,
+                high_contrast: false,
+            }
+        );
+        click(&mut app, toggle);
+        assert_eq!(accessibility(&app), AccessibilityPreferences::default());
+    }
+
+    #[test]
+    fn the_high_contrast_toggle_flips_independently_of_reduced_motion() {
+        let (mut app, _cell) = test_app();
+        app.update();
+        app.insert_resource(SettingsOpen);
+        app.update();
+        let toggle = find_button(&mut app, SettingsAction::ToggleHighContrast);
+        click(&mut app, toggle);
+        assert_eq!(
+            accessibility(&app),
+            AccessibilityPreferences {
+                reduced_motion: false,
+                high_contrast: true,
+            }
+        );
+        click(&mut app, toggle);
+        assert_eq!(accessibility(&app), AccessibilityPreferences::default());
+    }
+
+    #[test]
     fn every_change_persists_to_the_settings_store() {
         let (mut app, cell) = test_app();
         app.update();
@@ -588,6 +876,28 @@ mod tests {
     }
 
     #[test]
+    fn accessibility_toggles_persist_to_the_settings_store() {
+        let (mut app, cell) = test_app();
+        app.update();
+        app.insert_resource(SettingsOpen);
+        app.update();
+
+        let reduced_motion = find_button(&mut app, SettingsAction::ToggleReducedMotion);
+        click(&mut app, reduced_motion);
+        let high_contrast = find_button(&mut app, SettingsAction::ToggleHighContrast);
+        click(&mut app, high_contrast);
+
+        let stored = cell
+            .lock()
+            .expect("test store lock")
+            .as_deref()
+            .and_then(SettingsSave::from_json)
+            .expect("the accessibility changes are persisted");
+        assert!(stored.reduced_motion);
+        assert!(stored.high_contrast);
+    }
+
+    #[test]
     fn game_over_deletes_the_run_save_but_not_the_settings() {
         use crate::core::GameState;
         use crate::save::{SavePlugin, SaveStore};
@@ -603,6 +913,8 @@ mod tests {
                 music: 3,
                 sfx: 7,
                 muted: false,
+                reduced_motion: true,
+                high_contrast: true,
             }
             .to_json()
             .expect("plain data serializes"),
@@ -624,7 +936,11 @@ mod tests {
             .expect("test store lock")
             .as_deref()
             .and_then(SettingsSave::from_json)
-            .expect("the settings survive game over");
+            .expect("the settings (audio + accessibility) survive game over");
         assert_eq!((settings.music, settings.sfx), (3, 7));
+        assert!(
+            settings.reduced_motion && settings.high_contrast,
+            "accessibility preferences are untouched by run deletion, same as audio"
+        );
     }
 }
