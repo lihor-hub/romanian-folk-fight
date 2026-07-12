@@ -3,12 +3,18 @@
 //! connects them to the arena fighters, the fight-screen HUD ([`hud`]), and
 //! the in-fight pause overlay ([`pause`]).
 
+pub mod action_palette;
+pub mod actions;
 pub mod ai;
 pub mod engine;
 pub mod hud;
 pub mod pause;
 pub mod systems;
 
+pub use actions::{
+    ActionCategory, ActionCost, ActionDescriptor, ActionId, DescriptorContext, ExtraDescriptors,
+    generate_action_descriptors,
+};
 pub use ai::{AiProfile, choose_action, choose_action_at_distance};
 pub use engine::{CombatAction, CombatEvent, DuelDistance, FighterState};
 pub use hud::CombatLog;

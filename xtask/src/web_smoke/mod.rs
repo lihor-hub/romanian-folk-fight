@@ -68,6 +68,7 @@ pub mod baseline;
 pub mod browser;
 mod cold_menu;
 pub mod error;
+mod fight_palette_desktop;
 mod gold_journey;
 mod reduced_motion_fight;
 pub mod server;
@@ -79,17 +80,19 @@ pub use error::SmokeError;
 
 /// Dispatches `--scenario <name>` to the matching scenario module. Known
 /// scenarios: `cold-menu` (#168), `gold-journey` (#187),
-/// `accessibility-settings-reload` (#191), and `reduced-motion-fight` (#200)
-/// -- each one the exact extension pattern the module docs above describe: a
-/// new module plus one match arm here, nothing else touched upstream.
+/// `accessibility-settings-reload` (#191), `reduced-motion-fight` (#200), and
+/// `fight-palette-desktop` (#189) -- each one the exact extension pattern
+/// the module docs above describe: a new module plus one match arm here,
+/// nothing else touched upstream.
 pub fn run_scenario(scenario: &str, update_baselines: bool) -> Result<(), SmokeError> {
     match scenario {
         "cold-menu" => cold_menu::run(update_baselines),
         "gold-journey" => gold_journey::run(update_baselines),
         "accessibility-settings-reload" => accessibility_settings_reload::run(update_baselines),
         "reduced-motion-fight" => reduced_motion_fight::run(update_baselines),
+        "fight-palette-desktop" => fight_palette_desktop::run(update_baselines),
         other => Err(SmokeError::usage(format!(
-            "unknown --scenario `{other}` (known scenarios: cold-menu, gold-journey, accessibility-settings-reload, reduced-motion-fight)"
+            "unknown --scenario `{other}` (known scenarios: cold-menu, gold-journey, accessibility-settings-reload, reduced-motion-fight, fight-palette-desktop)"
         ))),
     }
 }
