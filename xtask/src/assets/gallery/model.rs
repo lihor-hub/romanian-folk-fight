@@ -149,10 +149,9 @@ pub fn background_scenes<'a>(records: &[&'a ResolvedRecord]) -> Vec<BackgroundSc
         if record.record.category != Category::Background {
             continue;
         }
-        let Some(last) = id_segment(&record.record.id, usize::MAX) else {
+        let Some(scene) = background_scene_of(&record.record.id) else {
             continue;
         };
-        let (scene, _layer) = split_scene_layer(last);
         by_scene.entry(scene.to_string()).or_default().push(record);
     }
     for layers in by_scene.values_mut() {
@@ -203,6 +202,25 @@ fn id_segment(id: &str, index: usize) -> Option<&str> {
 /// short, readable synthetic composition-page ids.
 pub fn last_segment(id: &str) -> &str {
     id_segment(id, usize::MAX).unwrap_or(id)
+}
+
+/// Fighter identity a `fighter-runtime-part` id belongs to (the second
+/// dotted segment, e.g. `fighters.human.runtime.head` -> `human`), or `None`
+/// for an id that doesn't have that shape. Shared by `mod.rs` (page
+/// generation) and `changed.rs` (#211's dependency closure) so both derive
+/// the identity the exact same way rather than duplicating the segment math.
+pub fn identity_of(id: &str) -> Option<&str> {
+    id_segment(id, 1)
+}
+
+/// The scene name (e.g. `village`) a `background` record id belongs to (its
+/// last dotted segment, minus a recognized `-far`/`-near`/`-foreground`
+/// layer suffix), or `None` for an id with no dotted segment at all. Shared
+/// by [`background_scenes`] and `changed.rs`'s dependency closure.
+pub fn background_scene_of(id: &str) -> Option<&str> {
+    let last = id_segment(id, usize::MAX)?;
+    let (scene, _layer) = split_scene_layer(last);
+    Some(scene)
 }
 
 #[cfg(test)]

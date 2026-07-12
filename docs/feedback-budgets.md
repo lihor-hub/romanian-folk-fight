@@ -191,28 +191,52 @@ changed.
 
 ## Downstream ownership: asset and browser loops
 
-The plan's feedback-loop contract also names two other loops this issue does
-**not** implement or time -- they are separately owned:
+The plan's feedback-loop contract also names other loops this document's
+owning issue (#165) did **not** implement or time -- they are separately
+owned:
 
-- `cargo xtask assets check` / `cargo xtask assets review --changed` --
+- `cargo xtask assets check` --
   [#141](https://github.com/lihor-hub/romanian-folk-fight/issues/141)'s asset
-  manifest/gallery module (tracked leaves
-  [#167](https://github.com/lihor-hub/romanian-folk-fight/issues/167)/[#185](https://github.com/lihor-hub/romanian-folk-fight/issues/185)/[#197](https://github.com/lihor-hub/romanian-folk-fight/issues/197)/[#211](https://github.com/lihor-hub/romanian-folk-fight/issues/211)).
-  Target warm budgets from the plan: asset contract 5s, changed-asset gallery
-  30s.
+  manifest module (tracked leaves
+  [#167](https://github.com/lihor-hub/romanian-folk-fight/issues/167)/[#185](https://github.com/lihor-hub/romanian-folk-fight/issues/185)).
+  Target warm budget from the plan: asset contract 5s (documented name and
+  budget only -- not yet measured here, and `assets_cmd::check` does not yet
+  call `warn_if_over_budget`).
+- `cargo xtask assets review --changed` --
+  [#211](https://github.com/lihor-hub/romanian-folk-fight/issues/211)'s
+  focused changed-asset gallery. Target warm budget from the plan: 30
+  seconds, enforced via `warn_if_over_budget` in
+  `xtask/src/commands/assets_cmd.rs` (`CHANGED_REVIEW_BUDGET_MS`,
+  overridable via `XTASK_BUDGET_MS`). Measured by #211 against a local
+  fixture branch changing one strigoi runtime part (closure: that part's
+  page + `composition.strigoi` + the index):
+
+  | Command | Warm (run 1) | Warm (run 2) | Target budget (warm) |
+  | --- | ---: | ---: | ---: |
+  | `assets review --changed` (1 changed part, 2 pages + index) | 0.03s | 0.04s | 30s |
+
+  Same conventions as the table at the top of this document: the recorded
+  number is the command's own internal elapsed (`ok (N.NNs)`), single
+  samples, not averages. Wall clock including the `cargo run` launch was
+  ~0.49s. The widest current closure (a *human* part change dirtying
+  `composition.human` plus all 13 gear compositions, 17 pages) measured
+  0.05s on the same machine. A genuinely *cold* run additionally pays the
+  one-time `cargo` compile of the `xtask` binary itself (a few seconds
+  incrementally, minutes from `cargo clean`) -- the budget is a warm
+  inner-loop target and deliberately excludes that, exactly like every
+  other command measured here. The fixture-machine hardware/toolchain rows
+  at the top of this document still apply (Apple M5 Pro, no `sccache`).
 - `cargo xtask web-smoke --scenario <scenario-name>` --
   [#144](https://github.com/lihor-hub/romanian-folk-fight/issues/144)'s
   browser-smoke orchestration module (tracked leaves
   [#168](https://github.com/lihor-hub/romanian-folk-fight/issues/168)/[#187](https://github.com/lihor-hub/romanian-folk-fight/issues/187)/[#198](https://github.com/lihor-hub/romanian-folk-fight/issues/198)).
   Target warm budget from the plan: one browser scenario, 90s.
 
-These two command names are documented here **only as names and their
-already-planned target budgets** -- neither is implemented, wired into the
-`xtask` dispatcher, nor measured by this issue. `xtask/src/commands/mod.rs`'s
-own test (`help_lists_only_root_owned_commands`) asserts `cargo xtask --help`
-never mentions "asset" or "browser" until #141/#144 add those modules
-themselves. When they do, they should replace the two bullets above with
-their own measured cold/warm tables, following this document's format.
+The `assets check` / `web-smoke` entries are documented here **only as names
+and their already-planned target budgets**; when their owning issues measure
+them, they should replace those bullets with measured cold/warm tables,
+following this document's format (as #211 did for
+`assets review --changed` above).
 
 ## Known limitations
 

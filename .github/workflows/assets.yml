@@ -1,8 +1,11 @@
 name: Asset manifest check
 
 # Separate from ci.yml on purpose (see the #141 tracker's "separate workflow
-# files" rule): this validates the assets/ manifest sidecars owned by #167,
-# independent of the native/wasm build-and-test gates in ci.yml.
+# files" rule): this validates the assets/ manifest sidecars owned by #167
+# (plus #185's runtime-reference/image-integrity rules) and generates #211's
+# focused changed-asset review gallery, independent of the native/wasm
+# build-and-test gates in ci.yml and of #144's browser workflow
+# (web-smoke.yml), which this file never touches.
 on:
   push:
     branches: [ main ]
@@ -16,10 +19,16 @@ env:
 
 jobs:
   assets_check:
-    name: cargo xtask assets check
+    name: cargo xtask assets check + review --changed
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the #211 changed-review base resolution
+          # (GITHUB_BASE_REF as origin/<base>, or merge-base with
+          # origin/main) has the refs/commits it needs; the default
+          # depth-1 checkout has neither.
+          fetch-depth: 0
 
       - name: Set up Rust cache
         uses: Swatinem/rust-cache@v2
@@ -28,4 +37,29 @@ jobs:
         # No worktree bootstrap in CI, so no `cargo xtask` alias exists yet
         # (see xtask/README.md's "known limitation"); invoke the crate
         # directly instead.
-        run: cargo run --package xtask -- assets check
+        run: cargo run --locked -p xtask -- assets check
+
+      - name: Run cargo xtask assets review --changed
+        # Only where a comparison base is well-defined: on pull_request
+        # GITHUB_BASE_REF names the target branch; in a merge_group the
+        # merge-base with origin/main isolates the queued changes. On a
+        # push to main the diff base would be HEAD itself (empty review),
+        # so the step is skipped there. A missing/invalid base fails the
+        # step with an actionable message -- never a silent full review.
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        run: cargo run --locked -p xtask -- assets review --changed
+
+      - name: Upload focused gallery + diagnostics (always, for post-mortem on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asset-review-changed
+          # Both paths keep their repo-relative layout inside the artifact,
+          # so the gallery's relative ../../../assets/ image links resolve
+          # after download without a repo checkout.
+          path: |
+            target/xtask-artifacts/asset-gallery-changed/
+            target/xtask-artifacts/assets-check.log
+            assets/
+          if-no-files-found: ignore
+          retention-days: 14
