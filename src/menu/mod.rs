@@ -9,12 +9,23 @@ use crate::save::{SaveStore, load_save};
 use crate::settings::SettingsOpen;
 use crate::theme::{
     ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD,
-    PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
+    PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, motif_band, motif_emblem, panel_bundle,
 };
 
 const MENU_ROOT_PADDING: f32 = 18.0;
 const MENU_TITLE_STAGE_WIDTH: f32 = 382.0;
 const MENU_BUTTON_PANEL_WIDTH: f32 = 318.0;
+
+/// Height of the embroidered divider band — the authored band in the panel
+/// texture is [`crate::theme::PANEL_BORDER_INSET`] px tall, so this renders
+/// the stitches at their 1:1 authored pixel scale.
+const MOTIF_DIVIDER_HEIGHT: f32 = crate::theme::PANEL_BORDER_INSET;
+
+/// Side length of the large central diamond emblem in the title stage; a
+/// whole multiple of the emblem's 24px source crop so the upscale stays even.
+const MOTIF_EMBLEM_LARGE: f32 = 96.0;
+/// Side length of the two flanking emblems.
+const MOTIF_EMBLEM_SMALL: f32 = 48.0;
 
 /// Marker for the main-menu screen root; everything under it is despawned by
 /// [`despawn_screen`] on `OnExit(GameState::MainMenu)`.
@@ -48,6 +59,16 @@ pub enum MenuAction {
 /// Marker for buttons that are greyed out and ignore all interaction.
 #[derive(Component)]
 pub struct DisabledButton;
+
+/// Marker for the embroidered cross-stitch divider bands framing the title
+/// (#121) — real motif art sampled from the panel-border texture, never an
+/// ASCII placeholder string.
+#[derive(Component)]
+struct MotifDivider;
+
+/// Marker for the diamond emblems composed inside the title-stage box (#121).
+#[derive(Component)]
+struct MotifEmblem;
 
 pub struct MenuPlugin;
 
@@ -121,7 +142,7 @@ fn spawn_main_menu(
                     MainMenuLayoutRole::TitleStage,
                 ))
                 .with_children(|stage| {
-                    stage.spawn(motif_divider(&ui_font));
+                    stage.spawn(motif_divider(&panel_texture));
                     stage.spawn((
                         Text::new("Romanian Folk Fight"),
                         ui_font.text_font_bold(38.0),
@@ -139,17 +160,18 @@ fn spawn_main_menu(
                             border: UiRect::all(Val::Px(2.0)),
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
+                            column_gap: Val::Px(18.0),
                             ..default()
                         },
                         BackgroundColor(WALNUT),
                         BorderColor::all(GOLD),
-                        children![(
-                            Text::new("*  *  *"),
-                            ui_font.text_font_bold(42.0),
-                            TextColor(GOLD),
-                        )],
+                        children![
+                            title_emblem(&panel_texture, MOTIF_EMBLEM_SMALL),
+                            title_emblem(&panel_texture, MOTIF_EMBLEM_LARGE),
+                            title_emblem(&panel_texture, MOTIF_EMBLEM_SMALL),
+                        ],
                     ));
-                    stage.spawn(motif_divider(&ui_font));
+                    stage.spawn(motif_divider(&panel_texture));
                 });
 
             parent
@@ -199,14 +221,36 @@ fn spawn_main_menu(
         });
 }
 
-/// A thin gold rule flanked by two diamonds — the "motif divider" framing the
-/// menu title, echoing the embroidered ii cross-stitch used on the panel
-/// border.
-fn motif_divider(ui_font: &UiFont) -> impl Bundle {
+/// The embroidered cross-stitch divider framing the menu title (#121): a
+/// band of the panel-border texture's authored gold-on-red ii stitches (see
+/// [`motif_band`]), tiled horizontally at 1:1 pixel scale. Inset by the
+/// texture's corner-block size on each side so it phase-aligns with the
+/// title panel's own 9-slice band behind it and leaves the panel's corner
+/// diamond blocks visible instead of covering them with band tiles.
+fn motif_divider(panel_texture: &PanelTexture) -> impl Bundle {
     (
-        Text::new("* -- * -- *"),
-        ui_font.text_font(20.0),
-        TextColor(GOLD),
+        MotifDivider,
+        Node {
+            height: Val::Px(MOTIF_DIVIDER_HEIGHT),
+            margin: UiRect::horizontal(Val::Px(MOTIF_DIVIDER_HEIGHT)),
+            ..default()
+        },
+        motif_band(panel_texture),
+    )
+}
+
+/// One diamond emblem for the title stage (#121): the panel border's corner
+/// motif — gold cross-stitch diamond, cream heart, black block — cropped via
+/// [`motif_emblem`] and scaled to `size` px square.
+fn title_emblem(panel_texture: &PanelTexture, size: f32) -> impl Bundle {
+    (
+        MotifEmblem,
+        Node {
+            width: Val::Px(size),
+            height: Val::Px(size),
+            ..default()
+        },
+        motif_emblem(panel_texture),
     )
 }
 
@@ -330,6 +374,73 @@ mod tests {
             .query_filtered::<(), With<C>>()
             .iter(app.world())
             .count()
+    }
+
+    /// #121: the menu's ornaments must be authored motif art, never ASCII
+    /// placeholder strings like `* -- * -- *` or `*  *  *`.
+    #[test]
+    fn menu_spawns_no_ascii_ornament_text() {
+        let mut app = test_app();
+        app.update();
+        let ornaments: Vec<String> = app
+            .world_mut()
+            .query::<&Text>()
+            .iter(app.world())
+            .filter(|text| text.0.starts_with('*'))
+            .map(|text| text.0.clone())
+            .collect();
+        assert!(
+            ornaments.is_empty(),
+            "ASCII ornament text remains in the menu: {ornaments:?}"
+        );
+    }
+
+    /// #121: the dividers framing the title are embroidery image bands, not
+    /// text entities.
+    #[test]
+    fn dividers_are_embroidery_image_bands_not_text() {
+        let mut app = test_app();
+        app.update();
+        let dividers: Vec<Entity> = app
+            .world_mut()
+            .query_filtered::<Entity, With<MotifDivider>>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(
+            dividers.len(),
+            2,
+            "one divider above the title, one below the stage box"
+        );
+        for divider in dividers {
+            let entity = app.world().entity(divider);
+            assert!(
+                entity.contains::<ImageNode>(),
+                "divider must render motif art via an ImageNode"
+            );
+            assert!(
+                !entity.contains::<Text>(),
+                "divider must not be a Text entity"
+            );
+        }
+    }
+
+    /// #121: the title-stage box is filled with authored emblem art composed
+    /// from the panel-border texture, not a text glyph.
+    #[test]
+    fn title_stage_shows_authored_emblem_art() {
+        let mut app = test_app();
+        app.update();
+        let emblems: Vec<Entity> = app
+            .world_mut()
+            .query_filtered::<Entity, With<MotifEmblem>>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(emblems.len(), 3, "a large central emblem flanked by two");
+        for emblem in emblems {
+            let entity = app.world().entity(emblem);
+            assert!(entity.contains::<ImageNode>());
+            assert!(!entity.contains::<Text>());
+        }
     }
 
     #[test]
