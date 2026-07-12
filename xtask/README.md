@@ -35,6 +35,7 @@ cargo xtask assets check        # validate every manifest.toml sidecar + runtime
 cargo xtask assets review       # generate the deterministic static asset review gallery (#197)
 cargo xtask web-smoke --scenario cold-menu   # build+serve the wasm game, verify the first-painted menu in a real browser (#168)
 cargo xtask web-smoke --scenario gold-journey  # deterministic menu->creation->fight->result->shop journey, review build (#187)
+cargo xtask web-smoke --scenario accessibility-settings-reload  # click both a11y toggles, reload, verify persistence + zoom (#191)
 cargo xtask pre-push            # fmt check, clippy, cargo test, build-matrix -- stops at first failure
 ```
 
@@ -304,6 +305,33 @@ screens) is reproducible run to run. Baselines live at
 review seam itself is compiled in only behind the `review` cargo feature
 (see `Cargo.toml` and `src/review/mod.rs`), never part of an ordinary
 `cargo build`/`--release`/`trunk build --release`.
+
+### `web-smoke --scenario accessibility-settings-reload` (#191, a child of #145)
+
+Reuses the same `xtask/src/web_smoke/` harness (`build_release`, `browser`,
+`server`, `artifacts`) as `cold-menu`, added as its own module
+(`accessibility_settings_reload.rs`) plus one match arm in
+`web_smoke::run_scenario` -- no dispatcher/CLI/harness-core change. Builds +
+serves the release wasm bundle, launches a fresh-profile headless Chrome at
+1280x800, and drives the real settings UI: clicks **Setări** on the main
+menu, then the **Mișcare redusă** and **Contrast ridicat** toggles inside the
+settings panel, using real CDP mouse clicks (`Checkpoint::click`) at pixel
+coordinates located by scanning the captured screenshot for the game's own
+solid `BUTTON_NORMAL` background color (the whole UI is canvas/WebGL --
+there is no DOM element per button; see the module's docs for the full
+color/band-detection approach and why it can't be confused with the small
+`48x48` stepper buttons). Reads `localStorage.getItem('rff_settings_v1')`
+directly right after both clicks, reloads the page for real
+(`Page.reload`), and reads it again -- asserting `reduced_motion` and
+`high_contrast` are both still `true` -- plus asserts the viewport `<meta>`
+no longer carries `maximum-scale`/`user-scalable` and that
+`window.visualViewport`/its `scale` are available, both before and after the
+reload. No screenshot baselines: this scenario's captures are click-target
+input and artifacts only, never a pass/fail visual gate (`--update-baselines`
+is accepted for CLI uniformity but has no effect). Diagnostics (menu/
+settings/post-reload screenshots, viewport and zoom-capability logs, both
+`localStorage` reads, the server request log) are always retained under
+`target/xtask-artifacts/web-smoke/accessibility-settings-reload/reload/`.
 
 ### `pre-push`
 

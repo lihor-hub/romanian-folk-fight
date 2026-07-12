@@ -42,6 +42,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use headless_chrome::browser::tab::point::Point;
 use headless_chrome::protocol::cdp::{Emulation, Page};
 use headless_chrome::{Browser, LaunchOptionsBuilder, Tab};
 
@@ -311,6 +312,33 @@ impl Checkpoint {
         Ok(())
     }
 
+    /// Reloads the current page (`Shift+F5`-style: cache not ignored, so the
+    /// already-cached wasm/asset bytes are reused -- only the running app
+    /// state is discarded), used by the `accessibility-settings-reload`
+    /// scenario (#191) to prove a stored preference survives a real browser
+    /// reload, not just an in-memory resource mutation.
+    pub fn reload(&self) -> Result<(), String> {
+        self.tab
+            .reload(false, None)
+            .map_err(|e| format!("page reload failed: {e}"))?;
+        Ok(())
+    }
+
+    /// Clicks the page at exact CSS-pixel coordinates (viewport space, DPR 1
+    /// per [`launch`]'s device-metrics override) via a real CDP mouse
+    /// move+press+release -- not a JS-synthesized event -- so it exercises
+    /// the same input path a real user's click does. The game's UI is
+    /// entirely canvas-rendered (`bevy_ui`), so there is no DOM element to
+    /// address; callers locate a button's center pixel themselves (see
+    /// `accessibility_settings_reload::find_wide_button_centers`, which
+    /// scans a screenshot for the game's known solid button color instead).
+    pub fn click(&self, x: f64, y: f64) -> Result<(), String> {
+        self.tab
+            .click_point(Point { x, y })
+            .map_err(|e| format!("click at ({x}, {y}) failed: {e}"))?;
+        Ok(())
+    }
+
     /// Awaits one real rendered frame (`requestAnimationFrame`, resolved as
     /// a promise `evaluate` blocks on) -- the readiness loop's unit of
     /// waiting, in place of a wall-clock sleep: see `cold_menu`'s module
@@ -326,16 +354,28 @@ impl Checkpoint {
     }
 
     pub fn read_status(&self) -> Result<PageStatus, String> {
+        self.eval_json(STATUS_SCRIPT)
+    }
+
+    /// Evaluates `script` -- which must, like [`STATUS_SCRIPT`], end in a
+    /// `JSON.stringify(...)` of its own result -- and parses that JSON into
+    /// `T`. The generic building block behind [`Checkpoint::read_status`];
+    /// a scenario needing a different JSON shape (e.g.
+    /// `accessibility_settings_reload`'s viewport-zoom capability and
+    /// `localStorage` inspection) calls this directly instead of growing
+    /// [`PageStatus`] with fields only it needs.
+    pub fn eval_json<T: serde::de::DeserializeOwned>(&self, script: &str) -> Result<T, String> {
         let remote = self
             .tab
-            .evaluate(STATUS_SCRIPT, false)
-            .map_err(|e| format!("reading page status failed: {e}"))?;
+            .evaluate(script, false)
+            .map_err(|e| format!("evaluating script failed: {e}"))?;
         let json = remote
             .value
-            .ok_or_else(|| "page status evaluation returned no value".to_string())?;
+            .ok_or_else(|| "script evaluation returned no value".to_string())?;
         let json_str: String = serde_json::from_value(json)
-            .map_err(|e| format!("page status value was not a string: {e}"))?;
-        serde_json::from_str(&json_str).map_err(|e| format!("page status was not valid JSON: {e}"))
+            .map_err(|e| format!("evaluated value was not a string: {e}"))?;
+        serde_json::from_str(&json_str)
+            .map_err(|e| format!("evaluated value was not valid JSON: {e}"))
     }
 
     /// Evaluates an arbitrary JS statement/expression, discarding any
