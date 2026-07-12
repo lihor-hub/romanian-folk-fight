@@ -73,13 +73,12 @@ pub fn run(sub: &str) -> Result<(), StepError> {
                     changed: false,
                     base: Some(_),
                 }) => {
-                    let message = "cargo xtask assets review: `--base <ref>` requires `--changed`";
-                    eprintln!("{message}");
-                    Err(usage_failure("assets review", message))
+                    eprintln!("cargo xtask assets review: `--base <ref>` requires `--changed`");
+                    Err(usage_failure("assets review"))
                 }
                 Err(message) => {
                     eprintln!("{message}");
-                    Err(usage_failure("assets review", &message))
+                    Err(usage_failure("assets review"))
                 }
             }
         }
@@ -125,7 +124,9 @@ fn parse_review_args(full_argv: &[String]) -> Result<ReviewArgs, String> {
     Ok(parsed)
 }
 
-fn usage_failure(label: &str, _message: &str) -> StepError {
+/// A usage-shaped failure (the caller has already printed the actionable
+/// message to stderr); exit code 2 mirrors `main`'s usage-error convention.
+fn usage_failure(label: &str) -> StepError {
     StepError::Failed {
         label: label.to_string(),
         elapsed: std::time::Duration::ZERO,
@@ -325,6 +326,7 @@ fn review_changed(explicit_base: Option<&str>) -> Result<(), StepError> {
     let result = crate::assets::gallery::generate_filtered(
         &assets_root,
         &out_dir,
+        &built,
         Some(&closure),
         &removed_notes,
     );

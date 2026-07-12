@@ -238,25 +238,18 @@ pub struct ChangedFile {
 /// result. Restricted server-side to the `assets` pathspec since only
 /// `assets/**` changes are ever relevant to a focused review.
 pub fn diff_changed_assets(workspace_root: &Path, base: &str) -> Result<Vec<ChangedFile>, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workspace_root)
-        .arg("diff")
-        .arg("--name-status")
-        .arg("-M")
-        .arg(format!("{base}...HEAD"))
-        .arg("--")
-        .arg("assets")
-        .output()
-        .map_err(|e| format!("failed to spawn git diff: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "`git diff --name-status -M {base}...HEAD -- assets` exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(parse_name_status(&String::from_utf8_lossy(&output.stdout)))
+    let stdout = run_git(
+        workspace_root,
+        &[
+            "diff",
+            "--name-status",
+            "-M",
+            &format!("{base}...HEAD"),
+            "--",
+            "assets",
+        ],
+    )?;
+    Ok(parse_name_status(&stdout))
 }
 
 /// Parses raw `git diff --name-status [-M]` output. Exposed separately from

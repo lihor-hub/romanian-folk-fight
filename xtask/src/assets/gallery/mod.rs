@@ -153,7 +153,8 @@ impl<'a> GalleryWriter<'a> {
 /// Generates the full gallery into `out_dir` (removed and recreated first),
 /// deriving every page from the sidecar aggregate rooted at `assets_root`.
 pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, GalleryError> {
-    generate_filtered(assets_root, out_dir, None, &[])
+    let built = aggregate::build(assets_root);
+    generate_filtered(assets_root, out_dir, &built, None, &[])
 }
 
 /// Generates the gallery into `out_dir`, restricted to `filter` when it is
@@ -165,6 +166,11 @@ pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, Gal
 /// only the included pages when filtered), and `removed` surfaces deleted
 /// assets that have no page of their own to link to.
 ///
+/// `built` is the caller's already-built aggregate for `assets_root` (the
+/// `--changed` flow needs it earlier for diff mapping/closure and must not
+/// pay the whole sidecar walk twice on its budgeted loop); `assets_root` is
+/// still needed alongside it for the font/audio byte probes.
+///
 /// Every page's *content* is still computed from the complete aggregate --
 /// composition pages assemble every layer regardless of which asset
 /// actually changed -- only whether a given page is written to disk is
@@ -173,6 +179,7 @@ pub fn generate(assets_root: &Path, out_dir: &Path) -> Result<GalleryReport, Gal
 pub fn generate_filtered(
     assets_root: &Path,
     out_dir: &Path,
+    built: &aggregate::Aggregate,
     filter: Option<&BTreeSet<String>>,
     removed: &[RemovedAssetNote],
 ) -> Result<GalleryReport, GalleryError> {
@@ -187,7 +194,6 @@ pub fn generate_filtered(
         error,
     })?;
 
-    let built = aggregate::build(assets_root);
     let mut records: Vec<&ResolvedRecord> = built.records.iter().collect();
     records.sort_by(|a, b| a.record.id.cmp(&b.record.id));
     let by_id: BTreeMap<&str, &ResolvedRecord> =
@@ -749,7 +755,9 @@ mod tests {
             "composition.human".to_string(),
         ]
         .into();
-        let report = generate_filtered(&assets_root, &out.root, Some(&filter), &[]).unwrap();
+        let built = aggregate::build(&assets_root);
+        let report =
+            generate_filtered(&assets_root, &out.root, &built, Some(&filter), &[]).unwrap();
 
         assert!(out.root.join("fighters.human.runtime.head.html").exists());
         assert!(out.root.join("composition.human.html").exists());
@@ -799,7 +807,8 @@ mod tests {
             path: "assets/fighters/human/runtime/gone.png".to_string(),
             id: Some("fighters.human.runtime.gone".to_string()),
         }];
-        generate_filtered(&assets_root, &out.root, Some(&filter), &removed).unwrap();
+        let built = aggregate::build(&assets_root);
+        generate_filtered(&assets_root, &out.root, &built, Some(&filter), &removed).unwrap();
         let index_html = fs::read_to_string(out.root.join("index.html")).unwrap();
         assert!(index_html.contains("Removed assets"));
         assert!(index_html.contains("assets/fighters/human/runtime/gone.png"));
