@@ -281,6 +281,81 @@ fn position_legal(action: CombatAction, distance: DuelDistance) -> bool {
     }
 }
 
+/// Fixed display order for category disclosure (#199's phone palette): every
+/// consumer that groups descriptors by [`ActionCategory`] iterates in this
+/// order, independent of [`ALL_ACTIONS`]'s own registration order — so
+/// reordering or extending that array never reorders the category controls.
+pub const CATEGORY_ORDER: [ActionCategory; 5] = [
+    ActionCategory::Strikes,
+    ActionCategory::Defense,
+    ActionCategory::Movement,
+    ActionCategory::Utility,
+    ActionCategory::Special,
+];
+
+/// The Romanian label for a category's primary control (#199's phone
+/// palette). "Special" is spelled identically in Romanian, so no separate
+/// translation is needed for the extensibility-only category.
+pub fn category_label(category: ActionCategory) -> &'static str {
+    match category {
+        ActionCategory::Strikes => "Atac",
+        ActionCategory::Defense => "Apărare",
+        ActionCategory::Movement => "Mișcare",
+        ActionCategory::Utility => "Refacere",
+        ActionCategory::Special => "Special",
+    }
+}
+
+/// A stable, kebab-case identifier for a category — the wire format
+/// [`super::action_palette`]'s review telemetry and the `pressActionCategory`
+/// review command (#199) key off of, mirroring how [`ActionId`] already
+/// stabilizes individual actions.
+pub fn category_id(category: ActionCategory) -> &'static str {
+    match category {
+        ActionCategory::Strikes => "strikes",
+        ActionCategory::Defense => "defense",
+        ActionCategory::Movement => "movement",
+        ActionCategory::Utility => "utility",
+        ActionCategory::Special => "special",
+    }
+}
+
+/// The inverse of [`category_id`], or `None` for an unrecognized string —
+/// used to parse the `pressActionCategory` review command's `category` field.
+pub fn parse_category_id(id: &str) -> Option<ActionCategory> {
+    CATEGORY_ORDER
+        .into_iter()
+        .find(|&category| category_id(category) == id)
+}
+
+/// Groups `descriptors` by [`ActionCategory`], in [`CATEGORY_ORDER`],
+/// skipping any category with no member descriptors (so an unregistered
+/// category — `Special`, today, until a later real action joins it — never
+/// yields an empty group) and preserving each category's descriptors in
+/// their original relative order. Pure and descriptor-driven: a category's
+/// membership always comes from [`ActionDescriptor::category`], never a
+/// separate id-keyed table, so a test-registered descriptor (via
+/// [`ExtraDescriptors`]) lands in its declared category automatically.
+pub fn group_by_category(
+    descriptors: &[ActionDescriptor],
+) -> Vec<(ActionCategory, Vec<ActionDescriptor>)> {
+    CATEGORY_ORDER
+        .into_iter()
+        .filter_map(|category| {
+            let members: Vec<ActionDescriptor> = descriptors
+                .iter()
+                .filter(|d| d.category == category)
+                .cloned()
+                .collect();
+            if members.is_empty() {
+                None
+            } else {
+                Some((category, members))
+            }
+        })
+        .collect()
+}
+
 /// The percent chance to hit, for strikes — calls
 /// [`stats::hit_percent`] with the same base hit constants
 /// (`QUICK_STRIKE_BASE_HIT`/`HEAVY_STRIKE_BASE_HIT`)
@@ -783,5 +858,121 @@ mod tests {
     #[test]
     fn extra_descriptors_resource_defaults_to_empty() {
         assert_eq!(ExtraDescriptors::default().0.len(), 0);
+    }
+
+    // --- category grouping (#199's phone palette) ---
+
+    #[test]
+    fn category_id_round_trips_through_parse_category_id() {
+        for category in CATEGORY_ORDER {
+            assert_eq!(parse_category_id(category_id(category)), Some(category));
+        }
+        assert_eq!(parse_category_id("not-a-category"), None);
+    }
+
+    #[test]
+    fn category_ids_are_unique_kebab_case() {
+        let ids: Vec<&str> = CATEGORY_ORDER.iter().map(|&c| category_id(c)).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), ids.len(), "every category id must be unique");
+        for id in ids {
+            assert!(
+                id.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
+                "{id} must be kebab-case ascii"
+            );
+        }
+    }
+
+    #[test]
+    fn group_by_category_yields_at_most_four_groups_for_the_seven_real_actions() {
+        let descriptors = generate_action_descriptors(&ctx(PLAYER_TURN, 50));
+        let groups = group_by_category(&descriptors);
+        assert!(
+            groups.len() <= 4,
+            "phone must show at most four primary category controls, got {}",
+            groups.len()
+        );
+        assert_eq!(
+            groups
+                .iter()
+                .map(|(_, members)| members.len())
+                .sum::<usize>(),
+            7,
+            "every descriptor must land in exactly one group"
+        );
+    }
+
+    #[test]
+    fn group_by_category_matches_the_documented_membership() {
+        let descriptors = generate_action_descriptors(&ctx(PLAYER_TURN, 50));
+        let groups = group_by_category(&descriptors);
+        let sizes: Vec<(ActionCategory, usize)> = groups
+            .iter()
+            .map(|(category, members)| (*category, members.len()))
+            .collect();
+        assert_eq!(
+            sizes,
+            vec![
+                (ActionCategory::Strikes, 2),
+                (ActionCategory::Defense, 1),
+                (ActionCategory::Movement, 3),
+                (ActionCategory::Utility, 1),
+            ],
+            "groups must appear in CATEGORY_ORDER, skipping the empty Special group"
+        );
+    }
+
+    #[test]
+    fn group_by_category_follows_category_order_regardless_of_descriptor_order() {
+        let mut descriptors = generate_action_descriptors(&ctx(PLAYER_TURN, 50));
+        descriptors.reverse();
+        let groups = group_by_category(&descriptors);
+        let order: Vec<ActionCategory> = groups.iter().map(|(c, _)| *c).collect();
+        assert_eq!(
+            order,
+            vec![
+                ActionCategory::Strikes,
+                ActionCategory::Defense,
+                ActionCategory::Movement,
+                ActionCategory::Utility,
+            ]
+        );
+    }
+
+    /// #199's acceptance criterion: a descriptor registered outside
+    /// `ALL_ACTIONS` (the extensibility seam `ExtraDescriptors` uses) still
+    /// lands in its declared category automatically, with no special-casing
+    /// in `group_by_category` itself.
+    #[test]
+    fn a_test_registered_descriptor_lands_in_its_declared_category_automatically() {
+        let mut descriptors = generate_action_descriptors(&ctx(PLAYER_TURN, 50));
+        descriptors.push(ActionDescriptor {
+            id: "test-extra-action",
+            category: ActionCategory::Special,
+            label: "Acțiune de test",
+            pictogram_id: "test-extra-action",
+            cost: ActionCost::None,
+            hit_chance: None,
+            position_legal: true,
+            enabled: true,
+            disabled_reason: None,
+            intent: CombatAction::Rest,
+        });
+        let groups = group_by_category(&descriptors);
+        let special = groups
+            .iter()
+            .find(|(category, _)| *category == ActionCategory::Special)
+            .unwrap_or_else(|| panic!("Special group must appear once it has a member"));
+        assert_eq!(special.1.len(), 1);
+        assert_eq!(special.1[0].id, "test-extra-action");
+    }
+
+    #[test]
+    fn every_category_has_a_non_empty_romanian_label() {
+        for category in CATEGORY_ORDER {
+            assert!(!category_label(category).is_empty(), "{category:?}");
+        }
     }
 }

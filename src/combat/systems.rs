@@ -123,6 +123,7 @@ impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(pause::PausePlugin)
             .init_resource::<ExtraDescriptors>()
+            .init_resource::<action_palette::PhonePaletteState>()
             .add_message::<PlayerActionEvent>()
             .add_message::<CombatLogEvent>()
             .add_systems(OnEnter(GameState::Fight), (setup_combat, hud::spawn_hud))
@@ -153,7 +154,10 @@ impl Plugin for CombatPlugin {
                     action_palette::update_button_backgrounds,
                     action_palette::update_action_buttons,
                     hud::apply_responsive_hud_layout,
-                    action_palette::apply_responsive_action_buttons,
+                    action_palette::handle_category_buttons,
+                    action_palette::rebuild_action_bar_on_breakpoint_change,
+                    action_palette::sync_phone_open_category,
+                    action_palette::update_category_button_backgrounds,
                     hud::apply_letterbox_to_hud_root,
                     (
                         hud::update_bar_fills,
@@ -197,6 +201,9 @@ type EnemyQuery<'w, 's> = FighterComponents<'w, 's, EnemyFighter, PlayerFighter>
 
 /// Seeds the duel RNG from the app clock — unless a [`CombatRng`] already
 /// exists, so tests (or a future daily-seed mode) can provide their own.
+/// Also resets the phone palette's category disclosure (#199) so every
+/// fight starts with no category open, even if the player left the previous
+/// fight mid-disclosure.
 fn setup_combat(mut commands: Commands, time: Res<Time>, rng: Option<Res<CombatRng>>) {
     if rng.is_none() {
         commands.insert_resource(CombatRng(ChaCha8Rng::seed_from_u64(
@@ -204,6 +211,7 @@ fn setup_combat(mut commands: Commands, time: Res<Time>, rng: Option<Res<CombatR
         )));
     }
     commands.init_resource::<CombatPresentation>();
+    commands.insert_resource(action_palette::PhonePaletteState::default());
 }
 
 /// Drops the duel state so the next fight starts fresh.

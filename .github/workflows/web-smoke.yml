@@ -301,3 +301,53 @@ jobs:
         path: target/xtask-artifacts/web-smoke/
         if-no-files-found: ignore
         retention-days: 14
+
+  fight-palette-phone:
+    name: fight-palette-phone (category disclosure fits a 390x844 stage)
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Add wasm target
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.8
+
+    - name: Set up Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "sccache"
+
+    - name: Install Trunk
+      uses: taiki-e/install-action@v2
+      with:
+        tool: trunk
+
+    - name: Verify Chrome is available
+      run: google-chrome-stable --version || google-chrome --version
+
+    - name: Run the fight-palette-phone browser smoke
+      # Same alias-independent invocation as the jobs above. Drives menu ->
+      # creation -> a fresh fight start through the review seam at a 390x844
+      # phone viewport, then asserts (from exact telemetry, not a pixel
+      # diff) the category-disclosure palette (#199): at most four primary
+      # category controls, each opening exactly its registered actions,
+      # every visible target at least 44x44 CSS px, everything inside the
+      # letterboxed stage rect, and no overlap with the fighter status
+      # panels -- in the closed state and every open-category state (see
+      # xtask/src/web_smoke/fight_palette_phone.rs).
+      run: cargo run --locked --package xtask -- web-smoke --scenario fight-palette-phone
+
+    - name: Upload smoke artifacts (always, for post-mortem on failure)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: web-smoke-fight-palette-phone
+        path: target/xtask-artifacts/web-smoke/
+        if-no-files-found: ignore
+        retention-days: 14

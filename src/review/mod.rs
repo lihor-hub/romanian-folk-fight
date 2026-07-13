@@ -53,6 +53,11 @@
 //!     `NextState<GameState>` -- navigation is always the existing
 //!     [`crate::flow::apply_flow_intents`] (#166) applying an intent the
 //!     production button handler emitted.
+//!   - `pressActionCategory`: sets `Interaction::Pressed` on the named phone
+//!     category's real [`crate::combat::action_palette::CategoryButton`]
+//!     entity (#199) -- the same production toggle a tap produces, driving
+//!     [`crate::combat::action_palette::handle_category_buttons`] exactly
+//!     like `pressButton` drives a screen's navigation handler.
 //!   - `setTimePaused`: pauses/unpauses Bevy's `Time<Virtual>` so the
 //!     harness can capture a byte-stable screenshot on screens with
 //!     continuous idle animation; see [`ReviewCommand::SetTimePaused`].
@@ -88,11 +93,12 @@ use rand_chacha::ChaCha8Rng;
 use crate::arena::fx::ParallaxLayer;
 use crate::arena::{ENEMY_ANCHOR, PLAYER_ANCHOR};
 use crate::character::{EnemyFighter, PlayerFighter, Stamina};
-use crate::combat::action_palette::ActionButton;
+use crate::combat::action_palette::{ActionButton, CategoryButton, PhonePaletteState};
+use crate::combat::actions::{self, ActionCategory};
 use crate::combat::engine::QUICK_STRIKE_COST;
 use crate::combat::systems::{CombatPresentation, PlayerActionEvent};
 use crate::combat::{CombatAction, CombatRng, CombatSide, CombatTurn};
-use crate::core::{GameState, LetterboxRect, WorldCamera};
+use crate::core::{GameState, LetterboxRect, ViewportInfo, WorldCamera};
 use crate::creation::{CharacterDraft, CreationAction, HeroChoice, HeroPreset};
 use crate::menu::{DisabledButton, MenuAction};
 use crate::progression::result_ui::{GameOverAction, ResultAction};
@@ -161,6 +167,15 @@ pub enum ReviewCommand {
     PressButton {
         button: String,
     },
+    /// Sets `Interaction::Pressed` on the named phone category's real
+    /// [`CategoryButton`] entity (#199) — the same production toggle a tap
+    /// produces, used by the `fight-palette-phone` browser scenario to open
+    /// (or close/switch) a category without a synthetic pointer event.
+    /// `category` is one of [`crate::combat::actions::category_id`]'s kebab-
+    /// case ids (e.g. `"strikes"`).
+    PressActionCategory {
+        category: String,
+    },
     SetAutoplay {
         enabled: bool,
     },
@@ -212,8 +227,14 @@ impl Plugin for ReviewPlugin {
                     // `FlowIntentEmission`) *this* frame -- `bevy_ui`'s focus
                     // system resets a pressed interaction the pointer isn't
                     // actually holding on the next frame's `PreUpdate`, so the
-                    // write must land within the same `Update` pass.
-                    poll_review_commands.before(crate::flow::FlowIntentEmission),
+                    // write must land within the same `Update` pass. The same
+                    // reasoning requires ordering before the phone palette's
+                    // category-toggle handler (#199), which is not part of
+                    // `FlowIntentEmission` (it toggles in-screen disclosure
+                    // state, never a flow intent).
+                    poll_review_commands
+                        .before(crate::flow::FlowIntentEmission)
+                        .before(crate::combat::action_palette::handle_category_buttons),
                     publish_current_screen,
                     publish_motion_state,
                     publish_palette_state,
@@ -297,15 +318,81 @@ fn publish_motion_state(
 /// than left for the browser harness to re-derive from duplicated layout
 /// constants -- see [`REVIEW_PALETTE_KEY`]'s doc comment. Published under
 /// [`REVIEW_PALETTE_KEY`] every frame the fight HUD's action bar is up.
-#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq)]
+///
+/// `phone` (#199) extends this with the phone category-disclosure facts the
+/// `fight-palette-phone` scenario needs, populated only when
+/// [`ViewportInfo::is_mobile`] is true -- `None` on desktop, since desktop
+/// never groups into categories. A desktop-only consumer that only ever
+/// deserializes `button_count`/`fits` (like `fight_palette_desktop.rs`'s
+/// mirrored struct on the `xtask` side) is unaffected: `serde` ignores the
+/// extra field by default.
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
 struct PaletteSnapshot {
     /// How many action buttons currently exist (spawned = rendered; #189's
-    /// palette never despawns/hides a button to make it fit).
+    /// palette never despawns/hides a button to make it fit). On phone this
+    /// is the *open* category's button count (0 while closed), not the full
+    /// registered-action count -- see `phone` for the category controls.
     button_count: usize,
-    /// Whether every button's on-screen box lies entirely within the
-    /// letterboxed stage rect -- `false` (or `button_count == 0`) means the
-    /// scenario must fail: an overflowing or clipped action bar.
+    /// Whether every currently visible interactive control -- action
+    /// buttons plus (on phone) category buttons -- lies entirely within the
+    /// letterboxed stage rect. `false` (or nothing visible at all) means the
+    /// scenario must fail: an overflowing or clipped palette.
     fits: bool,
+    /// Phone category-disclosure facts (#199), or `None` on desktop.
+    phone: Option<PhonePaletteSnapshot>,
+}
+
+/// One currently-visible interactive control's on-screen box, in logical
+/// (CSS) pixels -- the unit both the 44px touch-target floor and
+/// [`LetterboxRect`] are expressed in.
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq)]
+struct TargetRect {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+impl TargetRect {
+    fn from_rect(rect: Rect) -> Self {
+        Self {
+            x: rect.min.x,
+            y: rect.min.y,
+            width: rect.width(),
+            height: rect.height(),
+        }
+    }
+}
+
+/// Everything the `fight-palette-phone` scenario (#199) needs to assert the
+/// category-disclosure palette beyond what [`PaletteSnapshot`]'s top-level
+/// fields already cover: how many primary category controls are visible
+/// (must never exceed four), which one (if any) is currently open, the exact
+/// on-screen box of every currently visible target (category buttons plus,
+/// while open, that category's action buttons), whether they all fit inside
+/// the stage, and the smallest dimension across all of them (the 44px CSS
+/// touch-target floor the issue requires).
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+struct PhonePaletteSnapshot {
+    visible_category_count: usize,
+    /// [`crate::combat::actions::category_id`] of the open category, or
+    /// `None` while closed.
+    open_category: Option<String>,
+    /// The stable [`crate::combat::actions::ActionId`]s of the currently
+    /// visible action buttons (the open category's members), sorted -- so
+    /// the phone scenario can assert "registered actions only" by exact id,
+    /// not just count.
+    open_action_ids: Vec<String>,
+    targets: Vec<TargetRect>,
+    fits_in_stage: bool,
+    /// `min(width, height)` across every entry in `targets`; `0.0` if
+    /// `targets` is empty (nothing currently visible to measure).
+    min_target_size: f32,
+    /// Whether any visible palette control's box intersects a fighter
+    /// status panel ([`crate::combat::hud::FighterPanelRoot`]) -- `true`
+    /// means the palette covers required fighter/status information, which
+    /// #199 forbids.
+    overlaps_status_panels: bool,
 }
 
 /// The `Rect` a UI node actually occupies on screen, in the same logical-
@@ -319,36 +406,97 @@ fn logical_node_rect(transform: &UiGlobalTransform, node: &ComputedNode) -> Rect
     Rect::from_center_size(transform.translation * scale, node.size() * scale)
 }
 
-/// Publishes a [`PaletteSnapshot`] every frame at least one [`ActionButton`]
-/// exists (clears the key otherwise, e.g. outside the fight screen, so a
-/// scenario can't mistake a stale snapshot from a previous fight for the
-/// current one).
+/// Publishes a [`PaletteSnapshot`] every frame at least one action or
+/// category button exists (clears the key otherwise, e.g. outside the fight
+/// screen, so a scenario can't mistake a stale snapshot from a previous
+/// fight for the current one).
 fn publish_palette_state(
     letterbox: Option<Res<LetterboxRect>>,
-    buttons: Query<(&UiGlobalTransform, &ComputedNode), With<ActionButton>>,
+    viewport: Res<ViewportInfo>,
+    phone_state: Option<Res<PhonePaletteState>>,
+    buttons: Query<(&ActionButton, &UiGlobalTransform, &ComputedNode)>,
+    categories: Query<(&UiGlobalTransform, &ComputedNode), With<CategoryButton>>,
+    status_panels: Query<
+        (&UiGlobalTransform, &ComputedNode),
+        With<crate::combat::hud::FighterPanelRoot>,
+    >,
 ) {
     let Some(letterbox) = letterbox else {
         clear_palette();
         return;
     };
     let stage = Rect::from_corners(letterbox.position, letterbox.position + letterbox.size);
-    let mut button_count = 0usize;
-    let mut extent: Option<Rect> = None;
-    for (transform, node) in &buttons {
-        button_count += 1;
-        let rect = logical_node_rect(transform, node);
-        extent = Some(match extent {
-            Some(union) => union.union(rect),
-            None => rect,
-        });
-    }
-    if button_count == 0 {
+
+    let button_count = buttons.iter().count();
+    let mut all_rects: Vec<Rect> = buttons
+        .iter()
+        .map(|(_, transform, node)| logical_node_rect(transform, node))
+        .collect();
+    let category_rects: Vec<Rect> = categories
+        .iter()
+        .map(|(transform, node)| logical_node_rect(transform, node))
+        .collect();
+    all_rects.extend(category_rects.iter().copied());
+
+    if all_rects.is_empty() {
         clear_palette();
         return;
     }
-    let fits =
-        extent.is_some_and(|extent| stage.contains(extent.min) && stage.contains(extent.max));
-    let snapshot = PaletteSnapshot { button_count, fits };
+
+    let mut extent = all_rects[0];
+    for rect in &all_rects[1..] {
+        extent = extent.union(*rect);
+    }
+    let fits = stage.contains(extent.min) && stage.contains(extent.max);
+
+    let phone = viewport.is_mobile.then(|| {
+        let open_category = phone_state
+            .as_deref()
+            .and_then(|state| state.open)
+            .map(actions::category_id)
+            .map(str::to_string);
+        let mut open_action_ids: Vec<String> = buttons
+            .iter()
+            .map(|(button, _, _)| button.id.to_string())
+            .collect();
+        open_action_ids.sort_unstable();
+        let min_target_size = all_rects
+            .iter()
+            .map(|r| r.width().min(r.height()))
+            .fold(f32::INFINITY, f32::min);
+        let panel_rects: Vec<Rect> = status_panels
+            .iter()
+            .map(|(transform, node)| logical_node_rect(transform, node))
+            .collect();
+        let overlaps_status_panels = all_rects.iter().any(|target| {
+            panel_rects
+                .iter()
+                .any(|panel| !panel.intersect(*target).is_empty())
+        });
+        PhonePaletteSnapshot {
+            visible_category_count: category_rects.len(),
+            open_category,
+            open_action_ids,
+            targets: all_rects
+                .iter()
+                .copied()
+                .map(TargetRect::from_rect)
+                .collect(),
+            fits_in_stage: fits,
+            min_target_size: if min_target_size.is_finite() {
+                min_target_size
+            } else {
+                0.0
+            },
+            overlaps_status_panels,
+        }
+    });
+
+    let snapshot = PaletteSnapshot {
+        button_count,
+        fits,
+        phone,
+    };
     match serde_json::to_string(&snapshot) {
         Ok(json) => publish_palette(&json),
         Err(_) => clear_palette(),
@@ -461,7 +609,8 @@ fn poll_review_commands(
     mut draft: ResMut<CharacterDraft>,
     mut autoplay: ResMut<ReviewAutoplay>,
     mut virtual_time: ResMut<Time<Virtual>>,
-    mut buttons: Query<PressableButton, With<Button>>,
+    mut buttons: Query<PressableButton, (With<Button>, Without<CategoryButton>)>,
+    mut categories: Query<(&mut Interaction, &CategoryButton), With<Button>>,
 ) {
     let Some(raw) = take_pending_command() else {
         return;
@@ -480,6 +629,23 @@ fn poll_review_commands(
                 warn!("review: pressButton(\"{button}\") is not a known screen button (rejected)");
             }
         },
+        Ok(ReviewCommand::PressActionCategory { category }) => {
+            match actions::parse_category_id(&category) {
+                Some(target) => {
+                    if !press_category_button(target, &mut categories) {
+                        warn!(
+                            "review: pressActionCategory(\"{category}\") found no such category \
+                         button on the current screen"
+                        );
+                    }
+                }
+                None => {
+                    warn!(
+                        "review: pressActionCategory(\"{category}\") is not a known action category"
+                    );
+                }
+            }
+        }
         Ok(ReviewCommand::SetAutoplay { enabled }) => autoplay.0 = enabled,
         Ok(ReviewCommand::SetTimePaused { paused }) => {
             if paused {
@@ -501,7 +667,7 @@ fn poll_review_commands(
 fn press_button(
     name: &str,
     target: ReviewButton,
-    buttons: &mut Query<PressableButton, With<Button>>,
+    buttons: &mut Query<PressableButton, (With<Button>, Without<CategoryButton>)>,
 ) {
     for (mut interaction, disabled, menu, creation, result, game_over, victory, shop) in
         buttons.iter_mut()
@@ -525,6 +691,25 @@ fn press_button(
         return;
     }
     warn!("review: pressButton(\"{name}\") found no such button on the current screen");
+}
+
+/// Finds `category`'s real [`CategoryButton`] entity and sets
+/// `Interaction::Pressed` on it (#199) — the same production toggle a tap
+/// produces, observed by [`crate::combat::action_palette::handle_category_buttons`]
+/// this same frame (see [`ReviewPlugin`]'s ordering note). Returns whether a
+/// matching button was found (categories are never disabled, so unlike
+/// [`press_button`] there is no separate "refused" outcome).
+fn press_category_button(
+    category: ActionCategory,
+    buttons: &mut Query<(&mut Interaction, &CategoryButton), With<Button>>,
+) -> bool {
+    for (mut interaction, button) in buttons.iter_mut() {
+        if button.category == category {
+            *interaction = Interaction::Pressed;
+            return true;
+        }
+    }
+    false
 }
 
 /// Publishes the current [`GameState`] (its `Debug` name) every frame so the
@@ -686,6 +871,21 @@ mod tests {
     }
 
     #[test]
+    fn target_rect_from_rect_converts_min_corner_and_extent() {
+        let rect = Rect::from_center_size(Vec2::new(100.0, 50.0), Vec2::new(40.0, 20.0));
+        let target = TargetRect::from_rect(rect);
+        assert_eq!(
+            target,
+            TargetRect {
+                x: 80.0,
+                y: 40.0,
+                width: 40.0,
+                height: 20.0,
+            }
+        );
+    }
+
+    #[test]
     fn logical_node_rect_scales_physical_pixels_down_to_logical() {
         // A 2x DPR node: 80x40 physical pixels is 40x20 logical, centered on
         // a transform whose translation is itself in physical pixels.
@@ -727,6 +927,19 @@ mod tests {
             .unwrap(),
             ReviewCommand::PressButton {
                 button: "ConfirmHero".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn press_action_category_command_parses() {
+        assert_eq!(
+            serde_json::from_str::<ReviewCommand>(
+                r#"{"cmd":"pressActionCategory","category":"strikes"}"#
+            )
+            .unwrap(),
+            ReviewCommand::PressActionCategory {
+                category: "strikes".to_string()
             }
         );
     }
@@ -839,13 +1052,18 @@ mod tests {
         // same dispatch the wasm poll path uses.
         let pressed = app
             .world_mut()
-            .run_system_once(move |mut buttons: Query<PressableButton, With<Button>>| {
-                press_button(
-                    "NewGame",
-                    ReviewButton::Menu(MenuAction::NewGame),
-                    &mut buttons,
-                );
-            })
+            .run_system_once(
+                move |mut buttons: Query<
+                    PressableButton,
+                    (With<Button>, Without<CategoryButton>),
+                >| {
+                    press_button(
+                        "NewGame",
+                        ReviewButton::Menu(MenuAction::NewGame),
+                        &mut buttons,
+                    );
+                },
+            )
             .is_ok();
         assert!(pressed, "press system runs");
         app.update(); // handler observes Pressed, emits StartNewGame
@@ -855,6 +1073,74 @@ mod tests {
             GameState::CharacterCreation,
             "the pressed menu button routes menu -> creation through the production handler"
         );
+    }
+
+    /// #199: `press_category_button` finds the real `CategoryButton` entity
+    /// matching the requested category and presses it -- proof the review
+    /// seam drives the same production toggle a tap would, not a bypass.
+    #[test]
+    fn press_category_button_presses_the_matching_entity_only() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = bevy::ecs::world::World::new();
+        let strikes = world
+            .spawn((
+                Button,
+                Interaction::None,
+                CategoryButton {
+                    category: ActionCategory::Strikes,
+                },
+            ))
+            .id();
+        let defense = world
+            .spawn((
+                Button,
+                Interaction::None,
+                CategoryButton {
+                    category: ActionCategory::Defense,
+                },
+            ))
+            .id();
+
+        let pressed = world
+            .run_system_once(
+                move |mut buttons: Query<(&mut Interaction, &CategoryButton), With<Button>>| {
+                    press_category_button(ActionCategory::Strikes, &mut buttons)
+                },
+            )
+            .expect("system runs");
+        assert!(pressed);
+        assert_eq!(
+            *world.get::<Interaction>(strikes).unwrap(),
+            Interaction::Pressed
+        );
+        assert_eq!(
+            *world.get::<Interaction>(defense).unwrap(),
+            Interaction::None
+        );
+    }
+
+    #[test]
+    fn press_category_button_reports_false_when_no_such_category_exists() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = bevy::ecs::world::World::new();
+        world.spawn((
+            Button,
+            Interaction::None,
+            CategoryButton {
+                category: ActionCategory::Defense,
+            },
+        ));
+
+        let pressed = world
+            .run_system_once(
+                move |mut buttons: Query<(&mut Interaction, &CategoryButton), With<Button>>| {
+                    press_category_button(ActionCategory::Movement, &mut buttons)
+                },
+            )
+            .expect("system runs");
+        assert!(!pressed);
     }
 
     // --- Determinism pin for the `gold-journey` scenario ---
