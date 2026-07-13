@@ -1,12 +1,13 @@
 //! Combat HUD for the fight screen: per-fighter health/stamina panels, the
 //! scrolling combat log, and the HUD "shell" (root sizing, letterbox
-//! tracking, the responsive mobile/desktop breakpoint). The desktop action
-//! palette itself — the seven+ combat buttons — is owned by
-//! [`super::action_palette`] (#189): [`spawn_hud`] delegates to
+//! tracking, the responsive mobile/desktop breakpoint). The action palette
+//! itself — desktop's flat row and phone's category disclosure alike — is
+//! owned by [`super::action_palette`] (#189/#199): [`spawn_hud`] delegates to
 //! [`super::action_palette::spawn_action_bar`] instead of building buttons
-//! here, and [`apply_responsive_hud_layout`] only resizes the action bar's
-//! *container* ([`ActionBarRoot`]) — per-button sizing lives in
-//! `action_palette::apply_responsive_action_buttons`.
+//! here, and [`apply_responsive_hud_layout`] never touches [`ActionBarRoot`]
+//! at all — its full responsive behavior (structure, container `Node`, and
+//! per-button sizing) lives in
+//! `action_palette::rebuild_action_bar_on_breakpoint_change`.
 //!
 //! The pure pieces (bar percentages and the event → log-line formatting) are
 //! plain functions so they stay unit-testable and reusable — the announcer
@@ -73,11 +74,17 @@ pub(super) struct LogText;
 
 /// Marker for one side's status panel, so the responsive layout system (#31)
 /// can shrink it under the mobile breakpoint.
+///
+/// `pub(crate)`, not `pub(super)`: the `review` feature's
+/// `fight-palette-phone` browser scenario (#199) reads this marker's real
+/// geometry to prove the phone palette never covers the fighter status
+/// panels — the same visibility bump `action_palette::ActionButton` already
+/// documents for the desktop scenario.
 #[derive(Component)]
-pub(super) struct FighterPanelRoot;
+pub(crate) struct FighterPanelRoot;
 
-/// Marker for the action-button row, so it can switch to a 2×2 grid under
-/// the mobile breakpoint.
+/// Marker for the action-bar container: desktop's flat button row or
+/// phone's category-disclosure stack (#199).
 #[derive(Component)]
 pub(super) struct ActionBarRoot;
 
@@ -605,19 +612,19 @@ pub(super) fn sync_hud_palette(
 type ResponsiveNodeFilter<Root, A, B> = (With<Root>, Without<A>, Without<B>);
 
 /// Re-flows the HUD when [`ViewportInfo`] crosses the mobile breakpoint:
-/// resizes the fighter panels, the action bar's container, and the log panel
-/// in place instead of respawning the whole HUD. Per-button sizing is
-/// [`action_palette::apply_responsive_action_buttons`]'s own system (#189) —
-/// this one only ever touches the [`ActionBarRoot`] container.
+/// resizes the fighter panels and the log panel in place instead of
+/// respawning the whole HUD. The action bar is *not* handled here (unlike
+/// pre-#199): desktop's flat row and phone's category disclosure are
+/// structurally different layouts, not just a resized container, so its full
+/// responsive behavior — structure, container `Node`, and per-button sizing
+/// alike — now lives in
+/// [`action_palette::rebuild_action_bar_on_breakpoint_change`], which
+/// rebuilds the subtree fresh on a crossing instead of patching it in place.
 pub(super) fn apply_responsive_hud_layout(
     viewport: Res<ViewportInfo>,
     mut panels: Query<
         &mut Node,
         ResponsiveNodeFilter<FighterPanelRoot, ActionBarRoot, LogPanelRoot>,
-    >,
-    mut action_bars: Query<
-        &mut Node,
-        ResponsiveNodeFilter<ActionBarRoot, FighterPanelRoot, LogPanelRoot>,
     >,
     mut logs: Query<&mut Node, ResponsiveNodeFilter<LogPanelRoot, FighterPanelRoot, ActionBarRoot>>,
 ) {
@@ -632,21 +639,6 @@ pub(super) fn apply_responsive_hud_layout(
     };
     for mut node in &mut panels {
         node.width = Val::Px(panel_width);
-    }
-    for mut node in &mut action_bars {
-        node.flex_wrap = if is_mobile {
-            FlexWrap::Wrap
-        } else {
-            FlexWrap::NoWrap
-        };
-        node.left = Val::Px(if is_mobile { 8.0 } else { 0.0 });
-        node.right = Val::Px(if is_mobile { 8.0 } else { 0.0 });
-        node.column_gap = Val::Px(if is_mobile {
-            8.0
-        } else {
-            action_palette::ACTION_BAR_DESKTOP_GAP
-        });
-        node.row_gap = Val::Px(if is_mobile { 8.0 } else { 0.0 });
     }
     for mut node in &mut logs {
         if is_mobile {
@@ -966,9 +958,13 @@ mod tests {
 
     /// Action-tile icon/dimension coverage and the desktop-strip fit check
     /// moved to `action_palette`'s own test module (#189) alongside the
-    /// buttons themselves.
+    /// buttons themselves; the mobile breakpoint's structural rebuild (a flat
+    /// row on desktop, category disclosure on phone — #199, replacing the
+    /// pre-#199 in-place 2x2 grid resize this test used to check) has its own
+    /// coverage there too (`action_palette::tests::phone_palette`), since
+    /// that module now owns the action bar's full responsive behavior.
     #[test]
-    fn narrowing_the_viewport_wraps_the_action_bar_grid() {
+    fn narrowing_the_viewport_still_leaves_exactly_one_action_bar_root() {
         let mut app = test_app();
         app.update();
 
@@ -981,13 +977,15 @@ mod tests {
             });
         app.update();
 
-        let action_bar_wrap = app
+        let action_bars = app
             .world_mut()
-            .query_filtered::<&Node, With<ActionBarRoot>>()
-            .single(app.world())
-            .expect("one action bar root")
-            .flex_wrap;
-        assert_eq!(action_bar_wrap, FlexWrap::Wrap, "2x2 grid under mobile");
+            .query_filtered::<(), With<ActionBarRoot>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(
+            action_bars, 1,
+            "the action bar rebuild must leave exactly one ActionBarRoot, never zero or two"
+        );
     }
 
     /// #125: the HUD root must track [`crate::core::LetterboxRect`] instead
