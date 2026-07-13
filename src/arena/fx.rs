@@ -5,6 +5,50 @@
 //! Everything spawned here is tagged with the arena's screen marker, so the
 //! `OnExit(GameState::Fight)` cleanup catches any FX still alive; in normal
 //! play every FX entity also despawns itself when its timer runs out.
+//!
+//! ## Non-color combat cues (#214)
+//!
+//! [`spawn_combat_fx`] and [`crate::combat::hud::collect_log_lines`] both
+//! read the *same* `MessageReader<CombatLogEvent>` stream and `match` on the
+//! same [`CombatEvent`] variants, so the floating cue and the combat-log
+//! line for one event can never drift out of sync with each other — there
+//! is only one classification of "what happened," reused by both. Each of
+//! the four current outcomes is distinguishable without color:
+//!
+//! | Outcome | Text | Size | Particles |
+//! | --- | --- | --- | --- |
+//! | Hit | plain damage number (`"6"`) | [`DAMAGE_FONT_SIZE`] | [`HIT_PARTICLE_COUNT`] |
+//! | Crit | damage number + [`CRIT_SUFFIX`] (`"12 CRITIC!"`) | [`CRIT_FONT_SIZE`] (bigger) | [`CRIT_PARTICLE_COUNT`] (more) |
+//! | Blocked | [`BLOCKED_PREFIX`] + chip damage (`"Blocat 3"`) | [`DAMAGE_FONT_SIZE`] | [`BLOCK_PARTICLE_COUNT`] (few, gray) |
+//! | Missed / OutOfReach | [`MISS_TEXT`] (`"Ratat!"`) | [`DAMAGE_FONT_SIZE`] | none |
+//!
+//! `CRITIC!`/`Blocat` reuse the combat log's existing Romanian vocabulary
+//! (`log_line`'s "lovitură critică" / "blochează") rather than inventing new
+//! wording.
+//!
+//! ### Prospective #150 contract (buff/debuff cues)
+//!
+//! No buff/debuff mechanics, icons, or lifecycle exist yet — #150 owns that
+//! model and hasn't landed. This is the acceptance rule #150 (and any later
+//! effect) must satisfy once it does, so its cues stay consistent with the
+//! four above instead of being color-only:
+//!
+//! 1. **Same source.** The cue and its log line must both be built from the
+//!    same event/effect classification — one `match`, read by both the FX
+//!    spawner and the log formatter, exactly as `spawn_combat_fx` and
+//!    `log_line` share [`CombatEvent`] here. No separate "cue-only" event
+//!    type that could disagree with the log.
+//! 2. **A text label**, reusing established announcer/log vocabulary (short
+//!    Romanian words/phrases, not new invented terms), distinct from every
+//!    other effect's label and from the four outcomes above.
+//! 3. **A shape/size cue** distinct from the four outcomes above and from
+//!    every other effect — its own particle count/pattern, icon, or size,
+//!    not a recolored copy of hit/crit/block/miss.
+//! 4. Color may still differ per effect, but color alone is never sufficient
+//!    to tell two effects (or an effect and an outcome) apart.
+//!
+//! This slice adds no buff/debuff enum variants, constants, or systems —
+//! only this contract for #150 to implement against.
 
 use bevy::prelude::*;
 
@@ -222,6 +266,12 @@ pub const DAMAGE_FONT_SIZE: f32 = 26.0;
 pub const CRIT_FONT_SIZE: f32 = 40.0;
 /// The floating text shown when a strike misses.
 pub const MISS_TEXT: &str = "Ratat!";
+/// Appended to a crit's damage number (#214 non-color cue), echoing the
+/// combat log's "lovitură critică" wording.
+pub const CRIT_SUFFIX: &str = "CRITIC!";
+/// Prefixed to a block's chip-damage number (#214 non-color cue), echoing
+/// the combat log's "blochează" wording.
+pub const BLOCKED_PREFIX: &str = "Blocat";
 
 /// A floating damage number: rises, fades, and despawns when the timer
 /// runs out.
@@ -276,6 +326,10 @@ fn animate_damage_text(
 pub const HIT_PARTICLE_COUNT: usize = 8;
 /// Sparks in a crit burst — visibly more.
 pub const CRIT_PARTICLE_COUNT: usize = 20;
+/// Chips in a block burst — visibly fewer than a hit, and (unlike a miss,
+/// which bursts none) still present: a #214 non-color cue distinguishing
+/// "blocked" from both "hit" and "missed" by particle count alone.
+pub const BLOCK_PARTICLE_COUNT: usize = 3;
 /// Lifetime of one spark, in seconds.
 pub const PARTICLE_LIFETIME: f32 = 0.45;
 /// Downward pull on sparks, world units per second squared.
@@ -481,7 +535,7 @@ fn spawn_combat_fx(
                 spawn_damage_text(
                     &mut commands,
                     at,
-                    dmg.to_string(),
+                    format!("{dmg} {CRIT_SUFFIX}"),
                     CRIT_FONT_SIZE,
                     CRIT_GOLD,
                     &ui_font,
@@ -493,11 +547,12 @@ fn spawn_combat_fx(
                 spawn_damage_text(
                     &mut commands,
                     at,
-                    dmg.to_string(),
+                    format!("{BLOCKED_PREFIX} {dmg}"),
                     DAMAGE_FONT_SIZE,
                     BLOCKED_GRAY,
                     &ui_font,
                 );
+                spawn_particles(&mut commands, at, BLOCK_PARTICLE_COUNT, BLOCKED_GRAY);
             }
             CombatEvent::Missed | CombatEvent::OutOfReach => {
                 spawn_damage_text(
@@ -819,14 +874,68 @@ mod tests {
         );
         assert_eq!(
             damage_texts(&mut app),
-            vec![("12".to_string(), CRIT_FONT_SIZE, CRIT_GOLD)]
+            vec![(format!("12 {CRIT_SUFFIX}"), CRIT_FONT_SIZE, CRIT_GOLD)]
         );
         assert_eq!(count::<HitParticle>(&mut app), CRIT_PARTICLE_COUNT);
         assert!(app.world().resource::<ScreenShake>().is_active());
     }
 
+    /// #214: hit, crit, block, and miss each carry a distinct text/shape
+    /// cue — not just a different color — so they stay distinguishable in
+    /// grayscale. This pins the whole set together so a future change to
+    /// one outcome can't accidentally make it collide with another.
     #[test]
-    fn a_miss_floats_ratat_and_a_block_shows_the_chip_damage() {
+    fn hit_crit_block_and_miss_have_distinct_text_and_particle_counts() {
+        let mut app = test_app();
+        send_event(
+            &mut app,
+            CombatSide::Player,
+            CombatAction::QuickStrike,
+            CombatEvent::Hit { dmg: 6 },
+        );
+        send_event(
+            &mut app,
+            CombatSide::Player,
+            CombatAction::QuickStrike,
+            CombatEvent::Crit { dmg: 12 },
+        );
+        send_event(
+            &mut app,
+            CombatSide::Player,
+            CombatAction::QuickStrike,
+            CombatEvent::Blocked { dmg: 3 },
+        );
+        send_event(
+            &mut app,
+            CombatSide::Player,
+            CombatAction::QuickStrike,
+            CombatEvent::Missed,
+        );
+        let texts: Vec<String> = damage_texts(&mut app)
+            .into_iter()
+            .map(|(text, _, _)| text)
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                "6".to_string(),
+                format!("12 {CRIT_SUFFIX}"),
+                format!("{BLOCKED_PREFIX} 3"),
+                MISS_TEXT.to_string(),
+            ],
+            "each outcome's text is unique and reuses established log vocabulary"
+        );
+        // Every text is pairwise distinct (belt-and-suspenders on top of the
+        // literal comparison above).
+        for (i, a) in texts.iter().enumerate() {
+            for b in &texts[i + 1..] {
+                assert_ne!(a, b, "{texts:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_miss_floats_ratat_and_a_block_shows_the_chip_damage_with_a_few_particles() {
         let mut app = test_app();
         send_event(
             &mut app,
@@ -834,6 +943,7 @@ mod tests {
             CombatAction::QuickStrike,
             CombatEvent::Missed,
         );
+        assert_eq!(count::<HitParticle>(&mut app), 0, "no sparks on miss");
         send_event(
             &mut app,
             CombatSide::Player,
@@ -845,11 +955,11 @@ mod tests {
             .map(|(text, _, _)| text)
             .collect();
         assert!(texts.contains(&MISS_TEXT.to_string()), "{texts:?}");
-        assert!(texts.contains(&"3".to_string()), "{texts:?}");
+        assert!(texts.contains(&format!("{BLOCKED_PREFIX} 3")), "{texts:?}");
         assert_eq!(
             count::<HitParticle>(&mut app),
-            0,
-            "no sparks on miss or block"
+            BLOCK_PARTICLE_COUNT,
+            "a block bursts a few (but visibly fewer-than-hit) chips — its own shape cue"
         );
     }
 

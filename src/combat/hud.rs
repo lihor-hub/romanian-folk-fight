@@ -21,10 +21,7 @@ use crate::character::{EnemyFighter, FighterName, Health, PlayerFighter, Stamina
 use crate::core::{LetterboxRect, UiFont, ViewportInfo};
 use crate::progression::Level;
 use crate::roster::Boss;
-use crate::theme::{
-    BAR_TRACK, BOSS_LABEL_COLOR, BUTTON_NORMAL, CREAM, HP_FILL, MOBILE_LOG_LINES, PanelTexture,
-    STAMINA_FILL, panel_bundle,
-};
+use crate::theme::{BUTTON_NORMAL, CREAM, MOBILE_LOG_LINES, Palette, PanelTexture, panel_bundle};
 // Only used by the desktop-strip fit check and its test (#120): the runtime
 // paths never need to reason about the border inset directly.
 #[cfg(test)]
@@ -172,6 +169,7 @@ pub(super) fn spawn_hud(
     viewport: Res<ViewportInfo>,
     letterbox: Res<LetterboxRect>,
     extra_descriptors: Res<ExtraDescriptors>,
+    palette: Res<Palette>,
 ) {
     commands.insert_resource(CombatLog::default());
     let is_mobile = viewport.is_mobile;
@@ -180,10 +178,22 @@ pub(super) fn spawn_hud(
             HudScreen,
             hud_root_node(&letterbox),
             children![
-                fighter_panel(CombatSide::Player, &ui_font, &panel_texture, is_mobile),
-                fighter_panel(CombatSide::Enemy, &ui_font, &panel_texture, is_mobile),
+                fighter_panel(
+                    CombatSide::Player,
+                    &ui_font,
+                    &panel_texture,
+                    is_mobile,
+                    &palette
+                ),
+                fighter_panel(
+                    CombatSide::Enemy,
+                    &ui_font,
+                    &panel_texture,
+                    is_mobile,
+                    &palette
+                ),
                 pause_button(&ui_font),
-                log_panel(&ui_font, &panel_texture, is_mobile),
+                log_panel(&ui_font, &panel_texture, is_mobile, &palette),
             ],
         ))
         .with_children(|parent| {
@@ -272,11 +282,17 @@ pub(super) fn teardown_hud(mut commands: Commands) {
 const PANEL_WIDTH_MOBILE: f32 = 150.0;
 
 /// One fighter's status panel in a top corner: name, HP bar, stamina bar.
+///
+/// Text/fill colors are read from `palette` at spawn time (#214) rather than
+/// hardcoded, so a fight entered while high contrast is already on renders
+/// correctly from the first frame; [`sync_hud_palette`] keeps them in sync
+/// if the preference flips while the panel is already alive.
 fn fighter_panel(
     side: CombatSide,
     ui_font: &UiFont,
     panel_texture: &PanelTexture,
     is_mobile: bool,
+    palette: &Palette,
 ) -> impl Bundle {
     let width = if is_mobile {
         PANEL_WIDTH_MOBILE
@@ -303,11 +319,11 @@ fn fighter_panel(
             (
                 Text::new(""),
                 ui_font.text_font(20.0),
-                TextColor(CREAM),
+                TextColor(palette.text_primary),
                 HudLabel::Name(side),
             ),
-            bar(side, Pool::Health, HP_FILL, ui_font),
-            bar(side, Pool::Stamina, STAMINA_FILL, ui_font),
+            bar(side, Pool::Health, ui_font, palette),
+            bar(side, Pool::Stamina, ui_font, palette),
         ],
     )
 }
@@ -315,9 +331,21 @@ fn fighter_panel(
 /// A thin gold edge, per the palette, drawn on carved-wood bar tracks.
 const BAR_EDGE: Color = crate::theme::GOLD;
 
+/// Marker on a bar's carved-wood track node, so [`sync_hud_palette`] can
+/// find it independently of the [`BarFill`] child it wraps.
+#[derive(Component)]
+pub(super) struct BarTrackNode;
+
 /// One bar row: a carved-wood track with a thin gold edge and a colored
-/// fill, plus a `current/max` label.
-fn bar(side: CombatSide, pool: Pool, fill_color: Color, ui_font: &UiFont) -> impl Bundle {
+/// fill, plus a `current/max` label. Fill/track/label colors come from
+/// `palette` (#214: [`Palette::hp_fill`]/[`Palette::stamina_fill`] for the
+/// fill, [`Palette::bar_track`] for the track, [`Palette::text_primary`] for
+/// the label).
+fn bar(side: CombatSide, pool: Pool, ui_font: &UiFont, palette: &Palette) -> impl Bundle {
+    let fill_color = match pool {
+        Pool::Health => palette.hp_fill,
+        Pool::Stamina => palette.stamina_fill,
+    };
     (
         Node {
             width: Val::Percent(100.0),
@@ -334,8 +362,9 @@ fn bar(side: CombatSide, pool: Pool, fill_color: Color, ui_font: &UiFont) -> imp
                     border: UiRect::all(Val::Px(1.5)),
                     ..default()
                 },
-                BackgroundColor(BAR_TRACK),
+                BackgroundColor(palette.bar_track),
                 BorderColor::all(BAR_EDGE),
+                BarTrackNode,
                 children![(
                     Node {
                         width: Val::Percent(100.0),
@@ -349,7 +378,7 @@ fn bar(side: CombatSide, pool: Pool, fill_color: Color, ui_font: &UiFont) -> imp
             (
                 Text::new(""),
                 ui_font.text_font(14.0),
-                TextColor(CREAM),
+                TextColor(palette.text_primary),
                 HudLabel::Pool { side, pool },
             ),
         ],
@@ -358,8 +387,14 @@ fn bar(side: CombatSide, pool: Pool, fill_color: Color, ui_font: &UiFont) -> imp
 
 /// The right-side combat-log panel with a single multi-line text node. Under
 /// the mobile breakpoint it moves up and narrows so it clears the taller 2×2
-/// action grid at the bottom of the screen.
-fn log_panel(ui_font: &UiFont, panel_texture: &PanelTexture, is_mobile: bool) -> impl Bundle {
+/// action grid at the bottom of the screen. Text color comes from
+/// `palette.combat_log_text` (#214).
+fn log_panel(
+    ui_font: &UiFont,
+    panel_texture: &PanelTexture,
+    is_mobile: bool,
+    palette: &Palette,
+) -> impl Bundle {
     let node = if is_mobile {
         Node {
             position_type: PositionType::Absolute,
@@ -385,7 +420,7 @@ fn log_panel(ui_font: &UiFont, panel_texture: &PanelTexture, is_mobile: bool) ->
         children![(
             Text::new(""),
             ui_font.text_font(15.0),
-            TextColor(CREAM),
+            TextColor(palette.combat_log_text),
             LogText,
         )],
     )
@@ -446,18 +481,20 @@ type FighterDataChanged = Or<(Changed<FighterName>, Changed<Health>, Changed<Sta
 type EnemyWithMaybeBoss<'w, 's> = Query<'w, 's, Option<&'static Boss>, With<EnemyFighter>>;
 
 /// Refreshes the name and `current/max` labels from the fighter components.
-/// Skips frames where no fighter data changed, so the string formatting only
-/// runs when a label could actually differ. For boss opponents, tints the name
-/// label with `BOSS_LABEL_COLOR`.
+/// Skips frames where no fighter data changed *and* the palette didn't
+/// switch (#214), so the string formatting only runs when a label could
+/// actually differ. For boss opponents, tints the name label with
+/// `palette.boss_label`; every other label uses `palette.text_primary`.
 pub(super) fn update_labels(
     player: PlayerData,
     enemy: EnemyData,
     level: Option<Res<Level>>,
     enemy_boss: EnemyWithMaybeBoss,
     changed: Query<(), FighterDataChanged>,
+    palette: Res<Palette>,
     mut labels: Query<(&HudLabel, &mut Text, &mut TextColor)>,
 ) {
-    if changed.is_empty() {
+    if changed.is_empty() && !palette.is_changed() {
         return;
     }
     let enemy_is_boss = enemy_boss.single().ok().flatten().is_some();
@@ -468,17 +505,10 @@ pub(super) fn update_labels(
         let Some((name, health, stamina)) = side_data(side, &player, &enemy) else {
             continue;
         };
-        match label {
-            HudLabel::Name(CombatSide::Enemy) if enemy_is_boss => {
-                color.0 = BOSS_LABEL_COLOR;
-            }
-            HudLabel::Name(_) => {
-                color.0 = CREAM;
-            }
-            _ => {
-                // Pool labels stay as their default
-            }
-        }
+        color.0 = match label {
+            HudLabel::Name(CombatSide::Enemy) if enemy_is_boss => palette.boss_label,
+            HudLabel::Name(_) | HudLabel::Pool { .. } => palette.text_primary,
+        };
         let value = match label {
             HudLabel::Name(_) => match level.as_deref() {
                 // The player's panel carries their level; enemy levels come
@@ -521,13 +551,15 @@ pub(super) fn collect_log_lines(
 }
 
 /// Rewrites the log text node whenever the [`CombatLog`] changed, capping it
-/// to the last [`MOBILE_LOG_LINES`] under the mobile breakpoint (#31).
+/// to the last [`MOBILE_LOG_LINES`] under the mobile breakpoint (#31), and
+/// keeps its color in sync with `palette.combat_log_text` (#214).
 pub(super) fn update_log_text(
     log: Res<CombatLog>,
     viewport: Res<ViewportInfo>,
-    mut texts: Query<&mut Text, With<LogText>>,
+    palette: Res<Palette>,
+    mut texts: Query<(&mut Text, &mut TextColor), With<LogText>>,
 ) {
-    for mut text in &mut texts {
+    for (mut text, mut color) in &mut texts {
         let value = if viewport.is_mobile {
             log.to_text_capped(MOBILE_LOG_LINES)
         } else {
@@ -536,6 +568,34 @@ pub(super) fn update_log_text(
         if text.0 != value {
             text.0 = value;
         }
+        if color.0 != palette.combat_log_text {
+            color.0 = palette.combat_log_text;
+        }
+    }
+}
+
+/// Keeps every bar track's [`BackgroundColor`] and each [`BarFill`]'s
+/// [`BackgroundColor`] in sync with the active [`Palette`] (#214), so a
+/// high-contrast toggle flipped while the HUD is already alive (e.g. from
+/// the pause overlay's **Setări**, which never leaves `GameState::Fight`)
+/// switches the HP/stamina bars immediately. A no-op frame unless `palette`
+/// actually changed this frame.
+pub(super) fn sync_hud_palette(
+    palette: Res<Palette>,
+    mut tracks: Query<&mut BackgroundColor, (With<BarTrackNode>, Without<BarFill>)>,
+    mut fills: Query<(&BarFill, &mut BackgroundColor), Without<BarTrackNode>>,
+) {
+    if !palette.is_changed() {
+        return;
+    }
+    for mut track in &mut tracks {
+        track.0 = palette.bar_track;
+    }
+    for (fill, mut background) in &mut fills {
+        background.0 = match fill.pool {
+            Pool::Health => palette.hp_fill,
+            Pool::Stamina => palette.stamina_fill,
+        };
     }
 }
 
@@ -614,6 +674,7 @@ mod tests {
     use crate::core::{CorePlugin, GameState};
     use crate::creation::PlayerCharacter;
     use crate::flow::FlowPlugin;
+    use crate::settings::AccessibilityPreferences;
     use bevy::state::app::StatesPlugin;
     use rand::{RngExt as _, SeedableRng};
     use rand_chacha::ChaCha8Rng;
@@ -1171,6 +1232,145 @@ mod tests {
             enemy_name_color,
             crate::theme::BOSS_LABEL_COLOR,
             "boss opponent nameplate uses BOSS_LABEL_COLOR"
+        );
+    }
+
+    // --- Runtime-switchable palette (#214) ---
+
+    /// A fight entered while high contrast is *already* on (e.g. toggled in
+    /// a prior menu visit and persisted) spawns its bars, labels, and log
+    /// with the high-contrast palette from the very first frame — not the
+    /// normal-palette hardcoded literals a naive `spawn_hud` would use, and
+    /// not requiring a second frame for `sync_hud_palette` to correct it
+    /// (that system only fires on a *change*, and nothing changes here).
+    #[test]
+    fn hud_spawns_with_the_already_active_high_contrast_palette() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, FlowPlugin));
+        app.add_plugins((ArenaPlugin, CombatPlugin));
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.world_mut()
+            .resource_mut::<Time<Virtual>>()
+            .set_max_delta(Duration::from_secs(10));
+        app.insert_resource(PlayerCharacter {
+            name: "Făt-Frumos".to_string(),
+            attributes: PLAYER_ATTRIBUTES,
+            appearance: crate::character::PlayerAppearance::default(),
+        });
+        app.insert_resource(CombatRng(strikes_rng(4)));
+        app.insert_resource(AccessibilityPreferences {
+            reduced_motion: false,
+            high_contrast: true,
+        });
+        // Palette syncs to high-contrast this frame (still menu/creation
+        // state, before the fight exists).
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Fight);
+        // OnEnter(Fight) spawns the HUD, reading the already-switched Palette.
+        app.update();
+
+        let track_color = app
+            .world_mut()
+            .query_filtered::<&BackgroundColor, With<BarTrackNode>>()
+            .iter(app.world())
+            .next()
+            .expect("a bar track exists")
+            .0;
+        assert_eq!(track_color, Palette::high_contrast().bar_track);
+
+        let fills: Vec<(Pool, Color)> = app
+            .world_mut()
+            .query::<(&BarFill, &BackgroundColor)>()
+            .iter(app.world())
+            .map(|(fill, bg)| (fill.pool, bg.0))
+            .collect();
+        assert_eq!(fills.len(), 4, "two fighters x two pools");
+        for (pool, color) in fills {
+            let expected = match pool {
+                Pool::Health => Palette::high_contrast().hp_fill,
+                Pool::Stamina => Palette::high_contrast().stamina_fill,
+            };
+            assert_eq!(color, expected, "{pool:?}");
+        }
+
+        let log_color = app
+            .world_mut()
+            .query_filtered::<&TextColor, With<LogText>>()
+            .iter(app.world())
+            .next()
+            .expect("log text exists")
+            .0;
+        assert_eq!(log_color, Palette::high_contrast().combat_log_text);
+    }
+
+    /// Flipping high contrast *while the HUD is already alive* (the pause
+    /// overlay's Setări never leaves `GameState::Fight`, see
+    /// `settings::mod`'s docs) recolors the bars, track, labels, and log in
+    /// place — no HUD respawn needed.
+    #[test]
+    fn toggling_high_contrast_mid_fight_recolors_bars_track_and_log() {
+        let mut app = test_app();
+
+        let track_before = app
+            .world_mut()
+            .query_filtered::<&BackgroundColor, With<BarTrackNode>>()
+            .iter(app.world())
+            .next()
+            .expect("a bar track exists")
+            .0;
+        assert_eq!(track_before, Palette::normal().bar_track);
+
+        app.insert_resource(AccessibilityPreferences {
+            reduced_motion: false,
+            high_contrast: true,
+        });
+        app.update();
+
+        let track_after = app
+            .world_mut()
+            .query_filtered::<&BackgroundColor, With<BarTrackNode>>()
+            .iter(app.world())
+            .next()
+            .expect("a bar track exists")
+            .0;
+        assert_eq!(track_after, Palette::high_contrast().bar_track);
+
+        let fills: Vec<(Pool, Color)> = app
+            .world_mut()
+            .query::<(&BarFill, &BackgroundColor)>()
+            .iter(app.world())
+            .map(|(fill, bg)| (fill.pool, bg.0))
+            .collect();
+        for (pool, color) in fills {
+            let expected = match pool {
+                Pool::Health => Palette::high_contrast().hp_fill,
+                Pool::Stamina => Palette::high_contrast().stamina_fill,
+            };
+            assert_eq!(color, expected, "{pool:?}");
+        }
+
+        let log_color = app
+            .world_mut()
+            .query_filtered::<&TextColor, With<LogText>>()
+            .iter(app.world())
+            .next()
+            .expect("log text exists")
+            .0;
+        assert_eq!(log_color, Palette::high_contrast().combat_log_text);
+
+        let name_colors: Vec<Color> = app
+            .world_mut()
+            .query::<(&HudLabel, &TextColor)>()
+            .iter(app.world())
+            .filter(|(label, _)| matches!(label, HudLabel::Name(CombatSide::Player)))
+            .map(|(_, color)| color.0)
+            .collect();
+        assert_eq!(
+            name_colors,
+            vec![Palette::high_contrast().text_primary],
+            "non-boss nameplate follows the switched palette too"
         );
     }
 }

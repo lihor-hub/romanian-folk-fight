@@ -97,7 +97,9 @@ use crate::creation::{CharacterDraft, CreationAction, HeroChoice, HeroPreset};
 use crate::menu::{DisabledButton, MenuAction};
 use crate::progression::result_ui::{GameOverAction, ResultAction};
 use crate::progression::victory_ui::VictoryAction;
+use crate::settings::AccessibilityPreferences;
 use crate::shop::ShopAction;
+use crate::theme::Palette;
 
 /// `localStorage` key the harness writes a pending [`ReviewCommand`] to.
 /// Duplicated as a plain string in `xtask/src/web_smoke/gold_journey.rs`
@@ -130,6 +132,19 @@ pub const REVIEW_MOTION_KEY: &str = "rff_review_motion_v1";
 /// doc comment for why the key itself is duplicated as a plain string on the
 /// `xtask` side.
 pub const REVIEW_PALETTE_KEY: &str = "rff_review_palette_v1";
+/// `localStorage` key this seam publishes a [`ThemeSnapshot`] to every
+/// frame -- added for #214's `high-contrast` browser scenario, which needs
+/// to confirm the active [`Palette`] resource actually switched to the
+/// high-contrast variant, rather than guessing from a screenshot pixel
+/// (font antialiasing and JPEG-free-but-still-lossy PNG capture make an
+/// exact color read off a screenshot unreliable) -- the same
+/// telemetry-over-pixel-diffing reasoning [`REVIEW_MOTION_KEY`]/
+/// [`REVIEW_PALETTE_KEY`] already document. Unlike those two, this snapshot
+/// is published unconditionally (the theme applies on every screen, not
+/// just the arena/fight HUD), so there is no corresponding `clear_theme`.
+/// See [`REVIEW_COMMAND_KEY`]'s doc comment for why the key itself is
+/// duplicated as a plain string on the `xtask` side.
+pub const REVIEW_THEME_KEY: &str = "rff_review_theme_v1";
 
 /// One command the harness can queue through [`REVIEW_COMMAND_KEY`]. Plain
 /// JSON via `serde`, tagged by `cmd` so the wire format is a flat, readable
@@ -183,6 +198,10 @@ impl Plugin for ReviewPlugin {
             // the same self-containment pattern CreationPlugin itself uses
             // for `SaveRequested`.
             .init_resource::<CharacterDraft>()
+            // #214: publish_theme_state reads both; idempotent with
+            // ThemePlugin/SettingsPlugin's own registrations.
+            .init_resource::<Palette>()
+            .init_resource::<AccessibilityPreferences>()
             .add_message::<PlayerActionEvent>()
             .add_systems(
                 Update,
@@ -198,6 +217,7 @@ impl Plugin for ReviewPlugin {
                     publish_current_screen,
                     publish_motion_state,
                     publish_palette_state,
+                    publish_theme_state,
                     autoplay_player_turn,
                 ),
             );
@@ -332,6 +352,44 @@ fn publish_palette_state(
     match serde_json::to_string(&snapshot) {
         Ok(json) => publish_palette(&json),
         Err(_) => clear_palette(),
+    }
+}
+
+/// Everything the `high-contrast` scenario (#214) needs to confirm the
+/// active [`Palette`] actually switched, published as exact `0..=255` sRGB
+/// triples read straight from the live resource rather than sampled off a
+/// screenshot. Published under [`REVIEW_THEME_KEY`] every frame.
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq)]
+struct ThemeSnapshot {
+    /// Mirrors `AccessibilityPreferences::high_contrast` -- the input the
+    /// scenario seeded, echoed back so a mismatch (preference on, palette
+    /// still normal) is visible directly in the snapshot.
+    high_contrast: bool,
+    hp_fill: [u8; 3],
+    bar_track: [u8; 3],
+    text_primary: [u8; 3],
+}
+
+/// One color's `0..=255` sRGB triple (alpha dropped -- every token this
+/// snapshot carries is opaque).
+fn srgb_u8(color: Color) -> [u8; 3] {
+    let srgba = color.to_srgba();
+    [
+        (srgba.red.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (srgba.green.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (srgba.blue.clamp(0.0, 1.0) * 255.0).round() as u8,
+    ]
+}
+
+fn publish_theme_state(palette: Res<Palette>, accessibility: Res<AccessibilityPreferences>) {
+    let snapshot = ThemeSnapshot {
+        high_contrast: accessibility.high_contrast,
+        hp_fill: srgb_u8(palette.hp_fill),
+        bar_track: srgb_u8(palette.bar_track),
+        text_primary: srgb_u8(palette.text_primary),
+    };
+    if let Ok(json) = serde_json::to_string(&snapshot) {
+        publish_theme(&json);
     }
 }
 
@@ -597,6 +655,16 @@ fn clear_palette() {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn clear_palette() {}
+
+#[cfg(target_arch = "wasm32")]
+fn publish_theme(json: &str) {
+    if let Some(storage) = local_storage() {
+        let _ = storage.set_item(REVIEW_THEME_KEY, json);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_theme(_json: &str) {}
 
 #[cfg(test)]
 mod tests {
