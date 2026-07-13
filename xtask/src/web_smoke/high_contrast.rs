@@ -149,7 +149,7 @@ const COMMAND_CONSUMED_MAX_FRAMES: usize = 300;
 const COMBAT_SAMPLE_COUNT: usize = 6;
 const COMBAT_SAMPLE_SPACING_FRAMES: usize = 12;
 
-pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
+pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError> {
     let dist_dir = build_review_release()?;
     let server = StaticServer::start(dist_dir).map_err(|e| {
         SmokeError::scenario(
@@ -165,7 +165,13 @@ pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
 
     let mut missing_baseline = false;
     for viewport in VIEWPORTS {
-        run_viewport(viewport, &server, update_baselines, &mut missing_baseline)?;
+        run_viewport(
+            viewport,
+            &server,
+            update_baselines,
+            strict_visual,
+            &mut missing_baseline,
+        )?;
     }
 
     if update_baselines {
@@ -300,6 +306,7 @@ fn run_viewport(
     viewport: &ViewportSpec,
     server: &StaticServer,
     update_baselines: bool,
+    strict_visual: bool,
     missing_baseline: &mut bool,
 ) -> Result<(), SmokeError> {
     let profile_dir = artifacts::scenario_dir(SCENARIO)
@@ -307,8 +314,10 @@ fn run_viewport(
         .join("chrome-profile");
     let _ = std::fs::remove_dir_all(&profile_dir);
 
+    // DPR 1 always -- this scenario is unchanged by #198's DPR matrix,
+    // which extends `gold-journey` instead (see that module's docs).
     let checkpoint =
-        browser::launch(viewport.width, viewport.height, &profile_dir).map_err(|e| {
+        browser::launch(viewport.width, viewport.height, 1.0, &profile_dir).map_err(|e| {
             SmokeError::scenario(
                 format!("web-smoke {SCENARIO}[{}]", viewport.name),
                 e,
@@ -331,6 +340,7 @@ fn run_viewport(
         "MainMenu",
         server,
         update_baselines,
+        strict_visual,
         missing_baseline,
     )?;
 
@@ -371,6 +381,7 @@ fn run_viewport(
         "Fight",
         server,
         update_baselines,
+        strict_visual,
         missing_baseline,
     )?;
 
@@ -435,6 +446,7 @@ fn captured_checkpoint(
     expected_screen: &str,
     server: &StaticServer,
     update_baselines: bool,
+    strict_visual: bool,
     missing_baseline: &mut bool,
 ) -> Result<(), SmokeError> {
     wait_for_readiness_screen_only(checkpoint, viewport, expected_screen)?;
@@ -451,6 +463,7 @@ fn captured_checkpoint(
         expected_screen,
         server,
         update_baselines,
+        strict_visual,
         missing_baseline,
     );
     // Unpause even when the capture failed -- never leave the clock frozen.
@@ -479,6 +492,7 @@ fn wait_for_readiness_screen_only(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn capture(
     checkpoint: &Checkpoint,
     viewport: &ViewportSpec,
@@ -486,6 +500,7 @@ fn capture(
     expected_screen: &str,
     server: &StaticServer,
     update_baselines: bool,
+    strict_visual: bool,
     missing_baseline: &mut bool,
 ) -> Result<(), SmokeError> {
     let checkpoint_key = format!("{}-{}", viewport.name, name);
@@ -596,9 +611,25 @@ fn capture(
             diff_pixels,
             total_pixels,
         }) => {
+            let diff_paths =
+                baseline::write_diff_triplet(SCENARIO, &checkpoint_key, &screenshot, &dir);
+            if strict_visual {
+                let mut message = format!(
+                    "{SCENARIO}[{checkpoint_key}] failed:\n  - screenshot differs from accepted \
+                     baseline ({diff_pixels}/{total_pixels} px) under --strict-visual"
+                );
+                if let Ok(paths) = &diff_paths {
+                    message.push_str(&format!("\n  diff triplet: {}", paths.describe()));
+                }
+                return Err(SmokeError::scenario(
+                    format!("web-smoke {SCENARIO}[{checkpoint_key}]"),
+                    message,
+                    dir,
+                ));
+            }
             println!(
                 "{SCENARIO}[{checkpoint_key}]: OK -- differs from accepted baseline ({diff_pixels}/{total_pixels} px; \
-                 not a scenario failure by itself, see baseline.rs docs) -- artifacts: {}",
+                 not a scenario failure by itself unless --strict-visual, see baseline.rs docs) -- artifacts: {}",
                 dir.display()
             );
         }

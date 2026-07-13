@@ -157,7 +157,9 @@ pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
 }
 
 fn run_checks(dir: &Path, server: &StaticServer, profile_dir: &Path) -> Result<(), String> {
-    let checkpoint = browser::launch(VIEWPORT_WIDTH, VIEWPORT_HEIGHT, profile_dir)?;
+    // DPR 1 always -- this scenario is unchanged by #198's DPR matrix,
+    // which extends `gold-journey` instead (see that module's docs).
+    let checkpoint = browser::launch(VIEWPORT_WIDTH, VIEWPORT_HEIGHT, 1.0, profile_dir)?;
     let url = format!("{}/", server.base_url());
     checkpoint.navigate(&url)?;
 

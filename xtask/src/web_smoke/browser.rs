@@ -24,9 +24,12 @@
 //! (`--use-angle=swiftshader`; `--enable-unsafe-swiftshader` because Chrome
 //! 129+ requires it to allow software WebGL in headless mode at all)
 //! instead of trusting whatever GPU driver happens to be on the host, and
-//! forces `--force-device-scale-factor=1` so a Retina/HiDPI dev machine
-//! doesn't silently double the captured pixel dimensions relative to a CI
-//! runner (the issue requires DPR 1 at both checkpoint sizes).
+//! forces `--force-device-scale-factor=1` at the Chrome-launch level so a
+//! Retina/HiDPI dev machine doesn't silently double the captured pixel
+//! dimensions relative to a CI runner. The *checkpoint's* requested device
+//! pixel ratio (#198: 1, 2, or 3) is then applied per-tab over CDP (see
+//! [`launch`]'s doc comment), independent of whatever the host's own display
+//! happens to be.
 //!
 //! ## Cold cache
 //!
@@ -226,8 +229,25 @@ fn chrome_binary() -> Result<std::path::PathBuf, String> {
 /// Launches a fresh, isolated headless Chrome against `profile_dir` (must
 /// not exist yet or be empty -- callers create a new directory per
 /// checkpoint, see `cold_menu::run_checkpoint`) sized to exactly
-/// `width`x`height` logical pixels at DPR 1.
-pub fn launch(width: u32, height: u32, profile_dir: &Path) -> Result<Checkpoint, String> {
+/// `width`x`height` logical (CSS) pixels at the given device pixel ratio
+/// (`dpr`).
+///
+/// ## DPR emulation (#198)
+///
+/// The Chrome launch flag stays `--force-device-scale-factor=1` regardless
+/// of `dpr` -- that flag exists purely for *host* independence (a
+/// Retina/HiDPI dev machine shouldn't silently double every capture
+/// relative to a DPR-1 CI runner), not to pick the checkpoint's DPR. The
+/// requested `dpr` is instead applied per-tab via CDP
+/// `Emulation.setDeviceMetricsOverride`'s `device_scale_factor`, which
+/// supersedes the launch-time default and is what `checkpoint::screenshot_png`
+/// (via `Page.captureScreenshot`'s `clip`) and the page's own
+/// `window.devicePixelRatio` observe. This keeps the CSS-pixel viewport
+/// (`window.innerWidth/innerHeight`) exactly `width`x`height` at every DPR,
+/// while the captured screenshot's *physical* pixel dimensions scale to
+/// `width*dpr`x`height*dpr` -- asserted by each scenario's
+/// `check_screenshot_pixels`.
+pub fn launch(width: u32, height: u32, dpr: f64, profile_dir: &Path) -> Result<Checkpoint, String> {
     std::fs::create_dir_all(profile_dir).map_err(|e| {
         format!(
             "failed to create Chrome profile dir {}: {e}",
@@ -278,7 +298,7 @@ pub fn launch(width: u32, height: u32, profile_dir: &Path) -> Result<Checkpoint,
     tab.call_method(Emulation::SetDeviceMetricsOverride {
         width,
         height,
-        device_scale_factor: 1.0,
+        device_scale_factor: dpr,
         mobile: false,
         scale: None,
         screen_width: None,
@@ -291,7 +311,7 @@ pub fn launch(width: u32, height: u32, profile_dir: &Path) -> Result<Checkpoint,
         display_feature: None,
         device_posture: None,
     })
-    .map_err(|e| format!("failed to override device metrics to {width}x{height}@1: {e}"))?;
+    .map_err(|e| format!("failed to override device metrics to {width}x{height}@{dpr}x: {e}"))?;
 
     tab.call_method(Page::AddScriptToEvaluateOnNewDocument {
         source: INSTRUMENTATION_SCRIPT.to_string(),
