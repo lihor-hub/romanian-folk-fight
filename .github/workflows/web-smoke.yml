@@ -3,8 +3,21 @@ name: Browser smoke
 # Separate from `ci.yml` (native/wasm build+test) and `deploy.yml` (GitHub
 # Pages publish): this workflow builds+serves the WASM game and drives a
 # real, freshly-launched Chrome against it via `cargo xtask web-smoke
-# --scenario <name>` (#144/#168/#187/#189/#191/#200/#214). It never touches
-# #141's future asset workflow.
+# --scenario <name>` (#144/#168/#187/#189/#191/#198/#199/#200/#214). It
+# never touches #141's future asset workflow.
+#
+# `gold-journey` now walks the full #198 matrix in one invocation: both
+# viewports (1280x800 desktop, 390x844 phone) at device pixel ratios 1, 2,
+# and 3, all five gold-journey screens at each -- 30 checkpoints -- from the
+# *same* single `trunk build --release --features review` this job already
+# ran (the DPR/viewport dimension only changes the headless-Chrome
+# emulation per checkpoint; the wasm bundle it drives is built once). This
+# workflow deliberately does not invoke `cargo xtask web-smoke --all`: that
+# command exists for a single local/CI process that wants every scenario
+# back to back, but this workflow keeps every scenario as its own parallel
+# job so the builds and browser sessions run concurrently instead of
+# serially, which is the dominant factor in this workflow's wall-clock
+# runtime.
 
 on:
   push:
@@ -12,6 +25,16 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+    inputs:
+      strict_visual:
+        description: >-
+          Fail a checkpoint whose screenshot differs from its accepted
+          baseline (--strict-visual), instead of the default non-fatal
+          report. Manual/opt-in only -- see xtask/README.md's "Visual-diff
+          review gating" section.
+        required: false
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -54,20 +77,41 @@ jobs:
       # No worktree bootstrap runs in CI, so the `cargo xtask` alias (a
       # gitignored, bootstrap-generated `.cargo/config.toml` entry -- see
       # xtask/README.md's "known limitation") does not exist here; invoke
-      # the crate directly instead, matching assets.yml.
-      run: cargo run --locked --package xtask -- web-smoke --scenario cold-menu
+      # the crate directly instead, matching assets.yml. `--strict-visual`
+      # is opt-in via this workflow's manual `workflow_dispatch` input
+      # only -- push/pull_request runs never pass it, keeping the default
+      # non-fatal baseline-diff policy for ordinary CI (see
+      # xtask/README.md's "Visual-diff review gating" section).
+      run: >-
+        cargo run --locked --package xtask -- web-smoke --scenario cold-menu
+        ${{ github.event_name == 'workflow_dispatch' && inputs.strict_visual && '--strict-visual' || '' }}
 
-    - name: Upload smoke artifacts (always, for post-mortem on failure)
-      if: always()
+    # Two artifact uploads instead of one "always" upload: a passing run
+    # only needs the screenshots (for visual spot-checking), while a
+    # failing run needs the full per-checkpoint diagnostics -- console/
+    # network/viewport/server logs and, when a checkpoint failed under
+    # `--strict-visual`, its actual/expected/diff baseline triplet (#198;
+    # see `xtask/src/web_smoke/baseline.rs`'s `write_diff_triplet`).
+    - name: Upload screenshots (success)
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: web-smoke-cold-menu
+        name: web-smoke-cold-menu-screenshots
+        path: target/xtask-artifacts/web-smoke/**/screenshot.png
+        if-no-files-found: warn
+        retention-days: 14
+
+    - name: Upload full diagnostics (failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: web-smoke-cold-menu-diagnostics
         path: target/xtask-artifacts/web-smoke/
         if-no-files-found: ignore
         retention-days: 14
 
   gold-journey:
-    name: gold-journey (menu -> creation -> fight -> result -> shop)
+    name: gold-journey (30-checkpoint desktop/phone x DPR 1/2/3 matrix)
     runs-on: ubuntu-latest
     env:
       RUSTC_WRAPPER: sccache
@@ -95,18 +139,31 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
-    - name: Run the gold-journey browser smoke
+    - name: Run the gold-journey browser smoke (full DPR matrix)
       # Same alias-independent invocation as the cold-menu job above (no
       # worktree bootstrap runs in CI). Builds its own review-feature wasm
-      # bundle into dist-gold-journey/ -- never dist/ (see
-      # xtask/src/web_smoke/gold_journey.rs).
-      run: cargo run --locked --package xtask -- web-smoke --scenario gold-journey
+      # bundle into dist-gold-journey/ once -- never dist/ (see
+      # xtask/src/web_smoke/gold_journey.rs) -- then reuses that single
+      # build across all 6 viewport x DPR entries (30 checkpoints); only
+      # the headless-Chrome device-metrics emulation varies per checkpoint.
+      run: >-
+        cargo run --locked --package xtask -- web-smoke --scenario gold-journey
+        ${{ github.event_name == 'workflow_dispatch' && inputs.strict_visual && '--strict-visual' || '' }}
 
-    - name: Upload smoke artifacts (always, for post-mortem on failure)
-      if: always()
+    - name: Upload screenshots (success)
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: web-smoke-gold-journey
+        name: web-smoke-gold-journey-screenshots
+        path: target/xtask-artifacts/web-smoke/**/screenshot.png
+        if-no-files-found: warn
+        retention-days: 14
+
+    - name: Upload full diagnostics (failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: web-smoke-gold-journey-diagnostics
         path: target/xtask-artifacts/web-smoke/
         if-no-files-found: ignore
         retention-days: 14

@@ -8,7 +8,12 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-toml
+      # 1 MiB (default 500 KB): #198's DPR-3 visual baselines
+      # (tests/visual/baselines/gold-journey/desktop-dpr3-*.png, up to
+      # ~790 KB) are committed as-is -- recompressing them would break the
+      # harness's byte-identical baseline comparison against fresh captures.
       - id: check-added-large-files
+        args: ['--maxkb=1024']
       - id: check-merge-conflict
       - id: detect-private-key
 

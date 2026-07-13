@@ -112,7 +112,7 @@ const STABLE_FRAMES_REQUIRED: usize = 3;
 /// to be reflected in the published snapshot after its command is consumed.
 const PALETTE_STATE_MAX_FRAMES: usize = 600;
 
-pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
+pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError> {
     let dist_dir = build_review_release()?;
     let server = StaticServer::start(dist_dir).map_err(|e| {
         SmokeError::scenario(
@@ -134,6 +134,7 @@ pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
         &server,
         &profile_dir,
         update_baselines,
+        strict_visual,
         &mut missing_baseline,
     );
 
@@ -266,10 +267,13 @@ fn run_journey(
     server: &StaticServer,
     profile_dir: &std::path::Path,
     update_baselines: bool,
+    strict_visual: bool,
     missing_baseline: &mut bool,
 ) -> Result<(), SmokeError> {
     let journey = (|| -> Result<Checkpoint, String> {
-        let checkpoint = browser::launch(VIEWPORT_WIDTH, VIEWPORT_HEIGHT, profile_dir)?;
+        // DPR 1 always -- this scenario is unchanged by #198's DPR matrix,
+        // which extends `gold-journey` instead (see that module's docs).
+        let checkpoint = browser::launch(VIEWPORT_WIDTH, VIEWPORT_HEIGHT, 1.0, profile_dir)?;
         let url = format!("{}/", server.base_url());
         checkpoint.navigate(&url)?;
 
@@ -322,6 +326,7 @@ fn run_journey(
         "closed",
         None,
         update_baselines,
+        strict_visual,
         missing_baseline,
     )?;
 
@@ -347,6 +352,7 @@ fn run_journey(
             &format!("open-{category}"),
             Some((category, expected_actions)),
             update_baselines,
+            strict_visual,
             missing_baseline,
         )?;
     }
@@ -371,6 +377,7 @@ fn capture_state(
     state_name: &str,
     expected_open: Option<(&str, &[&str])>,
     update_baselines: bool,
+    strict_visual: bool,
     missing_baseline: &mut bool,
 ) -> Result<(), SmokeError> {
     let dir = artifacts::checkpoint_dir(SCENARIO, state_name).map_err(|e| {
@@ -456,10 +463,25 @@ fn capture_state(
             diff_pixels,
             total_pixels,
         }) => {
+            let diff_paths = baseline::write_diff_triplet(SCENARIO, state_name, &screenshot, &dir);
+            if strict_visual {
+                let mut message = format!(
+                    "{SCENARIO}[{state_name}] failed:\n  - screenshot differs from accepted \
+                     baseline ({diff_pixels}/{total_pixels} px) under --strict-visual"
+                );
+                if let Ok(paths) = &diff_paths {
+                    message.push_str(&format!("\n  diff triplet: {}", paths.describe()));
+                }
+                return Err(SmokeError::scenario(
+                    format!("web-smoke {SCENARIO}[{state_name}]"),
+                    message,
+                    dir,
+                ));
+            }
             println!(
                 "{SCENARIO}[{state_name}]: OK -- differs from accepted baseline \
-                 ({diff_pixels}/{total_pixels} px; not a scenario failure by itself, see \
-                 baseline.rs docs) -- artifacts: {}",
+                 ({diff_pixels}/{total_pixels} px; not a scenario failure by itself unless \
+                 --strict-visual, see baseline.rs docs) -- artifacts: {}",
                 dir.display()
             );
         }

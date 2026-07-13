@@ -34,9 +34,14 @@ cargo xtask check build-matrix  # native + release + wasm cargo check, no `dev` 
 cargo xtask assets check        # validate every manifest.toml sidecar + runtime refs/image integrity (#167, #185)
 cargo xtask assets review       # generate the deterministic static asset review gallery (#197)
 cargo xtask assets review --changed [--base <ref>]  # focused gallery: only changed assets + dependent compositions (#211)
-cargo xtask web-smoke --scenario cold-menu   # build+serve the wasm game, verify the first-painted menu in a real browser (#168)
-cargo xtask web-smoke --scenario gold-journey  # deterministic menu->creation->fight->result->shop journey, review build (#187)
+cargo xtask web-smoke --scenario cold-menu     # build+serve the wasm game, verify the first-painted menu in a real browser (#168)
+cargo xtask web-smoke --scenario gold-journey  # menu->creation->fight->result->shop, review build, full desktop/phone x DPR 1/2/3 matrix (#187/#198)
 cargo xtask web-smoke --scenario accessibility-settings-reload  # click both a11y toggles, reload, verify persistence + zoom (#191)
+cargo xtask web-smoke --scenario reduced-motion-fight  # seed reduced-motion, drive menu->fight, assert motion suppression from telemetry (#200)
+cargo xtask web-smoke --scenario fight-palette-desktop  # deterministic fight screen, assert the seven-action desktop palette layout (#189)
+cargo xtask web-smoke --scenario fight-palette-phone  # phone fight screen, assert the category-driven action palette states (#199)
+cargo xtask web-smoke --scenario high-contrast  # seed high-contrast preference, verify menu+fight theming and non-color cues (#214)
+cargo xtask web-smoke --all                    # every registered scenario back to back (#198)
 cargo xtask pre-push            # fmt check, clippy, cargo test, build-matrix -- stops at first failure
 ```
 
@@ -338,15 +343,15 @@ does. Dedicated workflow: `.github/workflows/web-smoke.yml`. See
 `src/web_smoke/mod.rs` for how a later scenario registers without touching
 the harness core.
 
-### `web-smoke --scenario gold-journey` (#187, a child of #144)
+### `web-smoke --scenario gold-journey` (#187/#198, a child of #144)
 
 Extends `web-smoke` per the pattern above: a new module
 (`xtask/src/web_smoke/gold_journey.rs`) plus one match arm, no dispatcher/
 CLI/harness-core change. Drives a **deterministic** review-only build
 (`trunk build --release --features review`, served from its own
-`dist-gold-journey/`, never `dist/`) through the full player loop -- menu ->
-character creation (a preset selected) -> first fight -> fight result -> shop
--- at both viewports (10 captures total), via `src/review/mod.rs`'s
+`dist-gold-journey/`, never `dist/`, built exactly once per run) through the
+full player loop -- menu -> character creation (a preset selected) -> first
+fight -> fight result -> shop -- via `src/review/mod.rs`'s
 `window.localStorage`-based seam: seed the combat RNG, pick a named preset,
 and advance screens by writing the same player-triggered `FlowIntent`s a
 button click writes (never `NextState<GameState>` directly). Readiness per
@@ -355,11 +360,112 @@ checkpoint is the review seam's published current-screen marker plus
 seed/preset/autoplay policy is pinned by a native unit test in
 `src/review/mod.rs` (`gold_journey_seed_wins_the_first_duel`) using the pure
 combat engine directly, so the whole journey's outcome (not just its
-screens) is reproducible run to run. Baselines live at
-`tests/visual/baselines/gold-journey/<viewport>-<checkpoint>.png`; the
-review seam itself is compiled in only behind the `review` cargo feature
-(see `Cargo.toml` and `src/review/mod.rs`), never part of an ordinary
-`cargo build`/`--release`/`trunk build --release`.
+screens) is reproducible run to run. The review seam itself is compiled in
+only behind the `review` cargo feature (see `Cargo.toml` and
+`src/review/mod.rs`), never part of an ordinary `cargo build`/`--release`/
+`trunk build --release`.
+
+#### The desktop/phone x DPR 1/2/3 matrix (#198)
+
+Every screen is captured at both base viewports, at three device pixel
+ratios, applied per-checkpoint over CDP (`Emulation.setDeviceMetricsOverride`,
+see `xtask/src/web_smoke/browser.rs`'s doc comment) rather than the host
+machine's own display -- 6 viewport entries x 5 screens = **30 checkpoints**
+in one `--scenario gold-journey` run:
+
+| viewport name  | logical size | DPR | screenshot (physical) size |
+|-----------------|--------------|-----|------------------------------|
+| `desktop`       | 1280x800     | 1   | 1280x800                     |
+| `desktop-dpr2`  | 1280x800     | 2   | 2560x1600                    |
+| `desktop-dpr3`  | 1280x800     | 3   | 3840x2400                    |
+| `phone`         | 390x844      | 1   | 390x844                      |
+| `phone-dpr2`    | 390x844      | 2   | 780x1688                     |
+| `phone-dpr3`    | 390x844      | 3   | 1170x2532                    |
+
+Each of the 6 rows walks the same five screens (`menu`, `creation`, `fight`,
+`fight-result`, `shop`) in one continuous browser session (one fresh Chrome
+profile per row), exactly as #187 did per viewport -- DPR just adds three
+rows per base viewport instead of a second scenario or a second runner.
+
+**Checkpoint naming and baseline migration choice.** A checkpoint's key is
+`<viewport-name>-<screen>` (unchanged formatting from #187). DPR 1 keeps the
+viewport names #187 already used (`desktop`, `phone`), so every baseline
+already committed at `tests/visual/baselines/gold-journey/{desktop,phone}-
+{menu,creation,fight,fight-result,shop}.png` stays valid without a rename or
+a `--update-baselines` run just to migrate filenames. DPR 2 and 3 extend the
+convention with a `-dprN` suffix (`desktop-dpr2`, `phone-dpr3`, ...), giving
+checkpoint keys like `desktop-dpr2-fight`. This was the deliberate choice
+over migrating every viewport to an explicit `-dpr1` suffix (the issue's
+other offered option): it keeps DPR-1 baselines' git history/filenames
+untouched, at the cost of a non-uniform-looking naming convention (`desktop`
+implicitly means DPR 1). New baselines for the 24 new DPR-2/DPR-3
+checkpoints (10 x DPR-1 already existed from #187) were captured via
+`--update-baselines` and reviewed as part of this change -- see the size
+note below.
+
+**Baseline repo-weight note.** DPR-2/3 screenshots are physically larger PNGs
+(up to 4x/9x the pixel count of DPR 1). Measured sizes for the full
+`tests/visual/baselines/gold-journey/` directory are in this change's PR
+description; phone DPR-3 (1170x2532) is the single largest baseline size
+class.
+
+#### Visual-diff review gating: `--strict-visual` (#198)
+
+`baseline`'s original #168 policy is the *default* for every scenario: a
+screenshot that differs from its accepted baseline is reported (with a
+diff-pixel count) but does not fail the checkpoint by itself -- pixel-perfect
+diffing is left to human review of the committed PNG, because
+anti-aliasing/font-hinting drift across otherwise-matching environments
+would make a hard pixel gate noisy by default (see `baseline.rs`'s module
+docs for the full rationale). Passing `--strict-visual` (or setting
+`XTASK_WEB_SMOKE_STRICT_VISUAL=1`) turns that same diff into an explicit
+checkpoint failure -- an opt-in, human-triggered "no unreviewed pixel drift"
+gate, without making that the default (and potentially flaky) CI behavior.
+The dedicated workflow (`.github/workflows/web-smoke.yml`) only enables it
+via its manual `workflow_dispatch` `strict_visual` input; ordinary
+push/pull_request runs never pass it.
+
+Whenever a checkpoint's screenshot differs from its accepted baseline --
+regardless of `--strict-visual` -- an `actual.png`/`expected.png`/`diff.png`
+triplet is written to that checkpoint's own artifact directory
+(`baseline-diff/`, see the "Artifact directory convention" section below and
+`baseline::write_diff_triplet`), so a reviewer (or CI's artifact upload) has
+a focused, ready-to-view diff bundle instead of needing to diff the raw
+screenshot against the committed baseline by hand.
+
+### `web-smoke --all` (#198)
+
+Runs every registered scenario back to back in one process, stopping at the
+first failure like every other multi-step `xtask` command: `cold-menu` (2
+checkpoints), then `gold-journey`'s full matrix (30 checkpoints), then
+`accessibility-settings-reload` and `reduced-motion-fight` (assertion-only
+scenarios with no screenshot baselines -- see their module docs), then
+`fight-palette-desktop` (1 baseline checkpoint), `fight-palette-phone` (5
+baseline states), and `high-contrast` (4 baseline checkpoints).
+`--update-baselines` and `--strict-visual` both apply to every scenario run
+this way (the baseline-free scenarios accept and ignore them, printing a
+note). A later scenario module registers itself in `web_smoke::SCENARIOS`
+and is picked up by `--all` automatically -- see
+`xtask/src/web_smoke/mod.rs`'s module docs.
+
+```
+cargo xtask web-smoke --all                                    # every scenario, default (non-fatal) baseline-diff policy
+cargo xtask web-smoke --all --update-baselines                 # accept every scenario's freshly captured screenshots as the new baselines
+cargo xtask web-smoke --all --strict-visual                    # every scenario, but any baseline diff is now a failure
+```
+
+### Required gate (#144/#198)
+
+**`web-smoke` (`--all`, or the dedicated `.github/workflows/web-smoke.yml`
+CI jobs) is the required verification gate for UI, asset, viewport, and
+web-runtime changes** in this repository -- any change that can move a
+pixel, add/remove/rename a runtime asset the menu/creation/fight/result/shop
+screens depend on, or alter layout/scroll/DPR behavior should be run through
+it (locally via `--scenario <name>` or `--all`, and always via CI on the
+PR) before merging. `pre-push`/`ci.yml` deliberately do **not** run
+`web-smoke` (see `pre-push`'s section below) -- it is gated by the separate,
+dedicated workflow instead, exactly like `assets check` is gated by
+`assets.yml`.
 
 ### `web-smoke --scenario accessibility-settings-reload` (#191, a child of #145)
 

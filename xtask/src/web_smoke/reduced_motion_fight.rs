@@ -245,7 +245,9 @@ fn run_checks(
     server: &StaticServer,
     profile_dir: &std::path::Path,
 ) -> Result<String, String> {
-    let checkpoint = browser::launch(VIEWPORT_WIDTH, VIEWPORT_HEIGHT, profile_dir)?;
+    // DPR 1 always -- this scenario is unchanged by #198's DPR matrix,
+    // which extends `gold-journey` instead (see that module's docs).
+    let checkpoint = browser::launch(VIEWPORT_WIDTH, VIEWPORT_HEIGHT, 1.0, profile_dir)?;
     // Seed the persisted accessibility preference *before* the wasm module's
     // Startup schedule runs -- see SEEDED_SETTINGS_JSON's docs.
     checkpoint.seed_local_storage_before_load(SETTINGS_KEY, SEEDED_SETTINGS_JSON)?;

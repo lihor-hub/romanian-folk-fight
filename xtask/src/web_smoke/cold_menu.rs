@@ -108,7 +108,7 @@ const READY_MAX_FRAMES: usize = 1800;
 const READY_MAX_WALL_CLOCK: Duration = Duration::from_secs(120);
 const STABLE_FRAMES_REQUIRED: usize = 3;
 
-pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
+pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError> {
     let dist_dir = crate::web_smoke::build_release("web-smoke: trunk build --release")?;
 
     let server = StaticServer::start(dist_dir).map_err(|e| {
@@ -122,7 +122,13 @@ pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
 
     let mut missing_baseline = false;
     for spec in CHECKPOINTS {
-        run_checkpoint(spec, &server, update_baselines, &mut missing_baseline)?;
+        run_checkpoint(
+            spec,
+            &server,
+            update_baselines,
+            strict_visual,
+            &mut missing_baseline,
+        )?;
     }
 
     if update_baselines {
@@ -157,6 +163,7 @@ fn run_checkpoint(
     spec: &CheckpointSpec,
     server: &StaticServer,
     update_baselines: bool,
+    strict_visual: bool,
     missing_baseline: &mut bool,
 ) -> Result<(), SmokeError> {
     let dir = artifacts::checkpoint_dir(SCENARIO, spec.name).map_err(|e| {
@@ -174,7 +181,9 @@ fn run_checkpoint(
     let _ = std::fs::remove_dir_all(&profile_dir);
 
     let outcome = (|| -> Result<(PageStatus, Vec<u8>, Readiness), String> {
-        let checkpoint = browser::launch(spec.width, spec.height, &profile_dir)?;
+        // DPR 1 always -- `cold-menu` is unchanged by #198's DPR matrix,
+        // which extends `gold-journey` instead (see that module's docs).
+        let checkpoint = browser::launch(spec.width, spec.height, 1.0, &profile_dir)?;
         let url = format!("{}/", server.base_url());
         checkpoint.navigate(&url)?;
         wait_for_readiness(&checkpoint, spec)
@@ -239,10 +248,11 @@ fn run_checkpoint(
     match baseline::handle(SCENARIO, spec.name, &screenshot, update_baselines) {
         Ok(baseline::BaselineOutcome::Updated) => {
             println!(
-                "cold-menu[{}]: OK ({}x{}) -- baseline updated -- artifacts: {}",
+                "cold-menu[{}]: OK ({}x{}) -- baseline updated at {} -- artifacts: {}",
                 spec.name,
                 spec.width,
                 spec.height,
+                baseline::baseline_path(SCENARIO, spec.name).display(),
                 dir.display()
             );
         }
@@ -269,9 +279,25 @@ fn run_checkpoint(
             diff_pixels,
             total_pixels,
         }) => {
+            let diff_paths = baseline::write_diff_triplet(SCENARIO, spec.name, &screenshot, &dir);
+            if strict_visual {
+                let mut message = format!(
+                    "cold-menu[{}] ({}x{}) failed:\n  - screenshot differs from accepted baseline \
+                     ({diff_pixels}/{total_pixels} px) under --strict-visual",
+                    spec.name, spec.width, spec.height
+                );
+                if let Ok(paths) = &diff_paths {
+                    message.push_str(&format!("\n  diff triplet: {}", paths.describe()));
+                }
+                return Err(SmokeError::scenario(
+                    format!("web-smoke cold-menu[{}]", spec.name),
+                    message,
+                    dir,
+                ));
+            }
             println!(
                 "cold-menu[{}]: OK ({}x{}) -- differs from accepted baseline ({diff_pixels}/{total_pixels} px; \
-                 not a scenario failure by itself, see baseline.rs docs) -- artifacts: {}",
+                 not a scenario failure by itself unless --strict-visual, see baseline.rs docs) -- artifacts: {}",
                 spec.name,
                 spec.width,
                 spec.height,

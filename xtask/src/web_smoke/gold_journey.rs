@@ -73,22 +73,42 @@
 //! and a `gold-journey` run never clobber each other's build output, and the
 //! ordinary release artifact is never the one this scenario serves.
 //!
-//! ## Checkpoints and viewports
+//! ## Checkpoints and the DPR matrix (#198)
 //!
 //! Five semantic checkpoints -- `menu`, `creation`, `fight`, `fight-result`,
 //! `shop` -- each captured at both `desktop` (1280x800) and `phone`
-//! (390x844), DPR 1 (forced by `browser::launch`, same as `cold-menu`): ten
-//! captures. Baselines live at
-//! `tests/visual/baselines/gold-journey/<viewport>-<checkpoint>.png`.
+//! (390x844), at device pixel ratios 1, 2, and 3 ([`VIEWPORTS`]): 6
+//! viewport entries x 5 checkpoints = 30 captures. DPR is applied per-tab
+//! over CDP (`Emulation.setDeviceMetricsOverride`'s `device_scale_factor`,
+//! see `browser::launch`'s doc comment) -- the CSS-pixel viewport
+//! (`window.innerWidth/innerHeight`) stays exactly `1280x800`/`390x844` at
+//! every DPR, while the captured screenshot's physical pixel dimensions
+//! scale by `dpr` (asserted in `check_screenshot_pixels`). Baselines live at
+//! `tests/visual/baselines/gold-journey/<viewport>-<checkpoint>.png`, where
+//! `<viewport>` is `desktop`/`phone` at DPR 1 (the pre-#198 names, kept
+//! valid rather than migrated -- see [`VIEWPORTS`]'s doc comment) or
+//! `desktop-dpr2`/`phone-dpr3`/etc. at DPR 2/3.
+//!
 //! Every checkpoint reuses the same class of assertions #168 established
 //! (adapted per-checkpoint below, not shared code -- see the module docs
 //! above for why): no console/page errors, every required asset fetched
-//! with a 2xx status, no unexpected document scroll, and the screenshot is
-//! neither blank nor an untextured white placeholder. The `shop` checkpoint
-//! additionally requires the six shop icon assets (fetched once at
-//! `PreStartup`, same as the font/panel, since this is a single continuous
-//! page load across every checkpoint -- there is no per-screen navigation
-//! reload to re-fetch anything).
+//! with a 2xx status, no unexpected document scroll, an exact DPR-scaled
+//! screenshot size, and a screenshot that is neither blank nor an
+//! untextured white placeholder. The `shop` checkpoint additionally
+//! requires the six shop icon assets (fetched once at `PreStartup`, same as
+//! the font/panel, since this is a single continuous page load across every
+//! checkpoint -- there is no per-screen navigation reload to re-fetch
+//! anything).
+//!
+//! ## Visual-diff gating (#198)
+//!
+//! A checkpoint whose screenshot differs from its accepted baseline stays
+//! non-fatal by default (per `baseline`'s policy) but always gets an
+//! `actual`/`expected`/`diff` PNG triplet written into that checkpoint's
+//! artifact directory (`baseline::write_diff_triplet`), so CI can upload a
+//! focused, reviewable bundle. Passing `--strict-visual` (or setting
+//! `XTASK_WEB_SMOKE_STRICT_VISUAL=1`) turns that diff into an explicit
+//! checkpoint failure instead.
 //!
 //! Each viewport gets its own fresh Chrome profile (a clean, empty
 //! `localStorage`/cache -- the "clean profile" the issue asks for) and its
@@ -154,18 +174,67 @@ struct ViewportSpec {
     name: &'static str,
     width: u32,
     height: u32,
+    dpr: f64,
 }
 
+/// The full #198 matrix: both base viewports (desktop 1280x800, phone
+/// 390x844) at device pixel ratios 1, 2, and 3 -- six viewport entries, each
+/// walking all five [`CHECKPOINTS`] (30 captures total).
+///
+/// ## Checkpoint naming (#198)
+///
+/// `capture`'s `checkpoint_key` is `format!("{}-{}", viewport.name,
+/// spec.name)`, unchanged from #187 -- so the DPR dimension is folded
+/// entirely into `ViewportSpec::name` here rather than touching that
+/// formatting code. DPR 1 keeps the exact pre-#198 names (`desktop`,
+/// `phone`), so every baseline #187 already committed
+/// (`tests/visual/baselines/gold-journey/{desktop,phone}-{menu,creation,
+/// fight,fight-result,shop}.png`) stays valid without a rename/migration.
+/// DPR 2 and 3 extend the convention with a `-dprN` suffix (`desktop-dpr2`,
+/// `phone-dpr3`, ...), giving checkpoint keys like `desktop-dpr2-fight` --
+/// exactly the naming the issue asks for. This was a deliberate choice over
+/// migrating every viewport to an explicit `-dpr1` suffix: it keeps the
+/// existing, human-reviewed DPR-1 baselines' git history and filenames
+/// untouched (no `--update-baselines` run needed just to rename files), at
+/// the cost of the naming convention being non-uniform (`desktop` implies
+/// DPR 1; `desktop-dpr2` is explicit). See `xtask/README.md`'s "web-smoke
+/// --all"/matrix section for the full table.
 const VIEWPORTS: &[ViewportSpec] = &[
     ViewportSpec {
         name: "desktop",
         width: 1280,
         height: 800,
+        dpr: 1.0,
+    },
+    ViewportSpec {
+        name: "desktop-dpr2",
+        width: 1280,
+        height: 800,
+        dpr: 2.0,
+    },
+    ViewportSpec {
+        name: "desktop-dpr3",
+        width: 1280,
+        height: 800,
+        dpr: 3.0,
     },
     ViewportSpec {
         name: "phone",
         width: 390,
         height: 844,
+        dpr: 1.0,
+    },
+    ViewportSpec {
+        name: "phone-dpr2",
+        width: 390,
+        height: 844,
+        dpr: 2.0,
+    },
+    ViewportSpec {
+        name: "phone-dpr3",
+        width: 390,
+        height: 844,
+        dpr: 3.0,
     },
 ];
 
@@ -210,7 +279,7 @@ const READY_MAX_FRAMES: usize = 3600;
 const READY_MAX_WALL_CLOCK: Duration = Duration::from_secs(180);
 const STABLE_FRAMES_REQUIRED: usize = 3;
 
-pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
+pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError> {
     let dist_dir = build_review_release()?;
     let server = StaticServer::start(dist_dir).map_err(|e| {
         SmokeError::scenario(
@@ -220,13 +289,22 @@ pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
         )
     })?;
     println!(
-        "gold-journey: serving dist-gold-journey/ at {}",
-        server.base_url()
+        "gold-journey: serving dist-gold-journey/ at {} ({} viewport(s) x {} screen(s) = {} checkpoint(s))",
+        server.base_url(),
+        VIEWPORTS.len(),
+        CHECKPOINTS.len(),
+        VIEWPORTS.len() * CHECKPOINTS.len()
     );
 
     let mut missing_baseline = false;
     for viewport in VIEWPORTS {
-        run_viewport_journey(viewport, &server, update_baselines, &mut missing_baseline)?;
+        run_viewport_journey(
+            viewport,
+            &server,
+            update_baselines,
+            strict_visual,
+            &mut missing_baseline,
+        )?;
     }
 
     if update_baselines {
@@ -325,6 +403,7 @@ fn run_viewport_journey(
     viewport: &ViewportSpec,
     server: &StaticServer,
     update_baselines: bool,
+    strict_visual: bool,
     missing_baseline: &mut bool,
 ) -> Result<(), SmokeError> {
     let profile_dir = artifacts::scenario_dir(SCENARIO)
@@ -332,14 +411,14 @@ fn run_viewport_journey(
         .join("chrome-profile");
     let _ = std::fs::remove_dir_all(&profile_dir);
 
-    let checkpoint =
-        browser::launch(viewport.width, viewport.height, &profile_dir).map_err(|e| {
-            SmokeError::scenario(
-                format!("web-smoke gold-journey[{}]", viewport.name),
-                e,
-                artifacts::scenario_dir(SCENARIO),
-            )
-        })?;
+    let checkpoint = browser::launch(viewport.width, viewport.height, viewport.dpr, &profile_dir)
+        .map_err(|e| {
+        SmokeError::scenario(
+            format!("web-smoke gold-journey[{}]", viewport.name),
+            e,
+            artifacts::scenario_dir(SCENARIO),
+        )
+    })?;
     let url = format!("{}/", server.base_url());
     checkpoint.navigate(&url).map_err(|e| {
         SmokeError::scenario(
@@ -356,6 +435,7 @@ fn run_viewport_journey(
         &CHECKPOINTS[0],
         server,
         update_baselines,
+        strict_visual,
         missing_baseline,
     )?;
 
@@ -391,6 +471,7 @@ fn run_viewport_journey(
         &CHECKPOINTS[1],
         server,
         update_baselines,
+        strict_visual,
         missing_baseline,
     )?;
 
@@ -414,6 +495,7 @@ fn run_viewport_journey(
         &CHECKPOINTS[2],
         server,
         update_baselines,
+        strict_visual,
         missing_baseline,
     )?;
 
@@ -432,6 +514,7 @@ fn run_viewport_journey(
         &CHECKPOINTS[3],
         server,
         update_baselines,
+        strict_visual,
         missing_baseline,
     )?;
 
@@ -448,6 +531,7 @@ fn run_viewport_journey(
         &CHECKPOINTS[4],
         server,
         update_baselines,
+        strict_visual,
         missing_baseline,
     )?;
 
@@ -465,6 +549,7 @@ fn captured_checkpoint(
     spec: &CheckpointSpec,
     server: &StaticServer,
     update_baselines: bool,
+    strict_visual: bool,
     missing_baseline: &mut bool,
 ) -> Result<(), SmokeError> {
     wait_for_checkpoint(checkpoint, spec, viewport)?;
@@ -480,6 +565,7 @@ fn captured_checkpoint(
         spec,
         server,
         update_baselines,
+        strict_visual,
         missing_baseline,
     );
     // Unpause even when the capture failed, so a debugging session against
@@ -539,6 +625,7 @@ fn capture(
     spec: &CheckpointSpec,
     server: &StaticServer,
     update_baselines: bool,
+    strict_visual: bool,
     missing_baseline: &mut bool,
 ) -> Result<(), SmokeError> {
     let checkpoint_key = format!("{}-{}", viewport.name, spec.name);
@@ -602,7 +689,8 @@ fn capture(
     match baseline::handle(SCENARIO, &checkpoint_key, &screenshot, update_baselines) {
         Ok(baseline::BaselineOutcome::Updated) => {
             println!(
-                "gold-journey[{checkpoint_key}]: OK -- baseline updated -- artifacts: {}",
+                "gold-journey[{checkpoint_key}]: OK -- baseline updated at {} -- artifacts: {}",
+                baseline::baseline_path(SCENARIO, &checkpoint_key).display(),
                 dir.display()
             );
         }
@@ -623,9 +711,26 @@ fn capture(
             diff_pixels,
             total_pixels,
         }) => {
+            let diff_paths =
+                baseline::write_diff_triplet(SCENARIO, &checkpoint_key, &screenshot, &dir);
+            if strict_visual {
+                let mut message = format!(
+                    "gold-journey[{checkpoint_key}] ({}x{}) failed:\n  - screenshot differs from accepted \
+                     baseline ({diff_pixels}/{total_pixels} px) under --strict-visual",
+                    viewport.width, viewport.height
+                );
+                if let Ok(paths) = &diff_paths {
+                    message.push_str(&format!("\n  diff triplet: {}", paths.describe()));
+                }
+                return Err(SmokeError::scenario(
+                    format!("web-smoke gold-journey[{checkpoint_key}]"),
+                    message,
+                    dir,
+                ));
+            }
             println!(
                 "gold-journey[{checkpoint_key}]: OK -- differs from accepted baseline ({diff_pixels}/{total_pixels} px; \
-                 not a scenario failure by itself, see baseline.rs docs) -- artifacts: {}",
+                 not a scenario failure by itself unless --strict-visual, see baseline.rs docs) -- artifacts: {}",
                 dir.display()
             );
         }
@@ -824,17 +929,21 @@ fn check_no_unexpected_scroll(
             status.scroll_height, status.client_height, viewport.height
         ));
     }
-    if (status.device_pixel_ratio - 1.0).abs() > f64::EPSILON {
+    // #198: the requested device pixel ratio is per-viewport (1, 2, or 3),
+    // not fixed at 1 -- see `browser::launch`'s doc comment for how the CDP
+    // device-metrics override applies it.
+    if (status.device_pixel_ratio - viewport.dpr).abs() > f64::EPSILON {
         problems.push(format!(
-            "devicePixelRatio was {} (expected 1 -- --force-device-scale-factor=1 should guarantee this)",
-            status.device_pixel_ratio
+            "devicePixelRatio was {}, expected exactly {} (device-metrics override did not take)",
+            status.device_pixel_ratio, viewport.dpr
         ));
     }
 }
 
 /// Pixel-level proof that *something* painted (not a blank/solid-color
 /// canvas) and that the captured image is exactly the requested viewport
-/// size at DPR 1. Mirrors `cold_menu::check_screenshot_pixels`.
+/// size scaled by the checkpoint's device pixel ratio (#198). Mirrors
+/// `cold_menu::check_screenshot_pixels` (which stays fixed at DPR 1).
 fn check_screenshot_pixels(
     viewport: &ViewportSpec,
     screenshot_png: &[u8],
@@ -847,13 +956,22 @@ fn check_screenshot_pixels(
             return;
         }
     };
-    if image.width() != viewport.width || image.height() != viewport.height {
+    // `Page.captureScreenshot`'s clip is specified in CSS pixels; the PNG
+    // it returns is physical pixels, scaled by the tab's overridden device
+    // pixel ratio -- so the expected image size is the logical viewport
+    // times `dpr`, not the logical viewport itself (only true at DPR 1).
+    let expected_width = (f64::from(viewport.width) * viewport.dpr).round() as u32;
+    let expected_height = (f64::from(viewport.height) * viewport.dpr).round() as u32;
+    if image.width() != expected_width || image.height() != expected_height {
         problems.push(format!(
-            "screenshot was {}x{}, expected {}x{} (DPR 1 at the requested viewport)",
+            "screenshot was {}x{}, expected {}x{} ({}x{} logical viewport at {}x DPR)",
             image.width(),
             image.height(),
+            expected_width,
+            expected_height,
             viewport.width,
-            viewport.height
+            viewport.height,
+            viewport.dpr,
         ));
         return;
     }

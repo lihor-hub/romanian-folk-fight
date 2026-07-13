@@ -5,11 +5,19 @@
 //!
 //! ```text
 //! target/xtask-artifacts/web-smoke/<scenario>/<checkpoint>/
-//!   screenshot.png   -- the checkpoint's captured screenshot (PNG, DPR 1)
-//!   console.log      -- every browser console message observed
-//!   network.log      -- every request/response observed: status + URL
+//!   screenshot.png    -- the checkpoint's captured screenshot (PNG, at the
+//!                        checkpoint's device pixel ratio -- see `browser`'s
+//!                        module docs; `cold-menu` is always DPR 1,
+//!                        `gold-journey` (#198) is 1, 2, or 3)
+//!   console.log       -- every browser console message observed
+//!   network.log       -- every request/response observed: status + URL
 //!   viewport.log      -- requested vs. measured viewport/document scroll extents
 //!   server.log        -- the ephemeral static server's request log for the run
+//!   baseline-diff/    -- only present when the screenshot differs from its
+//!                        accepted baseline (#198): actual.png (this
+//!                        checkpoint's capture), expected.png (the accepted
+//!                        baseline), diff.png (a magenta-highlighted pixel
+//!                        diff) -- see `baseline::write_diff_triplet`
 //! ```
 //!
 //! Nothing here is cleaned up automatically (matching `process::artifacts_dir`'s

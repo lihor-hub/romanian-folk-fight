@@ -51,15 +51,46 @@
 //! unconditionally (pass or fail) so a failure's full diagnostics are always
 //! on disk, with every path printed.
 //!
+//! ## The viewport/DPR matrix and `--all` (#198)
+//!
+//! `gold-journey`'s five screens each run at 1280x800 and 390x844, at
+//! device pixel ratios 1, 2, and 3 -- 30 checkpoints, driven by DPR-per-tab
+//! CDP emulation (see `browser::launch`'s doc comment) rather than a new
+//! scenario or a second scenario runner. `cargo xtask web-smoke --all` runs
+//! every [`SCENARIOS`] entry (`cold-menu`, `gold-journey`,
+//! `accessibility-settings-reload`, `reduced-motion-fight`,
+//! `fight-palette-desktop`) in one invocation via [`run_all`], stopping at
+//! the first failure like every other multi-step `xtask` command.
+//!
+//! ## Visual-diff review gating (#198)
+//!
+//! `baseline`'s original policy is unchanged by default: a screenshot that
+//! differs from its accepted baseline is reported but does not fail the
+//! run. `--update-baselines` is still the only thing that writes a
+//! baseline, and only for the scenario(s) actually run. `--strict-visual`
+//! (or `XTASK_WEB_SMOKE_STRICT_VISUAL=1`) is a new, opt-in flag that turns
+//! that same diff into an explicit checkpoint failure -- see
+//! `commands::web_smoke_cmd` for where it's parsed and `baseline`'s module
+//! docs for the full rationale. Whenever a diff exists (whether or not
+//! `--strict-visual` is set), an `actual`/`expected`/`diff` PNG triplet is
+//! written into that checkpoint's artifact directory
+//! (`baseline::write_diff_triplet`) so CI can upload a focused, reviewable
+//! bundle instead of requiring a manual diff against the committed
+//! baseline. Baseline-free scenarios (`accessibility-settings-reload`,
+//! `reduced-motion-fight` -- see their module docs) are unaffected by the
+//! flag: they gate on their own exact assertions on every run.
+//!
 //! ## Adding a later scenario
 //!
-//! A later scenario (e.g. a character-creation or in-fight smoke) adds its
-//! own module here (mirroring `cold_menu.rs`: a `pub fn run(update_baselines:
-//! bool) -> Result<(), SmokeError>`, its own `CheckpointSpec`s, its own
-//! assertions) and one match arm in [`run_scenario`] below. Nothing else
-//! changes: not the CLI surface (`--scenario <name>` already accepts any
-//! name), not `commands::web_smoke_cmd`, not the dispatcher registration in
-//! `commands::mod.rs`, and not the shared `browser`/`server`/`artifacts`/
+//! A later scenario adds its own module here (mirroring `cold_menu.rs`: a
+//! `pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(),
+//! SmokeError>` -- scenarios without screenshot baselines may ignore both
+//! flags, like `accessibility_settings_reload` does -- its own
+//! `CheckpointSpec`s, its own assertions), one match arm in [`run_scenario`]
+//! below, and one entry in [`SCENARIOS`] (so `--all` picks it up). Nothing
+//! else changes: not the CLI surface (`--scenario <name>` already accepts
+//! any name), not `commands::web_smoke_cmd`, not the dispatcher registration
+//! in `commands::mod.rs`, and not the shared `browser`/`server`/`artifacts`/
 //! `baseline` building blocks this module already provides.
 
 mod accessibility_settings_reload;
@@ -80,26 +111,65 @@ use std::process::Command;
 
 pub use error::SmokeError;
 
+/// Every registered scenario, in the order `--all` (#198) runs them. A later
+/// scenario module registers here (and in [`run_scenario`]'s match arm) --
+/// nothing else about `--all`'s dispatch changes, per the extension pattern
+/// this module's docs describe.
+pub const SCENARIOS: &[&str] = &[
+    "cold-menu",
+    "gold-journey",
+    "accessibility-settings-reload",
+    "reduced-motion-fight",
+    "fight-palette-desktop",
+    "fight-palette-phone",
+    "high-contrast",
+];
+
 /// Dispatches `--scenario <name>` to the matching scenario module. Known
-/// scenarios: `cold-menu` (#168), `gold-journey` (#187),
+/// scenarios: `cold-menu` (#168), `gold-journey` (#187/#198),
 /// `accessibility-settings-reload` (#191), `reduced-motion-fight` (#200),
 /// `fight-palette-desktop` (#189), `fight-palette-phone` (#199), and
-/// `high-contrast` (#214) -- each one the exact extension pattern the module
-/// docs above describe: a new module plus one match arm here, nothing else
-/// touched upstream.
-pub fn run_scenario(scenario: &str, update_baselines: bool) -> Result<(), SmokeError> {
+/// `high-contrast` (#214) -- each one the exact extension pattern the
+/// module docs above describe: a new module plus one match arm here,
+/// nothing else touched upstream. `strict_visual` (#198) is forwarded to
+/// the scenarios with screenshot baselines so a baseline diff can
+/// optionally fail the run instead of the default non-fatal report -- see
+/// `baseline`'s module docs; the baseline-free scenarios have nothing for
+/// it to gate.
+pub fn run_scenario(
+    scenario: &str,
+    update_baselines: bool,
+    strict_visual: bool,
+) -> Result<(), SmokeError> {
     match scenario {
-        "cold-menu" => cold_menu::run(update_baselines),
-        "gold-journey" => gold_journey::run(update_baselines),
+        "cold-menu" => cold_menu::run(update_baselines, strict_visual),
+        "gold-journey" => gold_journey::run(update_baselines, strict_visual),
         "accessibility-settings-reload" => accessibility_settings_reload::run(update_baselines),
         "reduced-motion-fight" => reduced_motion_fight::run(update_baselines),
-        "fight-palette-desktop" => fight_palette_desktop::run(update_baselines),
-        "fight-palette-phone" => fight_palette_phone::run(update_baselines),
-        "high-contrast" => high_contrast::run(update_baselines),
+        "fight-palette-desktop" => fight_palette_desktop::run(update_baselines, strict_visual),
+        "fight-palette-phone" => fight_palette_phone::run(update_baselines, strict_visual),
+        "high-contrast" => high_contrast::run(update_baselines, strict_visual),
         other => Err(SmokeError::usage(format!(
-            "unknown --scenario `{other}` (known scenarios: cold-menu, gold-journey, accessibility-settings-reload, reduced-motion-fight, fight-palette-desktop, fight-palette-phone, high-contrast)"
+            "unknown --scenario `{other}` (known scenarios: {})",
+            SCENARIOS.join(", ")
         ))),
     }
+}
+
+/// `cargo xtask web-smoke --all` (#198): runs every [`SCENARIOS`] entry in
+/// order, stopping at the first failure -- the same "stop at first failure"
+/// convention every other multi-step `xtask` command uses (see
+/// `xtask/README.md`'s "Process/result conventions"). `cold-menu` (2
+/// checkpoints) plus `gold-journey`'s full DPR matrix (30 checkpoints, see
+/// that module's docs) plus `accessibility-settings-reload`'s,
+/// `reduced-motion-fight`'s, and `fight-palette-desktop`'s checkpoints; a
+/// later registered scenario adds its own on top without this function
+/// changing.
+pub fn run_all(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError> {
+    for scenario in SCENARIOS {
+        run_scenario(scenario, update_baselines, strict_visual)?;
+    }
+    Ok(())
 }
 
 /// The workspace root (`xtask/`'s parent), used by every scenario to locate
