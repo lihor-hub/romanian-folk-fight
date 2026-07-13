@@ -11,6 +11,9 @@ use bevy::ui::widget::NodeImageMode;
 
 use crate::core::UiFont;
 
+pub mod tokens;
+pub use tokens::{Palette, sync_active_palette};
+
 // --- Palette (docs/art-direction.md: Romanian folk textiles) ---
 
 /// Deep red — primary accent, blood-red wool.
@@ -319,7 +322,15 @@ pub struct ThemePlugin;
 impl Plugin for ThemePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PanelTexture>()
-            .add_systems(PreStartup, load_panel_texture);
+            .add_systems(PreStartup, load_panel_texture)
+            // #214: the active high-contrast palette. Idempotent with
+            // SettingsPlugin's registration (the same defensive pattern
+            // arena::fx's FxPlugin already uses for AccessibilityPreferences):
+            // keeps Palette usable in apps/tests built without SettingsPlugin,
+            // defaulting to the normal palette.
+            .init_resource::<crate::settings::AccessibilityPreferences>()
+            .init_resource::<Palette>()
+            .add_systems(Update, sync_active_palette);
     }
 }
 
@@ -342,39 +353,9 @@ mod tests {
         assert_ne!(style.text_disabled, style.text_normal);
     }
 
-    /// WCAG 2.1 relative luminance formula for a color component.
-    /// Used to compute contrast ratio between two colors.
-    fn relative_luminance(color: Color) -> f32 {
-        let [r, g, b, _] = color.to_linear().to_f32_array();
-        let r = if r <= 0.03928 {
-            r / 12.92
-        } else {
-            ((r + 0.055) / 1.055).powf(2.4)
-        };
-        let g = if g <= 0.03928 {
-            g / 12.92
-        } else {
-            ((g + 0.055) / 1.055).powf(2.4)
-        };
-        let b = if b <= 0.03928 {
-            b / 12.92
-        } else {
-            ((b + 0.055) / 1.055).powf(2.4)
-        };
-        0.2126 * r + 0.7152 * g + 0.0722 * b
-    }
-
-    /// Compute the contrast ratio between two colors using WCAG 2.1 formula.
-    fn contrast_ratio(lighter: Color, darker: Color) -> f32 {
-        let l_lighter = relative_luminance(lighter);
-        let l_darker = relative_luminance(darker);
-        let (l1, l2) = if l_lighter > l_darker {
-            (l_lighter, l_darker)
-        } else {
-            (l_darker, l_lighter)
-        };
-        (l1 + 0.05) / (l2 + 0.05)
-    }
+    // WCAG 2.1 luminance/contrast math lives in `tokens::contrast_ratio`
+    // (#214); reused here rather than duplicated.
+    use super::tokens::contrast_ratio;
 
     #[test]
     fn button_disabled_is_warm() {
