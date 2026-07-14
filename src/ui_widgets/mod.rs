@@ -5,6 +5,7 @@
 //! screens.
 
 pub mod attribute_row;
+pub mod focus;
 
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;

@@ -385,6 +385,25 @@ impl Checkpoint {
         Ok(())
     }
 
+    /// Presses (and releases) one keyboard key via a real CDP
+    /// `Input.dispatchKeyEvent` pair -- not a JS-synthesized `KeyboardEvent`
+    /// -- so it exercises the same input path a real keypress does, all the
+    /// way through the browser's own keyboard pipeline into the game's wasm
+    /// winit backend. Used by the `fight-palette-accessible` scenario (#213)
+    /// to drive keyboard focus navigation/activation exactly the way a real
+    /// player's keyboard would, rather than seeding `Interaction`/resource
+    /// state through the review seam the way `pressButton`/
+    /// `pressActionCategory` do for pointer input. `key` is a
+    /// puppeteer-style key name (`"Tab"`, `"Enter"`, `" "` for Space,
+    /// `"ArrowRight"`, ...); see [`headless_chrome::Tab::press_key`]'s docs
+    /// for the full table.
+    pub fn press_key(&self, key: &str) -> Result<(), String> {
+        self.tab
+            .press_key(key)
+            .map_err(|e| format!("pressing key {key:?} failed: {e}"))?;
+        Ok(())
+    }
+
     /// Awaits one real rendered frame (`requestAnimationFrame`, resolved as
     /// a promise `evaluate` blocks on) -- the readiness loop's unit of
     /// waiting, in place of a wall-clock sleep: see `cold_menu`'s module

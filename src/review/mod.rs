@@ -86,6 +86,7 @@
 //! dependency is added for the `review` feature at all.
 #![cfg(feature = "review")]
 
+use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -93,7 +94,9 @@ use rand_chacha::ChaCha8Rng;
 use crate::arena::fx::ParallaxLayer;
 use crate::arena::{ENEMY_ANCHOR, PLAYER_ANCHOR};
 use crate::character::{EnemyFighter, PlayerFighter, Stamina};
-use crate::combat::action_palette::{ActionButton, CategoryButton, PhonePaletteState};
+use crate::combat::action_palette::{
+    ActionButton, ActionCostOrReason, CategoryButton, PhonePaletteState,
+};
 use crate::combat::actions::{self, ActionCategory};
 use crate::combat::engine::QUICK_STRIKE_COST;
 use crate::combat::systems::{CombatPresentation, PlayerActionEvent};
@@ -217,6 +220,10 @@ impl Plugin for ReviewPlugin {
             // ThemePlugin/SettingsPlugin's own registrations.
             .init_resource::<Palette>()
             .init_resource::<AccessibilityPreferences>()
+            // #213: publish_palette_state's focus facts read this; idempotent
+            // with `ui_widgets::focus::FocusNavigationPlugin`'s own
+            // registration (added by `CombatPlugin`).
+            .init_resource::<InputFocus>()
             .add_message::<PlayerActionEvent>()
             .add_systems(
                 Update,
@@ -340,6 +347,43 @@ struct PaletteSnapshot {
     fits: bool,
     /// Phone category-disclosure facts (#199), or `None` on desktop.
     phone: Option<PhonePaletteSnapshot>,
+    /// Descriptor-driven keyboard/gamepad focus facts (#213), or `None` when
+    /// nothing currently has focus (e.g. before the player has pressed Tab).
+    focus: Option<FocusSnapshot>,
+}
+
+/// Everything the `fight-palette-accessible` scenario (#213) needs to assert
+/// keyboard/gamepad focus beyond what a headless test can prove: which
+/// control [`bevy::input_focus::InputFocus`] actually names after a *real*
+/// CDP-dispatched key event lands the game's real winit keyboard pipeline,
+/// whether that control's disabled reason (if any) is a real rendered
+/// sentence, and whether the visible focus marker
+/// ([`crate::ui_widgets::focus`]) is actually showing. Published as part of
+/// [`PaletteSnapshot`] every frame the fight HUD's action bar is up, exactly
+/// like [`PhonePaletteSnapshot`] is.
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+struct FocusSnapshot {
+    /// The stable id of the currently focused control: a
+    /// [`crate::combat::actions::ActionId`] for an action button, or
+    /// [`crate::combat::actions::category_id`]'s id for a phone category
+    /// button.
+    focused_id: String,
+    /// Whether the focused control is a phone category button (`false` for
+    /// an action button -- categories and actions never share an id
+    /// namespace, but this disambiguates without the scenario needing to
+    /// know every category id by heart).
+    focused_is_category: bool,
+    /// Whether the focused action button is currently disabled (always
+    /// `false` for a category button, which is never disabled).
+    focused_is_disabled: bool,
+    /// The action button's shown cost/disabled-reason text (the same
+    /// [`ActionCostOrReason`] slot the palette always renders) -- `None` for
+    /// a category button.
+    focused_reason_text: Option<String>,
+    /// Whether the focused control currently renders the visible gold focus
+    /// marker (a non-transparent `Outline`) -- read from the live component,
+    /// not a screenshot pixel probe.
+    focus_marker_visible: bool,
 }
 
 /// One currently-visible interactive control's on-screen box, in logical
@@ -406,20 +450,76 @@ fn logical_node_rect(transform: &UiGlobalTransform, node: &ComputedNode) -> Rect
     Rect::from_center_size(transform.translation * scale, node.size() * scale)
 }
 
+/// The data [`focus_snapshot`] needs to describe whichever
+/// [`bevy::input_focus::InputFocus`]-named entity is an action button:
+/// its descriptor id, whether it is disabled, its child nodes (to find the
+/// reason text among them), and its current `Outline` (if any).
+type FocusActionButton<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static ActionButton,
+        Has<DisabledButton>,
+        &'static Children,
+        Option<&'static Outline>,
+    ),
+>;
+
+/// Builds [`FocusSnapshot`] from whichever entity [`InputFocus`] currently
+/// names, or `None` if nothing does. Checked against the action-button query
+/// first, then the category-button query -- the two are mutually exclusive
+/// (`ActionButton`/`CategoryButton` never coexist on one entity), so at most
+/// one ever matches.
+fn focus_snapshot(
+    input_focus: &InputFocus,
+    action_buttons: &FocusActionButton,
+    category_buttons: &Query<(Entity, &CategoryButton, Option<&Outline>)>,
+    reason_texts: &Query<&Text, With<ActionCostOrReason>>,
+) -> Option<FocusSnapshot> {
+    let focused = input_focus.get()?;
+    if let Ok((_, button, disabled, children, outline)) = action_buttons.get(focused) {
+        let reason_text = children
+            .iter()
+            .find_map(|child| reason_texts.get(child).ok())
+            .map(|text| text.0.clone());
+        return Some(FocusSnapshot {
+            focused_id: button.id.to_string(),
+            focused_is_category: false,
+            focused_is_disabled: disabled,
+            focused_reason_text: reason_text,
+            focus_marker_visible: outline.is_some_and(|outline| outline.color != Color::NONE),
+        });
+    }
+    let (_, button, outline) = category_buttons.get(focused).ok()?;
+    Some(FocusSnapshot {
+        focused_id: actions::category_id(button.category).to_string(),
+        focused_is_category: true,
+        focused_is_disabled: false,
+        focused_reason_text: None,
+        focus_marker_visible: outline.is_some_and(|outline| outline.color != Color::NONE),
+    })
+}
+
 /// Publishes a [`PaletteSnapshot`] every frame at least one action or
 /// category button exists (clears the key otherwise, e.g. outside the fight
 /// screen, so a scenario can't mistake a stale snapshot from a previous
 /// fight for the current one).
+#[allow(clippy::too_many_arguments)]
 fn publish_palette_state(
     letterbox: Option<Res<LetterboxRect>>,
     viewport: Res<ViewportInfo>,
     phone_state: Option<Res<PhonePaletteState>>,
+    input_focus: Res<InputFocus>,
     buttons: Query<(&ActionButton, &UiGlobalTransform, &ComputedNode)>,
     categories: Query<(&UiGlobalTransform, &ComputedNode), With<CategoryButton>>,
     status_panels: Query<
         (&UiGlobalTransform, &ComputedNode),
         With<crate::combat::hud::FighterPanelRoot>,
     >,
+    focus_action_buttons: FocusActionButton,
+    focus_category_buttons: Query<(Entity, &CategoryButton, Option<&Outline>)>,
+    reason_texts: Query<&Text, With<ActionCostOrReason>>,
 ) {
     let Some(letterbox) = letterbox else {
         clear_palette();
@@ -492,10 +592,18 @@ fn publish_palette_state(
         }
     });
 
+    let focus = focus_snapshot(
+        &input_focus,
+        &focus_action_buttons,
+        &focus_category_buttons,
+        &reason_texts,
+    );
+
     let snapshot = PaletteSnapshot {
         button_count,
         fits,
         phone,
+        focus,
     };
     match serde_json::to_string(&snapshot) {
         Ok(json) => publish_palette(&json),

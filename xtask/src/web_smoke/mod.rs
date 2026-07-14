@@ -99,6 +99,7 @@ pub mod baseline;
 pub mod browser;
 mod cold_menu;
 pub mod error;
+mod fight_palette_accessible;
 mod fight_palette_desktop;
 mod fight_palette_phone;
 mod gold_journey;
@@ -123,19 +124,20 @@ pub const SCENARIOS: &[&str] = &[
     "fight-palette-desktop",
     "fight-palette-phone",
     "high-contrast",
+    "fight-palette-accessible",
 ];
 
 /// Dispatches `--scenario <name>` to the matching scenario module. Known
 /// scenarios: `cold-menu` (#168), `gold-journey` (#187/#198),
 /// `accessibility-settings-reload` (#191), `reduced-motion-fight` (#200),
-/// `fight-palette-desktop` (#189), `fight-palette-phone` (#199), and
-/// `high-contrast` (#214) -- each one the exact extension pattern the
-/// module docs above describe: a new module plus one match arm here,
-/// nothing else touched upstream. `strict_visual` (#198) is forwarded to
-/// the scenarios with screenshot baselines so a baseline diff can
-/// optionally fail the run instead of the default non-fatal report -- see
-/// `baseline`'s module docs; the baseline-free scenarios have nothing for
-/// it to gate.
+/// `fight-palette-desktop` (#189), `fight-palette-phone` (#199),
+/// `high-contrast` (#214), and `fight-palette-accessible` (#213) -- each one
+/// the exact extension pattern the module docs above describe: a new module
+/// plus one match arm here, nothing else touched upstream. `strict_visual`
+/// (#198) is forwarded to the scenarios with screenshot baselines so a
+/// baseline diff can optionally fail the run instead of the default
+/// non-fatal report -- see `baseline`'s module docs; the baseline-free
+/// scenarios have nothing for it to gate.
 pub fn run_scenario(
     scenario: &str,
     update_baselines: bool,
@@ -149,6 +151,9 @@ pub fn run_scenario(
         "fight-palette-desktop" => fight_palette_desktop::run(update_baselines, strict_visual),
         "fight-palette-phone" => fight_palette_phone::run(update_baselines, strict_visual),
         "high-contrast" => high_contrast::run(update_baselines, strict_visual),
+        "fight-palette-accessible" => {
+            fight_palette_accessible::run(update_baselines, strict_visual)
+        }
         other => Err(SmokeError::usage(format!(
             "unknown --scenario `{other}` (known scenarios: {})",
             SCENARIOS.join(", ")

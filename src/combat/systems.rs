@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -12,6 +13,7 @@ use rand_chacha::ChaCha8Rng;
 use crate::character::{Attributes, EnemyFighter, Health, PlayerFighter, Stamina};
 use crate::core::{GameState, despawn_screen};
 use crate::items::Equipment;
+use crate::ui_widgets::focus::{FocusNavigationPlugin, FocusNavigationSet};
 
 use super::action_palette;
 use super::actions::ExtraDescriptors;
@@ -122,6 +124,14 @@ pub struct CombatPlugin;
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(pause::PausePlugin)
+            // #213: shared keyboard/gamepad focus navigation — see
+            // `crate::ui_widgets::focus`'s module docs. `handle_action_buttons`/
+            // `handle_category_buttons` below are ordered `.after(FocusNavigationSet)`
+            // so a same-frame Enter/gamepad-South press (which sets
+            // `Interaction::Pressed`, see `activate_focused_control`) is
+            // observed by them this same `Update` pass, not one frame later —
+            // the same reasoning `crate::flow::FlowIntentEmission` documents.
+            .add_plugins(FocusNavigationPlugin)
             .init_resource::<ExtraDescriptors>()
             .init_resource::<action_palette::PhonePaletteState>()
             .add_message::<PlayerActionEvent>()
@@ -144,7 +154,7 @@ impl Plugin for CombatPlugin {
                     // systems below keep running under the overlay.
                     (
                         tick_presentation,
-                        action_palette::handle_action_buttons,
+                        action_palette::handle_action_buttons.after(FocusNavigationSet),
                         resolve_player_action,
                         enemy_turn,
                     )
@@ -154,7 +164,7 @@ impl Plugin for CombatPlugin {
                     action_palette::update_button_backgrounds,
                     action_palette::update_action_buttons,
                     hud::apply_responsive_hud_layout,
-                    action_palette::handle_category_buttons,
+                    action_palette::handle_category_buttons.after(FocusNavigationSet),
                     action_palette::rebuild_action_bar_on_breakpoint_change,
                     action_palette::sync_phone_open_category,
                     action_palette::update_category_button_backgrounds,
@@ -203,8 +213,15 @@ type EnemyQuery<'w, 's> = FighterComponents<'w, 's, EnemyFighter, PlayerFighter>
 /// exists, so tests (or a future daily-seed mode) can provide their own.
 /// Also resets the phone palette's category disclosure (#199) so every
 /// fight starts with no category open, even if the player left the previous
-/// fight mid-disclosure.
-fn setup_combat(mut commands: Commands, time: Res<Time>, rng: Option<Res<CombatRng>>) {
+/// fight mid-disclosure, and (#213) clears keyboard/gamepad focus so a
+/// previous fight's button entity (now despawned) is never left named by
+/// [`InputFocus`].
+fn setup_combat(
+    mut commands: Commands,
+    time: Res<Time>,
+    rng: Option<Res<CombatRng>>,
+    mut input_focus: ResMut<InputFocus>,
+) {
     if rng.is_none() {
         commands.insert_resource(CombatRng(ChaCha8Rng::seed_from_u64(
             time.elapsed().as_micros() as u64,
@@ -212,6 +229,7 @@ fn setup_combat(mut commands: Commands, time: Res<Time>, rng: Option<Res<CombatR
     }
     commands.init_resource::<CombatPresentation>();
     commands.insert_resource(action_palette::PhonePaletteState::default());
+    input_focus.clear();
 }
 
 /// Drops the duel state so the next fight starts fresh.
