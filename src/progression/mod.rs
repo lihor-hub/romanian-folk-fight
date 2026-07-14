@@ -121,7 +121,7 @@ impl Plugin for ProgressionPlugin {
             .init_resource::<LifetimeEarnings>()
             .add_message::<SaveRequested>()
             .add_message::<VictoryEvent>()
-            .add_plugins(FocusNavigationPlugin)
+            .add_plugins((crate::ui_widgets::ScrollInputPlugin, FocusNavigationPlugin))
             .add_systems(OnEnter(GameState::Fight), clear_fight_outcome)
             .add_systems(
                 Update,
@@ -148,6 +148,9 @@ impl Plugin for ProgressionPlugin {
                     result_ui::update_allocation_labels
                         .run_if(resource_exists_and_changed::<LevelUpDraft>),
                     result_ui::resize_result_screens,
+                    // #216: the result screen root scrolls on short
+                    // viewports (see `result_ui::screen_root`).
+                    crate::ui_widgets::scroll_with_wheel_and_touch,
                 )
                     .chain()
                     .run_if(in_state(GameState::FightResult)),
@@ -171,6 +174,7 @@ impl Plugin for ProgressionPlugin {
                         .after(FocusNavigationSet),
                     result_ui::update_button_backgrounds,
                     result_ui::resize_result_screens,
+                    crate::ui_widgets::scroll_with_wheel_and_touch,
                 )
                     .run_if(in_state(GameState::GameOver)),
             )
@@ -189,6 +193,7 @@ impl Plugin for ProgressionPlugin {
                         .in_set(crate::flow::FlowIntentEmission)
                         .after(FocusNavigationSet),
                     result_ui::update_button_backgrounds,
+                    crate::ui_widgets::scroll_with_wheel_and_touch,
                 )
                     .run_if(in_state(GameState::Victory)),
             )

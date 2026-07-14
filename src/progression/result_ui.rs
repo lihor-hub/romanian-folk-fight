@@ -269,6 +269,11 @@ pub(super) fn spawn_game_over_screen(
 /// Centered column constrained to the letterboxed stage rect (#125) rather
 /// than the full window, so the result/game-over dialog never bleeds past
 /// the same 4:3 bounds the arena art and the combat HUD use.
+///
+/// Scrollable (#216, #31's `Scrollable` pattern): on a short viewport (200%
+/// desktop zoom halves the CSS-pixel height) the result panel is taller
+/// than the stage rect -- wheel/touch scroll it for pointer users, and the
+/// shared focus widget's scroll-into-view does for keyboard users.
 fn screen_root(letterbox: &LetterboxRect) -> impl Bundle {
     (
         Node {
@@ -281,9 +286,12 @@ fn screen_root(letterbox: &LetterboxRect) -> impl Bundle {
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             row_gap: Val::Px(16.0),
+            overflow: Overflow::scroll_y(),
             ..default()
         },
         BackgroundColor(NIGHT_BLACK),
+        ScrollPosition::default(),
+        crate::ui_widgets::Scrollable,
     )
 }
 

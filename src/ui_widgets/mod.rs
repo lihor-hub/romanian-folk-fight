@@ -129,6 +129,14 @@ pub fn labeled_button_bundle(
         Node {
             width,
             height,
+            // #216: a button is an interactive target with a hard 44px
+            // floor (`theme::MIN_TOUCH_TARGET`) -- never let a tight flex
+            // row squeeze it below its designed size (the row's text slots,
+            // which have no minimum, absorb the deficit instead). The
+            // `touch-targets` browser gate measures the *rendered* box, so
+            // a squeezed button fails the run even when its authored width
+            // was compliant.
+            flex_shrink: 0.0,
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             ..default()

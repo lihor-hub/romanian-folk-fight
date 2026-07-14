@@ -403,15 +403,22 @@ fn spawn_control_deck(
             })
             .with_children(|row| {
                 row.spawn((small_button("<", ui_font), CreationAction::PreviousName));
+                // #216: 232 -> 192 (and the name font 24 -> 20) so the row
+                // fits the deck's inner width without flex-squeezing the
+                // 48x48 arrows below the touch-target floor -- buttons no
+                // longer shrink at all (see
+                // `ui_widgets::labeled_button_bundle`), so the row must
+                // genuinely fit. "Ileana Cosânzeana"/"Ucenicul Solomonar"
+                // still render on one line at 20px.
                 row.spawn(Node {
-                    width: Val::Px(232.0),
+                    width: Val::Px(192.0),
                     justify_content: JustifyContent::Center,
                     ..default()
                 })
                 .with_children(|slot| {
                     slot.spawn((
                         Text::new(draft.name()),
-                        ui_font.text_font(24.0),
+                        ui_font.text_font(20.0),
                         TextColor(CREAM),
                         CreationLabel::Name,
                     ));
@@ -511,8 +518,16 @@ fn spawn_option_row(
             ..default()
         })
         .with_children(|row| {
+            // #216: label 108 -> 76 and value 156 -> 100 so the row -- with
+            // its two `MIN_TOUCH_TARGET` (44x44) stepper buttons, which no
+            // longer flex-shrink at all (see
+            // `ui_widgets::labeled_button_bundle`) -- genuinely fits the
+            // deck's inner width (356 - 2x24 border inset = 308):
+            // 76 + 44 + 100 + 44 + 3x8 gaps = 288. The longest label
+            // ("Accent") and value ("Echilibrat") both fit their slots at
+            // 18px.
             row.spawn(Node {
-                width: Val::Px(108.0),
+                width: Val::Px(76.0),
                 ..default()
             })
             .with_children(|slot| {
@@ -531,7 +546,7 @@ fn spawn_option_row(
                 previous,
             ));
             row.spawn(Node {
-                width: Val::Px(156.0),
+                width: Val::Px(100.0),
                 justify_content: JustifyContent::Center,
                 ..default()
             })

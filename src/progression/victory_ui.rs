@@ -141,9 +141,14 @@ fn screen_root() -> impl Bundle {
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             row_gap: Val::Px(12.0),
+            // #216: scrollable on short viewports (200% zoom), same
+            // pattern as `result_ui::screen_root` -- see its doc comment.
+            overflow: Overflow::scroll_y(),
             ..default()
         },
         BackgroundColor(NIGHT_BLACK),
+        ScrollPosition::default(),
+        crate::ui_widgets::Scrollable,
     )
 }
 

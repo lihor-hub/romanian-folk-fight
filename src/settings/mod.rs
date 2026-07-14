@@ -284,7 +284,7 @@ impl Plugin for SettingsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SettingsStore>()
             .init_resource::<AccessibilityPreferences>()
-            .add_plugins(FocusNavigationPlugin)
+            .add_plugins((crate::ui_widgets::ScrollInputPlugin, FocusNavigationPlugin))
             .add_systems(Startup, load_settings)
             .add_systems(
                 Update,
@@ -296,6 +296,12 @@ impl Plugin for SettingsPlugin {
                         .run_if(resource_exists::<SettingsOpen>),
                     update_button_backgrounds.run_if(resource_exists::<SettingsOpen>),
                     update_labels.run_if(resource_exists::<SettingsOpen>),
+                    // #216: the overlay's scrim scrolls on short viewports
+                    // (see `spawn_overlay`); this drives it for wheel/touch,
+                    // scoped to the overlay being open (each screen runs its
+                    // own instance for its own scrollables, per #31).
+                    crate::ui_widgets::scroll_with_wheel_and_touch
+                        .run_if(resource_exists::<SettingsOpen>),
                     despawn_overlay.run_if(resource_removed::<SettingsOpen>),
                     persist_on_change,
                 )
@@ -385,10 +391,18 @@ fn spawn_overlay(
                 height: Val::Percent(100.0),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
+                // #216: on a short viewport (200% desktop zoom halves the
+                // CSS-pixel height) the panel is taller than the window --
+                // the scrim scrolls it into reach (#31's `Scrollable`
+                // pattern), via wheel/touch for pointer users and via the
+                // shared focus widget's scroll-into-view for keyboard users.
+                overflow: Overflow::scroll_y(),
                 ..default()
             },
             BackgroundColor(SCRIM_HEAVY),
             GlobalZIndex(20),
+            ScrollPosition::default(),
+            crate::ui_widgets::Scrollable,
         ))
         .with_children(|parent| {
             parent
