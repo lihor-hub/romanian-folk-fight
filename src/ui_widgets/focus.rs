@@ -75,8 +75,7 @@
 //! [`render_focus_marker`] only ever *mutates* its color -- `Outline`'s own
 //! docs recommend against repeatedly inserting/removing the component.
 
-use bevy::input_focus::tab_navigation::{NavAction, TabNavigation};
-pub use bevy::input_focus::tab_navigation::{TabGroup, TabIndex};
+pub use bevy::input_focus::tab_navigation::{NavAction, TabGroup, TabIndex, TabNavigation};
 pub use bevy::input_focus::{FocusCause, InputFocus};
 use bevy::prelude::*;
 
@@ -113,6 +112,22 @@ pub struct FocusNavigationPlugin;
 
 impl Plugin for FocusNavigationPlugin {
     fn build(&self, app: &mut App) {
+        // #216: every screen plugin adds this plugin per this module's
+        // registration API step 1, and unlike the single-screen test apps in
+        // this file, the real app has every screen plugin loaded at once, so
+        // `build` runs once per screen. `App::add_boxed_plugin` only records
+        // a plugin's name *after* `build` returns (see its own source), so
+        // this check is `false` on the very first build (the systems below
+        // are added exactly once) and `true` on every later one (they are
+        // skipped) -- without this guard, `Update` would carry one full copy
+        // of this chain per screen plugin, and a single Tab press would
+        // walk focus forward once per copy in the same frame instead of
+        // once overall (see this module's
+        // `adding_the_plugin_from_two_screen_plugins_still_advances_focus_by_one_step_per_tab`
+        // test).
+        if app.is_plugin_added::<Self>() {
+            return;
+        }
         app.init_resource::<InputFocus>().add_systems(
             Update,
             (
@@ -175,9 +190,7 @@ fn navigate_keyboard_focus(
         None
     };
     let Some(action) = action else { return };
-    if let Ok(next) = nav.navigate(&focus, action) {
-        focus.set(next, FocusCause::Navigated);
-    }
+    navigate_with_fallback(&nav, &mut focus, action);
 }
 
 /// Gamepad tab order: any connected gamepad's D-pad drives the same linear
@@ -201,8 +214,34 @@ fn navigate_gamepad_focus(
         None
     };
     let Some(action) = action else { return };
-    if let Ok(entity) = nav.navigate(&focus, action) {
-        focus.set(entity, FocusCause::Navigated);
+    navigate_with_fallback(&nav, &mut focus, action);
+}
+
+/// Navigates `focus` by `action`, falling back to "as if nothing were
+/// focused" if the current focus can't be resolved (#216).
+///
+/// A real windowed app is observed to leave [`InputFocus`] pointing at the
+/// primary window entity (not `None`) before the player ever interacts with
+/// a focusable control (unclear which upstream system sets this -- the
+/// game's own code never does; discovered via the `keyboard-accessibility`
+/// browser scenario, which found the very first ArrowRight press in a real
+/// browser session did nothing at all). `TabNavigation::navigate` treats
+/// "focus is `Some(x)` but `x` has no `TabGroup` ancestor" as a hard error
+/// (`NoTabGroupForCurrentFocus`) rather than falling back the way "focus is
+/// `None`" already does -- so a first press silently changed nothing.
+/// Retrying with an explicitly-cleared `InputFocus` reproduces the "nothing
+/// focused yet" success path for this case too, without weakening any other
+/// behavior: a genuinely-invalid `Err` (no tab groups/focusable entities at
+/// all) still leaves `focus` untouched either way.
+fn navigate_with_fallback(nav: &TabNavigation, focus: &mut InputFocus, action: NavAction) {
+    if let Ok(next) = nav.navigate(focus, action) {
+        focus.set(next, FocusCause::Navigated);
+        return;
+    }
+    if focus.get().is_some()
+        && let Ok(next) = nav.navigate(&InputFocus::default(), action)
+    {
+        focus.set(next, FocusCause::Navigated);
     }
 }
 
@@ -249,6 +288,26 @@ fn render_focus_marker(
         if outline.color != wanted {
             outline.color = wanted;
         }
+    }
+}
+
+/// Sets [`InputFocus`] to the first focusable descendant of `group_root` (a
+/// [`TabGroup`] entity) -- the shared building block behind "opening a modal
+/// overlay (settings, pause) makes it the tab target immediately" (#216).
+///
+/// This is necessary, not cosmetic: [`TabNavigation::navigate`] only treats a
+/// [`TabGroup::modal`] specially once the *current* focus is already one of
+/// its descendants (see this module's doc comment on the registration API);
+/// while focus is still unset or sitting on the screen behind the scrim, Tab
+/// keeps cycling that screen's own non-modal group, and the modal overlay is
+/// never reached. Call this once, right after spawning the overlay (e.g. in
+/// the same system that spawns it), so the very next Tab press already
+/// starts confined to the overlay.
+///
+/// A no-op if `group_root` has no focusable descendant yet.
+pub fn autofocus_first_in_group(nav: &TabNavigation, focus: &mut InputFocus, group_root: Entity) {
+    if let Ok(entity) = nav.initialize(group_root, NavAction::First) {
+        focus.set(entity, FocusCause::Navigated);
     }
 }
 
@@ -309,6 +368,58 @@ mod tests {
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
         keys.release(key);
         keys.clear();
+    }
+
+    #[test]
+    fn adding_the_plugin_from_two_screen_plugins_still_advances_focus_by_one_step_per_tab() {
+        // #216: every screen plugin adds `FocusNavigationPlugin` per this
+        // module's registration API step 1, and more than one such plugin is
+        // present in the real app at once (unlike a single-screen test app).
+        // If re-adding the plugin actually re-registered its systems, one
+        // key press would advance focus by as many steps as there are
+        // registrations -- this guards against that regression.
+        let mut app = test_app();
+        app.add_plugins(FocusNavigationPlugin);
+        app.add_plugins(FocusNavigationPlugin);
+        let (_, children) = spawn_group(&mut app, 3);
+        app.world_mut()
+            .insert_resource(InputFocus::from_entity(children[0]));
+
+        press_and_settle(&mut app, KeyCode::Tab);
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            Some(children[1]),
+            "one Tab press must move focus by exactly one step, no matter how many \
+             screen plugins added FocusNavigationPlugin"
+        );
+    }
+
+    /// #216: a real windowed app is observed to leave [`InputFocus`] pointing
+    /// at the primary window entity (not `None`) before the player ever
+    /// interacts with a focusable control -- unlike this module's other
+    /// tests, which start from a bare `MinimalPlugins` world where
+    /// `InputFocus` really is `None` until something sets it. `TabNavigation
+    /// ::navigate` treats "focus is `Some(x)` but `x` has no `TabGroup`
+    /// ancestor" as a hard error (`NoTabGroupForCurrentFocus`) rather than
+    /// falling back to "as if nothing were focused" -- so the very first
+    /// ArrowRight/Tab press in a real browser session silently did nothing
+    /// at all (discovered via the `keyboard-accessibility` browser scenario,
+    /// #216). Reproduced headlessly here with a bare, unrelated entity
+    /// standing in for the window.
+    #[test]
+    fn tab_recovers_when_focus_starts_on_an_unrelated_entity_with_no_tab_group_ancestor() {
+        let mut app = test_app();
+        let (_, children) = spawn_group(&mut app, 3);
+        let window_stand_in = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .insert_resource(InputFocus::from_entity(window_stand_in));
+
+        press_and_settle(&mut app, KeyCode::Tab);
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            Some(children[0]),
+            "Tab must still land on the first focusable control, not silently do nothing"
+        );
     }
 
     #[test]
@@ -461,6 +572,73 @@ mod tests {
         assert_eq!(
             *app.world().get::<Interaction>(children[1]).unwrap(),
             Interaction::Pressed
+        );
+    }
+
+    /// Spawns a *modal* `TabGroup` root with `count` `Focusable`+`TabIndex(0)`
+    /// children, mirroring [`spawn_group`] but for the settings/pause overlay
+    /// shape (#216).
+    fn spawn_modal_group(app: &mut App, count: usize) -> (Entity, Vec<Entity>) {
+        let root = app.world_mut().spawn(TabGroup::modal()).id();
+        let mut children = Vec::new();
+        for _ in 0..count {
+            let child = app
+                .world_mut()
+                .spawn((Button, Focusable, TabIndex(0), ChildOf(root)))
+                .id();
+            children.push(child);
+        }
+        (root, children)
+    }
+
+    #[test]
+    fn autofocus_first_in_group_focuses_the_modal_overlays_first_control() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut app = test_app();
+        let (root, children) = spawn_modal_group(&mut app, 3);
+
+        app.world_mut()
+            .run_system_once(move |nav: TabNavigation, mut focus: ResMut<InputFocus>| {
+                autofocus_first_in_group(&nav, &mut focus, root);
+            })
+            .unwrap();
+
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            Some(children[0]),
+            "opening a modal overlay (settings, pause) must focus its first control \
+             immediately -- otherwise the first Tab press still targets whatever \
+             screen sits behind the scrim"
+        );
+    }
+
+    #[test]
+    fn a_modal_group_confines_tab_navigation_to_its_own_children_once_focus_is_inside() {
+        // A non-modal screen group coexists behind the modal overlay, the
+        // same shape as settings opened over the main menu: both `TabGroup`s
+        // are alive in the world at once (the menu is an overlay target, not
+        // despawned), but once focus is inside the modal, Tab must never
+        // reach the screen behind it.
+        let mut app = test_app();
+        let (_, screen_children) = spawn_group(&mut app, 2);
+        let (_, modal_children) = spawn_modal_group(&mut app, 2);
+        app.world_mut()
+            .insert_resource(InputFocus::from_entity(modal_children[0]));
+
+        press_and_settle(&mut app, KeyCode::Tab);
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            Some(modal_children[1]),
+            "Tab must move within the modal overlay"
+        );
+
+        press_and_settle(&mut app, KeyCode::Tab);
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            Some(modal_children[0]),
+            "Tab must wrap back inside the modal overlay, never reaching \
+             the screen's own group ({screen_children:?}) behind it"
         );
     }
 

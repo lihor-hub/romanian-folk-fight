@@ -12,6 +12,7 @@ use bevy::prelude::*;
 
 use crate::core::UiFont;
 use crate::theme::{BUTTON_NORMAL, CREAM};
+use focus::{Focusable, TabIndex};
 
 /// Registers the input types [`scroll_with_wheel_and_touch`] reads
 /// (`MouseWheel` messages, the `Touches` resource) so screens that use
@@ -102,6 +103,17 @@ pub fn button_bundle(
 
 /// The shared shape behind every button helper: the label text carries
 /// `text_marker` (`()` when the caller never touches the label again).
+///
+/// Every button built through this helper is [`Focusable`] with `TabIndex(0)`
+/// (#216): the caller only has to wrap the screen's focusable root in a
+/// [`focus::TabGroup`] (see that module's registration API) for the button to
+/// join keyboard/gamepad tab order automatically -- including a button the
+/// caller marks `crate::menu::DisabledButton` afterwards, which per that
+/// module's own contract must *stay* focusable so its disabled reason is
+/// still reachable, just inert on activation. This is why every current and
+/// future screen using [`button_bundle`], [`wide_button`],
+/// [`wide_button_labeled`], or [`small_button`] gets #216's rollout "for
+/// free" and never needs its own bespoke focus wiring.
 pub fn labeled_button_bundle(
     label: &str,
     width: Val,
@@ -112,6 +124,8 @@ pub fn labeled_button_bundle(
 ) -> impl Bundle {
     (
         Button,
+        Focusable,
+        TabIndex(0),
         Node {
             width,
             height,

@@ -23,6 +23,7 @@ use crate::core::{LetterboxRect, UiFont, ViewportInfo};
 use crate::progression::Level;
 use crate::roster::Boss;
 use crate::theme::{BUTTON_NORMAL, CREAM, MOBILE_LOG_LINES, Palette, PanelTexture, panel_bundle};
+use crate::ui_widgets::focus::{Focusable, TabGroup, TabIndex};
 // Only used by the desktop-strip fit check and its test (#120): the runtime
 // paths never need to reason about the border inset directly.
 #[cfg(test)]
@@ -252,10 +253,28 @@ pub(super) fn apply_letterbox_to_hud_root(
 
 /// The small, touch-friendly ⏸ button top-center of the HUD; clicking it
 /// opens the pause overlay (see [`super::pause`]).
+///
+/// Wrapped in its own `TabGroup::new(-1)` (#216) rather than carrying
+/// `Focusable`/`TabIndex` directly on the absolutely-positioned outer node:
+/// [`super::action_palette`]'s action bar is a *sibling* under [`HudScreen`]
+/// with its own `TabGroup::new(0)`, and `bevy_input_focus`'s tab-navigation
+/// gathers focusable entities by walking into every `TabGroup` it finds
+/// world-wide, not just root-level ones -- nesting this button's group
+/// *inside* `HudScreen` (rather than as a same-level sibling of the palette's
+/// group) would make the palette's own buttons gathered twice (once via the
+/// outer group's traversal, once via its own top-level entry), duplicating
+/// them in tab order. Keeping this a same-level sibling group, ordered `-1`
+/// (before the palette's `0`, matching its top-of-screen visual position),
+/// avoids that entirely: the wrapper carries the exact absolute-position
+/// `Node` the button used to have, sized to fill it, so the inner button's
+/// own rendering is unchanged.
 fn pause_button(ui_font: &UiFont) -> impl Bundle {
     (
-        Button,
-        super::pause::PauseButton,
+        // #216: one shared focus region for just this button — see
+        // `crate::ui_widgets::focus`'s registration API and this function's
+        // own doc comment for why it cannot simply join `HudScreen`'s tree
+        // under a single group with the action palette.
+        TabGroup::new(-1),
         Node {
             position_type: PositionType::Absolute,
             top: Val::Px(12.0),
@@ -264,16 +283,27 @@ fn pause_button(ui_font: &UiFont) -> impl Bundle {
             margin: UiRect::left(Val::Px(-24.0)),
             width: Val::Px(48.0),
             height: Val::Px(48.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
             ..default()
         },
-        BackgroundColor(BUTTON_NORMAL),
         children![(
-            // "||" instead of "⏸": U+23F8 has no glyph in the bundled font.
-            Text::new("||"),
-            ui_font.text_font(24.0),
-            TextColor(CREAM),
+            Button,
+            super::pause::PauseButton,
+            Focusable,
+            TabIndex(0),
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+            children![(
+                // "||" instead of "⏸": U+23F8 has no glyph in the bundled font.
+                Text::new("||"),
+                ui_font.text_font(24.0),
+                TextColor(CREAM),
+            )],
         )],
     )
 }

@@ -23,6 +23,9 @@ use crate::theme::{
     ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD,
     MIN_TOUCH_TARGET, PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
 };
+use crate::ui_widgets::focus::{
+    FocusNavigationPlugin, FocusNavigationSet, Focusable, TabGroup, TabIndex,
+};
 use crate::ui_widgets::wide_button;
 
 const SHOP_ROOT_PADDING: f32 = 12.0;
@@ -225,14 +228,16 @@ impl Plugin for ShopPlugin {
             .init_resource::<OwnedItems>()
             .init_resource::<PlayerEquipment>()
             .init_resource::<ShopIcons>()
-            .add_plugins(crate::ui_widgets::ScrollInputPlugin)
+            .add_plugins((crate::ui_widgets::ScrollInputPlugin, FocusNavigationPlugin))
             .add_message::<SaveRequested>()
             .add_systems(PreStartup, load_shop_icons)
             .add_systems(OnEnter(GameState::Shop), spawn_shop_screen)
             .add_systems(
                 Update,
                 (
-                    handle_shop_actions.in_set(crate::flow::FlowIntentEmission),
+                    handle_shop_actions
+                        .in_set(crate::flow::FlowIntentEmission)
+                        .after(FocusNavigationSet),
                     update_button_backgrounds,
                     refresh_shop_ui.run_if(
                         resource_changed::<Wallet>
@@ -403,6 +408,10 @@ fn spawn_shop_screen(
             BackgroundColor(ARENA_BROWN),
             ScrollPosition::default(),
             crate::ui_widgets::Scrollable,
+            // #216: one shared focus region for the whole shop screen
+            // (catalog buy buttons and the back button alike) — see
+            // `crate::ui_widgets::focus`'s registration API.
+            TabGroup::new(0),
         ))
         .with_children(|parent| {
             // Header row: title on the left, wallet balance top-right.
@@ -766,6 +775,8 @@ fn spawn_item_row(
             ));
             let mut button = row.spawn((
                 Button,
+                Focusable,
+                TabIndex(0),
                 Node {
                     width: Val::Px(92.0),
                     // ≥44px touch target (#31), up from the original 26px
@@ -1439,6 +1450,71 @@ mod tests {
         assert!(
             is_disabled(&mut app, ItemId::CaciulaDeOaie),
             "the equipped item's button is a disabled marker"
+        );
+    }
+
+    /// #216: Enter on the focused buy button must debit and equip exactly
+    /// like a click -- see `buying_debits_equips_and_updates_the_screen` for
+    /// the click version.
+    #[test]
+    fn enter_on_a_focused_buy_button_debits_and_equips_like_a_click() {
+        let mut app = test_app();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        set_state(&mut app, GameState::Shop);
+
+        let button = find_button(&mut app, ShopAction::Item(ItemId::CaciulaDeOaie));
+        app.world_mut()
+            .insert_resource(crate::ui_widgets::focus::InputFocus::from_entity(button));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+        app.update();
+
+        assert_eq!(wallet(&app), 40, "debited exactly the price");
+        assert!(owned(&app).0.contains(&ItemId::CaciulaDeOaie));
+    }
+
+    /// #216: every focusable catalog buy button and the **Înapoi în arenă**
+    /// button share one `TabGroup`; tabbing all the way around wraps back
+    /// to the first.
+    #[test]
+    fn tab_order_covers_every_buy_button_and_the_back_button() {
+        let mut app = test_app();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        set_state(&mut app, GameState::Shop);
+
+        let total_controls = app
+            .world_mut()
+            .query_filtered::<(), With<crate::ui_widgets::focus::Focusable>>()
+            .iter(app.world())
+            .count();
+        assert!(
+            total_controls > CATALOG.len(),
+            "at least every catalog item plus Back"
+        );
+
+        let tab = |app: &mut App| -> Option<Entity> {
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::Tab);
+            app.update();
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::Tab);
+            keys.clear();
+            app.world()
+                .resource::<crate::ui_widgets::focus::InputFocus>()
+                .get()
+        };
+
+        let first = tab(&mut app).expect("first control focused");
+        for _ in 1..total_controls {
+            tab(&mut app);
+        }
+        assert_eq!(
+            tab(&mut app),
+            Some(first),
+            "tab order wraps back to the first control after visiting every one"
         );
     }
 

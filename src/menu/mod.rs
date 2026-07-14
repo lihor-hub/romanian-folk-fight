@@ -11,6 +11,9 @@ use crate::theme::{
     ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD,
     PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, motif_band, motif_emblem, panel_bundle,
 };
+use crate::ui_widgets::focus::{
+    FocusNavigationPlugin, FocusNavigationSet, Focusable, TabGroup, TabIndex,
+};
 
 const MENU_ROOT_PADDING: f32 = 18.0;
 const MENU_TITLE_STAGE_WIDTH: f32 = 382.0;
@@ -75,12 +78,14 @@ pub struct MenuPlugin;
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<FlowIntent>()
-            .add_plugins(crate::ui_widgets::ScrollInputPlugin)
+            .add_plugins((crate::ui_widgets::ScrollInputPlugin, FocusNavigationPlugin))
             .add_systems(OnEnter(GameState::MainMenu), spawn_main_menu)
             .add_systems(
                 Update,
                 (
-                    handle_menu_actions.in_set(crate::flow::FlowIntentEmission),
+                    handle_menu_actions
+                        .in_set(crate::flow::FlowIntentEmission)
+                        .after(FocusNavigationSet),
                     update_button_backgrounds,
                     crate::ui_widgets::scroll_with_wheel_and_touch,
                 )
@@ -190,6 +195,10 @@ fn spawn_main_menu(
                     ),
                     BackgroundColor(PANEL_LINEN),
                     MainMenuLayoutRole::ButtonPanel,
+                    // #216: one shared focus region for the whole button
+                    // column — see `crate::ui_widgets::focus`'s
+                    // registration API.
+                    TabGroup::new(0),
                 ))
                 .with_children(|panel| {
                     panel.spawn((
@@ -255,9 +264,16 @@ fn title_emblem(panel_texture: &PanelTexture, size: f32) -> impl Bundle {
 }
 
 /// A menu button with a centered text label.
+///
+/// Always [`Focusable`] with `TabIndex(0)` (#216) — including the greyed-out
+/// **Continuă** marker: a control the caller separately marks
+/// [`DisabledButton`] must stay focusable so its disabled state is still
+/// reachable by keyboard, per `crate::ui_widgets::focus`'s registration API.
 fn menu_button(label: &str, text_color: Color, background: Color, ui_font: &UiFont) -> impl Bundle {
     (
         Button,
+        Focusable,
+        TabIndex(0),
         Node {
             width: Val::Px(260.0),
             height: Val::Px(56.0),
@@ -346,6 +362,7 @@ fn update_button_backgrounds(
 mod tests {
     use super::*;
     use crate::core::CorePlugin;
+    use crate::ui_widgets::focus::InputFocus;
     use bevy::state::app::StatesPlugin;
 
     /// Builds the app and settles it past `GameState::Loading` into
@@ -517,6 +534,83 @@ mod tests {
         assert_eq!(count::<MainMenuScreen>(&mut app), 0, "root despawned");
         assert_eq!(count::<Button>(&mut app), 0, "buttons despawned");
         assert_eq!(count::<Text>(&mut app), 0, "labels and title despawned");
+    }
+
+    /// #216: presses `Tab` and returns the newly-focused entity's `MenuAction`
+    /// (`None` for the disabled **Continuă** marker, which carries no
+    /// `MenuAction` at all).
+    fn tab_to_next_action(app: &mut App) -> Option<MenuAction> {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Tab);
+        app.update();
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::Tab);
+        keys.clear();
+        let focus = app.world().resource::<InputFocus>().get()?;
+        app.world().get::<MenuAction>(focus).copied()
+    }
+
+    /// #216: every reachable menu button joins one shared `TabGroup`, in the
+    /// same top-to-bottom order they are spawned — **Luptă nouă**, **Continuă**
+    /// (focusable even greyed-out, so its disabled state is reachable),
+    /// **Setări**, and (native builds only) **Ieși** — then wraps back to
+    /// the first.
+    #[test]
+    fn tab_order_reaches_every_menu_button_before_wrapping() {
+        let mut app = test_app();
+        app.update();
+        app.init_resource::<ButtonInput<KeyCode>>();
+
+        assert_eq!(tab_to_next_action(&mut app), Some(MenuAction::NewGame));
+        assert_eq!(
+            tab_to_next_action(&mut app),
+            None,
+            "the disabled Continuă marker carries no MenuAction, but must still be reachable"
+        );
+        assert_eq!(tab_to_next_action(&mut app), Some(MenuAction::Settings));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            assert_eq!(tab_to_next_action(&mut app), Some(MenuAction::Quit));
+        }
+        assert_eq!(
+            tab_to_next_action(&mut app),
+            Some(MenuAction::NewGame),
+            "tab order wraps back to the first button"
+        );
+    }
+
+    /// #216: Enter on the focused **Luptă nouă** button must drive the exact
+    /// same production transition a mouse click does (see
+    /// `menu_spawns_on_enter_and_despawns_fully_on_new_game` for the click
+    /// version) -- `FocusNavigationPlugin::activate_focused_control` writes
+    /// the same `Interaction::Pressed` a click produces, so no separate
+    /// keyboard-aware handler is needed.
+    #[test]
+    fn enter_on_the_focused_new_game_button_drives_the_same_transition_as_a_click() {
+        let mut app = test_app();
+        app.update();
+        app.init_resource::<ButtonInput<KeyCode>>();
+
+        let new_game = app
+            .world_mut()
+            .query_filtered::<Entity, With<MenuAction>>()
+            .iter(app.world())
+            .find(|&e| app.world().get::<MenuAction>(e) == Some(&MenuAction::NewGame))
+            .expect("New Game button exists");
+        app.world_mut()
+            .insert_resource(InputFocus::from_entity(new_game));
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update(); // activation writes Interaction::Pressed, handler queues the transition
+        app.update(); // transition applies, OnExit runs
+
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::CharacterCreation
+        );
     }
 
     #[test]

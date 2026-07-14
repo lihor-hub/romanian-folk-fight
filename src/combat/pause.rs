@@ -16,6 +16,10 @@ use crate::settings::SettingsOpen;
 use crate::theme::{
     BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, PanelTexture, SCRIM, panel_bundle,
 };
+use crate::ui_widgets::focus::{
+    FocusNavigationSet, Focusable, InputFocus, TabGroup, TabIndex, TabNavigation,
+    autofocus_first_in_group,
+};
 
 /// Whether the running fight is paused. Exists only inside
 /// `GameState::Fight`; leaving the fight drops it (and the overlay with it).
@@ -31,6 +35,11 @@ pub enum PauseState {
 /// fight.
 #[derive(Component)]
 pub(super) struct PauseOverlay;
+
+/// Marker for the pause panel nested inside [`PauseOverlay`] -- the actual
+/// `TabGroup::modal()` root #216's [`autofocus_pause_overlay`] targets.
+#[derive(Component)]
+struct PausePanel;
 
 /// The small ⏸ button top-center of the combat HUD.
 #[derive(Component)]
@@ -54,14 +63,19 @@ pub(super) struct PausePlugin;
 impl Plugin for PausePlugin {
     fn build(&self, app: &mut App) {
         app.add_sub_state::<PauseState>()
-            .add_systems(OnEnter(PauseState::Paused), spawn_overlay)
+            .add_systems(
+                OnEnter(PauseState::Paused),
+                (spawn_overlay, autofocus_pause_overlay).chain(),
+            )
             .add_systems(OnExit(PauseState::Paused), despawn_screen::<PauseOverlay>)
             .add_systems(
                 Update,
                 (
                     toggle_on_esc.run_if(not(resource_exists::<SettingsOpen>)),
                     handle_pause_button,
-                    handle_overlay_buttons.in_set(crate::flow::FlowIntentEmission),
+                    handle_overlay_buttons
+                        .in_set(crate::flow::FlowIntentEmission)
+                        .after(FocusNavigationSet),
                     update_button_backgrounds,
                     resize_pause_overlay,
                 )
@@ -187,6 +201,12 @@ fn spawn_overlay(
                     ..default()
                 },
             ),
+            PausePanel,
+            // #216: a *modal* group -- see `crate::settings::spawn_overlay`'s
+            // doc comment for why this and `autofocus_pause_overlay` both
+            // matter (a modal group only confines Tab once focus is already
+            // inside it).
+            TabGroup::modal(),
             children![
                 (
                     Text::new("Pauză"),
@@ -219,12 +239,29 @@ fn resize_pause_overlay(
     }
 }
 
+/// Focuses the pause overlay's first control the instant it spawns (#216):
+/// see [`autofocus_first_in_group`]'s doc comment for why a modal group
+/// needs this. Ordered right after `spawn_overlay` in the same
+/// `OnEnter(PauseState::Paused)` chain, which applies deferred `Commands`
+/// between the two, so the panel this queries for already exists.
+fn autofocus_pause_overlay(
+    nav: TabNavigation,
+    mut focus: ResMut<InputFocus>,
+    panels: Query<Entity, With<PausePanel>>,
+) {
+    for panel in &panels {
+        autofocus_first_in_group(&nav, &mut focus, panel);
+    }
+}
+
 /// One wide, enabled overlay button in the main-menu style.
 fn overlay_button(label: &str, action: PauseAction, ui_font: &UiFont) -> impl Bundle {
     button_parts(label, action, BUTTON_NORMAL, CREAM, ui_font)
 }
 
-/// The shared shape of an overlay button: wide, centered label.
+/// The shared shape of an overlay button: wide, centered label. Always
+/// [`Focusable`] with `TabIndex(0)` (#216) -- see
+/// `crate::ui_widgets::focus`'s registration API.
 fn button_parts(
     label: &str,
     action: PauseAction,
@@ -235,6 +272,8 @@ fn button_parts(
     (
         Button,
         action,
+        Focusable,
+        TabIndex(0),
         Node {
             width: Val::Px(260.0),
             height: Val::Px(56.0),
@@ -363,6 +402,72 @@ mod tests {
             .single(app.world())
             .expect("fighter exists");
         (health.current, stamina.current)
+    }
+
+    /// #216: opening the pause overlay must focus its first control
+    /// (**Continuă lupta**) immediately -- see `autofocus_pause_overlay`'s
+    /// doc comment.
+    #[test]
+    fn opening_the_pause_overlay_autofocuses_resume() {
+        let mut app = test_app();
+        press_esc(&mut app);
+        let resume = find_overlay_button(&mut app, "Continuă lupta");
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(resume));
+    }
+
+    /// #216: Tab cycles Resume -> Setări -> Abandonează and wraps back to
+    /// Resume; the modal group means it never leaks to the fight screen's
+    /// own HUD/palette underneath.
+    #[test]
+    fn tab_order_reaches_every_pause_button_and_wraps() {
+        let mut app = test_app();
+        press_esc(&mut app);
+
+        let resume = find_overlay_button(&mut app, "Continuă lupta");
+        let settings = find_overlay_button(&mut app, "Setări");
+        let abandon = find_overlay_button(&mut app, "Abandonează");
+
+        let tab = |app: &mut App| -> Option<Entity> {
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::Tab);
+            app.update();
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::Tab);
+            keys.clear();
+            app.world().resource::<InputFocus>().get()
+        };
+
+        assert_eq!(tab(&mut app), Some(settings));
+        assert_eq!(tab(&mut app), Some(abandon));
+        assert_eq!(
+            tab(&mut app),
+            Some(resume),
+            "tab order wraps back to Resume"
+        );
+    }
+
+    /// #216: Enter on the focused **Continuă lupta** button must unpause
+    /// exactly like a click.
+    #[test]
+    fn enter_on_the_focused_resume_button_unpauses() {
+        let mut app = test_app();
+        press_esc(&mut app);
+        assert_eq!(pause_state(&app), PauseState::Paused);
+
+        let resume = find_overlay_button(&mut app, "Continuă lupta");
+        app.world_mut()
+            .insert_resource(InputFocus::from_entity(resume));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::Enter);
+        keys.clear();
+        app.update();
+
+        assert_eq!(pause_state(&app), PauseState::Running);
     }
 
     #[test]

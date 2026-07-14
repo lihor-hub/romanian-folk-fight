@@ -2,6 +2,7 @@
 
 use bevy::camera::Viewport;
 use bevy::camera::visibility::RenderLayers;
+use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized};
 
@@ -340,9 +341,26 @@ fn letterbox_camera(
 
 /// Despawns every entity tagged with the screen marker `T`. Register it in
 /// `OnExit(...)` so a screen cleans up after itself.
-pub fn despawn_screen<T: Component>(mut commands: Commands, entities: Query<Entity, With<T>>) {
+/// Despawns every entity tagged `T` (a screen's root marker), then clears
+/// [`InputFocus`] (#216): every focusable entity is scoped to its own screen
+/// (or an overlay above it), so whatever `InputFocus` named is either one of
+/// the entities just despawned above or, at worst, about to be irrelevant
+/// once the screen it belonged to is gone. Clearing here — once, centrally —
+/// means a fresh screen always starts with focus unset (the existing #213
+/// pointer-first default) rather than carrying a stale, possibly-despawned
+/// `Entity` id into the next screen's `TabNavigation` queries. `Option` so
+/// headless tests that never added [`crate::ui_widgets::focus::FocusNavigationPlugin`]
+/// (and so never initialized this resource) keep working unchanged.
+pub fn despawn_screen<T: Component>(
+    mut commands: Commands,
+    entities: Query<Entity, With<T>>,
+    mut focus: Option<ResMut<InputFocus>>,
+) {
     for entity in &entities {
         commands.entity(entity).despawn();
+    }
+    if let Some(focus) = focus.as_mut() {
+        focus.clear();
     }
 }
 
@@ -714,5 +732,30 @@ mod tests {
         app.update();
         assert!(app.world().get_entity(tagged).is_err());
         assert!(app.world().get_entity(untagged).is_ok());
+    }
+
+    /// #216: a fresh screen must never inherit a stale, possibly-despawned
+    /// focused `Entity` from the screen it replaced.
+    #[test]
+    fn despawn_screen_clears_stale_input_focus() {
+        let mut app = App::new();
+        app.init_resource::<InputFocus>();
+        app.add_systems(Update, despawn_screen::<TestScreen>);
+        let tagged = app.world_mut().spawn(TestScreen).id();
+        app.world_mut()
+            .insert_resource(InputFocus::from_entity(tagged));
+        app.update();
+        assert_eq!(app.world().resource::<InputFocus>().get(), None);
+    }
+
+    /// A headless test app that never added
+    /// [`crate::ui_widgets::focus::FocusNavigationPlugin`] (and so never
+    /// initialized [`InputFocus`]) must not panic despawning a screen.
+    #[test]
+    fn despawn_screen_without_input_focus_resource_does_not_panic() {
+        let mut app = App::new();
+        app.add_systems(Update, despawn_screen::<TestScreen>);
+        app.world_mut().spawn(TestScreen);
+        app.update();
     }
 }

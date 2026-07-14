@@ -25,6 +25,7 @@ use crate::flow::FlowIntent;
 use crate::roster::LadderProgress;
 use crate::save::SaveRequested;
 use crate::shop::{OwnedItems, PlayerEquipment};
+use crate::ui_widgets::focus::{FocusNavigationPlugin, FocusNavigationSet};
 
 /// Galbeni a fresh run starts with, so the first shop visit isn't pointless.
 pub const STARTING_GALBENI: u32 = 50;
@@ -120,6 +121,7 @@ impl Plugin for ProgressionPlugin {
             .init_resource::<LifetimeEarnings>()
             .add_message::<SaveRequested>()
             .add_message::<VictoryEvent>()
+            .add_plugins(FocusNavigationPlugin)
             .add_systems(OnEnter(GameState::Fight), clear_fight_outcome)
             .add_systems(
                 Update,
@@ -138,8 +140,10 @@ impl Plugin for ProgressionPlugin {
             .add_systems(
                 Update,
                 (
-                    result_ui::handle_result_actions.in_set(crate::flow::FlowIntentEmission),
-                    result_ui::handle_allocation_actions,
+                    result_ui::handle_result_actions
+                        .in_set(crate::flow::FlowIntentEmission)
+                        .after(FocusNavigationSet),
+                    result_ui::handle_allocation_actions.after(FocusNavigationSet),
                     result_ui::update_button_backgrounds,
                     result_ui::update_allocation_labels
                         .run_if(resource_exists_and_changed::<LevelUpDraft>),
@@ -162,7 +166,9 @@ impl Plugin for ProgressionPlugin {
             .add_systems(
                 Update,
                 (
-                    result_ui::handle_game_over_actions.in_set(crate::flow::FlowIntentEmission),
+                    result_ui::handle_game_over_actions
+                        .in_set(crate::flow::FlowIntentEmission)
+                        .after(FocusNavigationSet),
                     result_ui::update_button_backgrounds,
                     result_ui::resize_result_screens,
                 )
@@ -179,7 +185,9 @@ impl Plugin for ProgressionPlugin {
             .add_systems(
                 Update,
                 (
-                    victory_ui::handle_victory_actions.in_set(crate::flow::FlowIntentEmission),
+                    victory_ui::handle_victory_actions
+                        .in_set(crate::flow::FlowIntentEmission)
+                        .after(FocusNavigationSet),
                     result_ui::update_button_backgrounds,
                 )
                     .run_if(in_state(GameState::Victory)),
