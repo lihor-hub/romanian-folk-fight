@@ -18,7 +18,9 @@ Use the Cargo commands:
 - Test: `cargo test`
 - Build/Check: `cargo check`
 
-In a fresh worktree, run `scripts/bootstrap-worktree.sh` to ensure paths and hooks are configured.
+In a fresh worktree, run `scripts/bootstrap-worktree.sh` to ensure paths and hooks are configured. Bootstrap also wires the `cargo xtask` alias — until it has run, use `cargo run --package xtask -- <args>`.
+
+While iterating on pure game-rule changes, `cargo xtask test logic` is the fast loop (skips the ~250 tests that boot a headless Bevy App). See `xtask/README.md` for the full command list and `AGENTS.md` for gate costs.
 
 ## 1. While writing code — clear the gates by construction
 
@@ -41,6 +43,16 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+Or run the whole gate in one shot (~4 min, stops at first failure):
+
+```bash
+cargo xtask pre-push   # fmt check, clippy, cargo test, build-matrix
+```
+
+`build-matrix` also proves wasm builds stay free of the `dev` feature — run it whenever `Cargo.toml` features or targets changed.
+
 ## 3. Before pushing
 
 Make sure all checks pass. Unit tests are run pre-push (via the git hook). Never bypass hooks with `--no-verify`.
+
+For UI-visible changes, budget for the browser gates: a `web-smoke` scenario is ~10 min, a full baseline capture ~30 min — and always rebase onto `origin/main` **before** capturing baselines so you only capture once.
