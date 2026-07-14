@@ -135,6 +135,7 @@ impl Plugin for FocusNavigationPlugin {
                 navigate_keyboard_focus,
                 navigate_gamepad_focus,
                 activate_focused_control,
+                scroll_focused_into_view,
                 render_focus_marker,
             )
                 .chain()
@@ -270,6 +271,70 @@ fn activate_focused_control(
     }
 }
 
+/// Scrolls the focused control's scrollable ancestors just far enough that
+/// the control is fully visible (#216). Several screens rely on designed
+/// in-UI scrolling (`super::Scrollable` + `ScrollPosition`, #31) to fit
+/// short viewports -- 200% desktop zoom included -- but wheel/touch-drag
+/// are pointer inputs; without this, a keyboard-only player tabbing to an
+/// off-screen control would move an invisible focus marker.
+///
+/// Both rects come from the same live layout values
+/// (`ComputedNode`/`UiGlobalTransform`, physical px scaled back to logical
+/// by the node's own `inverse_scale_factor`), which already reflect the
+/// *current* scroll offset -- so the delta between the control's box and
+/// the container's visible box is exactly how far the scroll must move.
+/// Bevy UI's layout system clamps an out-of-range `ScrollPosition` back
+/// into range on its own. Runs only on an actual focus change; a fully
+/// visible control never mutates the scroll (no change-detection noise).
+fn scroll_focused_into_view(
+    focus: Res<InputFocus>,
+    parents: Query<&ChildOf>,
+    nodes: Query<(&ComputedNode, &UiGlobalTransform), With<Focusable>>,
+    mut scrollables: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform)>,
+) {
+    if !focus.is_changed() {
+        return;
+    }
+    let Some(focused) = focus.get() else { return };
+    let Ok((node, transform)) = nodes.get(focused) else {
+        return;
+    };
+    let scale = node.inverse_scale_factor();
+    let target = Rect::from_center_size(transform.translation * scale, node.size() * scale);
+
+    let mut current = focused;
+    while let Ok(child_of) = parents.get(current) {
+        current = child_of.parent();
+        let Ok((mut scroll, container_node, container_transform)) = scrollables.get_mut(current)
+        else {
+            continue;
+        };
+        let container_scale = container_node.inverse_scale_factor();
+        let container = Rect::from_center_size(
+            container_transform.translation * container_scale,
+            container_node.size() * container_scale,
+        );
+        let delta_y = if target.max.y > container.max.y {
+            target.max.y - container.max.y
+        } else if target.min.y < container.min.y {
+            target.min.y - container.min.y
+        } else {
+            0.0
+        };
+        let delta_x = if target.max.x > container.max.x {
+            target.max.x - container.max.x
+        } else if target.min.x < container.min.x {
+            target.min.x - container.min.x
+        } else {
+            0.0
+        };
+        if delta_x != 0.0 || delta_y != 0.0 {
+            scroll.0.x += delta_x;
+            scroll.0.y += delta_y;
+        }
+    }
+}
+
 /// Renders the focus marker: whichever [`Focusable`] entity [`InputFocus`]
 /// currently names gets a gold `Outline`; every other one is cleared to
 /// `Color::NONE`. Cheap to run unconditionally -- every current focus region
@@ -336,6 +401,7 @@ pub fn redirect_focus_if_inside(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::math::Affine2;
 
     fn test_app() -> App {
         let mut app = App::new();
@@ -639,6 +705,104 @@ mod tests {
             Some(modal_children[0]),
             "Tab must wrap back inside the modal overlay, never reaching \
              the screen's own group ({screen_children:?}) behind it"
+        );
+    }
+
+    /// #216: at 200% desktop zoom several screens rely on their designed
+    /// in-UI scrolling (`crate::ui_widgets::Scrollable`, #31) to keep every
+    /// control reachable -- but wheel/touch-drag are pointer inputs, so a
+    /// keyboard-only player tabbing to an off-screen control could never
+    /// bring it into view without this: focusing a control must scroll its
+    /// scrollable ancestor just far enough that the control is visible.
+    #[test]
+    fn focusing_an_offscreen_control_scrolls_its_scrollable_ancestor_into_view() {
+        let mut app = test_app();
+        // A 400px-tall scroll container at y 0..400 (center y=200).
+        let container = app
+            .world_mut()
+            .spawn((
+                TabGroup::new(0),
+                ScrollPosition::default(),
+                ComputedNode {
+                    size: Vec2::new(600.0, 400.0),
+                    inverse_scale_factor: 1.0,
+                    ..Default::default()
+                },
+                UiGlobalTransform::from(Affine2::from_translation(Vec2::new(300.0, 200.0))),
+            ))
+            .id();
+        // A 56px-tall focusable child currently rendered at y 488..544 --
+        // fully below the container's visible 0..400 window.
+        let below = app
+            .world_mut()
+            .spawn((
+                Button,
+                Focusable,
+                TabIndex(0),
+                ChildOf(container),
+                ComputedNode {
+                    size: Vec2::new(260.0, 56.0),
+                    inverse_scale_factor: 1.0,
+                    ..Default::default()
+                },
+                UiGlobalTransform::from(Affine2::from_translation(Vec2::new(300.0, 516.0))),
+            ))
+            .id();
+
+        app.world_mut()
+            .insert_resource(InputFocus::from_entity(below));
+        app.update();
+
+        let scroll = app.world().get::<ScrollPosition>(container).unwrap();
+        assert_eq!(
+            scroll.0.y, 144.0,
+            "focusing the off-screen control must scroll it just into view \
+             (544 - 400 = 144), not leave it hidden below the fold"
+        );
+    }
+
+    /// The counterpart: a control already fully visible must not move the
+    /// scroll position at all.
+    #[test]
+    fn focusing_an_already_visible_control_does_not_scroll() {
+        let mut app = test_app();
+        let container = app
+            .world_mut()
+            .spawn((
+                TabGroup::new(0),
+                ScrollPosition(Vec2::new(0.0, 37.0)),
+                ComputedNode {
+                    size: Vec2::new(600.0, 400.0),
+                    inverse_scale_factor: 1.0,
+                    ..Default::default()
+                },
+                UiGlobalTransform::from(Affine2::from_translation(Vec2::new(300.0, 200.0))),
+            ))
+            .id();
+        let visible = app
+            .world_mut()
+            .spawn((
+                Button,
+                Focusable,
+                TabIndex(0),
+                ChildOf(container),
+                ComputedNode {
+                    size: Vec2::new(260.0, 56.0),
+                    inverse_scale_factor: 1.0,
+                    ..Default::default()
+                },
+                UiGlobalTransform::from(Affine2::from_translation(Vec2::new(300.0, 200.0))),
+            ))
+            .id();
+
+        app.world_mut()
+            .insert_resource(InputFocus::from_entity(visible));
+        app.update();
+
+        let scroll = app.world().get::<ScrollPosition>(container).unwrap();
+        assert_eq!(
+            scroll.0.y, 37.0,
+            "a fully visible focused control must leave the scroll untouched"
         );
     }
 

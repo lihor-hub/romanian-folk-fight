@@ -30,14 +30,21 @@
 //!
 //! ## Reading exact clipping facts instead of guessing from a screenshot
 //!
-//! `src/review/mod.rs`'s `AccessibilitySnapshot` (#216) publishes every
-//! currently-visible `Focusable` control's on-screen box in logical (CSS)
-//! pixels -- the same coordinate space `window.innerWidth`/`innerHeight`
-//! are expressed in, since the UI camera spans the whole window (never
-//! letterboxed, unlike the fixed 4:3 arena-world camera; see
-//! `core::UiCamera`'s doc comment). A control is clipped exactly when its
-//! box falls outside `[0, inner_width] x [0, inner_height]` -- checked
-//! directly, not inferred from a screenshot.
+//! `src/review/mod.rs`'s `AccessibilitySnapshot` (#216) publishes the
+//! focused control's on-screen box in logical (CSS) pixels -- the same
+//! coordinate space `window.innerWidth`/`innerHeight` are expressed in,
+//! since the UI camera spans the whole window (never letterboxed, unlike
+//! the fixed 4:3 arena-world camera; see `core::UiCamera`'s doc comment).
+//!
+//! "No clipped required control" is asserted *per focused control*, not as
+//! "every control fits one viewport simultaneously": several screens are
+//! designed to scroll on short viewports (`ui_widgets::Scrollable`, #31),
+//! and the shared focus widget scrolls the focused control into view
+//! (#216, `ui_widgets::focus::scroll_focused_into_view`). So the gate
+//! walks focus through one full lap of each screen's controls and requires
+//! each stop's post-scroll box to lie inside the viewport -- exactly the
+//! "playable at 200% zoom" a keyboard-only player experiences. A control
+//! that stays off-screen even after scroll-into-view fails the run.
 //!
 //! ## Separate build, separate `dist/`
 //!
@@ -79,6 +86,9 @@ const READY_MAX_WALL_CLOCK: Duration = Duration::from_secs(180);
 const STABLE_FRAMES_REQUIRED: usize = 3;
 const COMMAND_CONSUMED_MAX_FRAMES: usize = 300;
 const SETTLE_MAX_FRAMES: usize = 120;
+/// Generous upper bound on ArrowRight presses to discover one full lap --
+/// comfortably above every current screen's actual control count.
+const MAX_LAP_PRESSES: usize = 40;
 
 pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
     if update_baselines {
@@ -189,9 +199,15 @@ struct TargetRect {
 /// Mirrors `crate::review::AccessibilitySnapshot` (#216).
 #[derive(serde::Deserialize, Debug, Clone, PartialEq)]
 struct AccessibilitySnapshot {
+    /// Stable per-entity identifier for cycle detection (see
+    /// `keyboard_accessibility`'s mirror of the same field).
+    focused_entity: Option<String>,
     focused_label: Option<String>,
-    #[allow(dead_code)]
     focus_marker_visible: bool,
+    /// The focused control's current on-screen box, *after* the shared
+    /// widget's scroll-into-view ran -- the box this scenario's clipping
+    /// gate checks per tab-stop.
+    focused_rect: Option<TargetRect>,
     targets: Vec<TargetRect>,
     #[allow(dead_code)]
     min_target_size: f32,
@@ -313,52 +329,79 @@ fn problem_scroll(axis: &str, scroll: f64, client: f64) -> Result<(), String> {
     ))
 }
 
-/// No currently-visible interactive target sits outside the viewport's own
-/// logical-pixel box -- a direct, ground-truth clipping check (see the
-/// module docs).
-fn check_no_clipped_targets(
+/// Whether `rect` lies fully inside the `width`x`height` viewport.
+fn rect_in_viewport(rect: &TargetRect, width: f32, height: f32) -> bool {
+    rect.x >= -EPSILON_PX
+        && rect.y >= -EPSILON_PX
+        && rect.x + rect.width <= width + EPSILON_PX
+        && rect.y + rect.height <= height + EPSILON_PX
+}
+
+/// Sub-pixel slack for the visibility check: layout rounding at scaled
+/// viewports can leave a box a fraction of a px past the edge.
+const EPSILON_PX: f32 = 1.0;
+
+/// The clipping gate (see the module docs): walks focus through one full
+/// cyclic lap of the screen's controls (`ArrowRight` until the focused
+/// entity repeats, same empirical cycle detection as
+/// `keyboard_accessibility::walk_full_lap`) and asserts every stop's
+/// *post-scroll* `focused_rect` lies inside the viewport. Screens designed
+/// to scroll on short viewports (`ui_widgets::Scrollable`, #31) pass by
+/// virtue of the shared widget's scroll-into-view-on-focus (#216); a control
+/// that stays off-screen even after that is a genuine clipping failure.
+/// Because `UiGlobalTransform` only reflects a scroll adjustment on the
+/// *next* frame's layout pass, each stop polls a few extra frames for the
+/// rect to come into view before declaring it clipped.
+fn assert_every_control_visible_when_focused(
+    checkpoint: &Checkpoint,
     screen: &str,
-    status: &PageStatus,
-    snapshot: &AccessibilitySnapshot,
 ) -> Result<(), String> {
-    if snapshot.targets.is_empty() {
-        return Err(format!(
-            "{screen}: no interactive targets were reported at all -- the snapshot is likely \
-             broken, not the screen"
-        ));
+    let width = ZOOMED_WIDTH as f32;
+    let height = ZOOMED_HEIGHT as f32;
+    let mut start_entity: Option<String> = None;
+    for press in 0..MAX_LAP_PRESSES {
+        let snapshot = press_key_and_wait_for_change(checkpoint, "ArrowRight")?;
+        let entity = snapshot
+            .focused_entity
+            .clone()
+            .ok_or_else(|| format!("{screen}: ArrowRight left nothing focused (stop {press})"))?;
+        match &start_entity {
+            None => start_entity = Some(entity),
+            Some(start) if *start == entity => return Ok(()),
+            Some(_) => {}
+        }
+        // Poll for the post-scroll rect to land in view.
+        let mut rect = snapshot.focused_rect;
+        let mut visible = rect.is_some_and(|r| rect_in_viewport(&r, width, height));
+        for _ in 0..30 {
+            if visible {
+                break;
+            }
+            checkpoint.wait_for_frame()?;
+            if let Some(current) = read_accessibility(checkpoint)? {
+                rect = current.focused_rect;
+                visible = rect.is_some_and(|r| rect_in_viewport(&r, width, height));
+            }
+        }
+        if !visible {
+            return Err(format!(
+                "{screen}: control {:?} (stop {press}) stays clipped outside the \
+                 {width}x{height} viewport at 200% zoom even after scroll-into-view: {rect:?}",
+                read_accessibility(checkpoint)?.and_then(|s| s.focused_label)
+            ));
+        }
     }
-    let width = status.inner_width as f32;
-    let height = status.inner_height as f32;
-    let clipped: Vec<&TargetRect> = snapshot
-        .targets
-        .iter()
-        .filter(|t| t.x < 0.0 || t.y < 0.0 || t.x + t.width > width || t.y + t.height > height)
-        .collect();
-    if !clipped.is_empty() {
-        return Err(format!(
-            "{screen}: {} required control(s) clipped outside the {width}x{height} viewport at \
-             200% zoom: {clipped:?}",
-            clipped.len()
-        ));
-    }
-    Ok(())
+    Err(format!(
+        "{screen}: tab order never wrapped back to the starting control within \
+         {MAX_LAP_PRESSES} ArrowRight presses"
+    ))
 }
 
 fn assert_screen_ok(checkpoint: &Checkpoint, screen: &str) -> Result<(), String> {
     wait_for_stable_frames(checkpoint)?;
     let status = checkpoint.read_status()?;
     check_no_unexpected_scroll(&status)?;
-    let mut snapshot = None;
-    for _ in 0..SETTLE_MAX_FRAMES {
-        checkpoint.wait_for_frame()?;
-        if let Some(s) = read_accessibility(checkpoint)? {
-            snapshot = Some(s);
-            break;
-        }
-    }
-    let snapshot = snapshot
-        .ok_or_else(|| format!("{screen}: no accessibility snapshot was ever published"))?;
-    check_no_clipped_targets(screen, &status, &snapshot)?;
+    assert_every_control_visible_when_focused(checkpoint, screen)?;
     if !status.errors.is_empty() {
         return Err(format!(
             "{screen}: page-level errors observed: {:?}",

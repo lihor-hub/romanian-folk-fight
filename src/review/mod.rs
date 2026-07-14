@@ -692,6 +692,14 @@ struct AccessibilitySnapshot {
     /// component, not a screenshot pixel probe. `false` when nothing is
     /// focused.
     focus_marker_visible: bool,
+    /// The focused control's *current* on-screen box (post-scroll: the
+    /// shared widget's `scroll_focused_into_view` runs before this snapshot
+    /// is published, so this is where the control actually renders after
+    /// any in-UI scrolling settled). The `zoom-200` scenario's clipping
+    /// gate reads this per tab-stop: "playable at 200% zoom" means every
+    /// control is *visible when focused*, not that every control of a
+    /// designed-to-scroll screen fits one viewport simultaneously.
+    focused_rect: Option<TargetRect>,
     /// Every currently-visible `Focusable` control's on-screen box.
     targets: Vec<TargetRect>,
     /// `min(width, height)` across every entry in `targets`; `0.0` if
@@ -742,11 +750,18 @@ fn publish_accessibility_state(
     let focus_marker_visible = focused
         .and_then(|entity| outlines.get(entity).ok())
         .is_some_and(|outline| outline.color != Color::NONE);
+    let focused_rect = focused.and_then(|entity| {
+        focusables
+            .get(entity)
+            .ok()
+            .map(|(_, transform, node)| TargetRect::from_rect(logical_node_rect(transform, node)))
+    });
 
     let snapshot = AccessibilitySnapshot {
         focused_entity: focused.map(|entity| format!("{entity:?}")),
         focused_label,
         focus_marker_visible,
+        focused_rect,
         targets,
         min_target_size: if min_target_size.is_finite() {
             min_target_size

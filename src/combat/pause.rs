@@ -72,7 +72,16 @@ impl Plugin for PausePlugin {
                 Update,
                 (
                     toggle_on_esc.run_if(not(resource_exists::<SettingsOpen>)),
-                    handle_pause_button,
+                    // #216: `.after(FocusNavigationSet)` so a same-frame
+                    // Enter/gamepad-South activation of the focused ⏸
+                    // button is observed *this* Update pass -- `bevy_ui`'s
+                    // focus system resets a pressed interaction the pointer
+                    // isn't actually holding on the next frame's
+                    // `PreUpdate`, so running before the activation write
+                    // would miss it entirely in the real windowed build
+                    // (headless tests lack that reset and can't catch this;
+                    // the `keyboard-accessibility` browser scenario did).
+                    handle_pause_button.after(FocusNavigationSet),
                     handle_overlay_buttons
                         .in_set(crate::flow::FlowIntentEmission)
                         .after(FocusNavigationSet),
