@@ -39,6 +39,7 @@
 //! comes from [`ActionDescriptor::category`], including for a
 //! test-registered descriptor.
 
+use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 
 use crate::character::{Attributes, EnemyFighter, PlayerFighter, Stamina};
@@ -48,6 +49,7 @@ use crate::theme::{
     ACTION_BUTTON_TOUCH_TARGET, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED,
     CREAM, GOLD, PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
 };
+use crate::ui_widgets::focus::{Focusable, TabGroup, TabIndex, redirect_focus_if_inside};
 
 use super::actions::{
     ActionCategory, ActionDescriptor, ActionId, DescriptorContext, ExtraDescriptors,
@@ -152,8 +154,14 @@ pub(super) struct ActionGlyph;
 /// Marker for the text node that shows an action's cost line when enabled
 /// and its disabled reason when it isn't (#189's "expose their reason"
 /// acceptance criterion) — the same text slot, never a new UI element.
+///
+/// `pub(crate)`, not `pub(super)`: the `review` feature's `fight-palette-
+/// accessible` browser scenario (#213) reads this marker (plus the current
+/// [`bevy::input_focus::InputFocus`]) to publish the focused control's shown
+/// reason text, so the scenario can assert a real, rendered Romanian
+/// sentence rather than a screenshot pixel probe.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct ActionCostOrReason;
+pub(crate) struct ActionCostOrReason;
 
 /// The bottom action bar: desktop's single wrapping row (#189, unchanged) or
 /// phone's category-disclosure stack (#199, see [`spawn_phone_action_bar`]).
@@ -207,6 +215,9 @@ pub(super) fn spawn_action_bar(
             panel_bundle(panel_texture, node),
             BackgroundColor(PANEL_LINEN),
             ActionBarRoot,
+            // #213: one shared focus region for the whole bar — see
+            // `crate::ui_widgets::focus`'s registration API.
+            TabGroup::new(0),
         ))
         .with_children(|bar| {
             for descriptor in &descriptors {
@@ -255,7 +266,17 @@ fn spawn_phone_action_bar(
     let groups = group_by_category(&descriptors);
 
     parent
-        .spawn((node, BackgroundColor(PANEL_LINEN), ActionBarRoot))
+        .spawn((
+            node,
+            BackgroundColor(PANEL_LINEN),
+            ActionBarRoot,
+            // #213: one shared focus region for both rows — see
+            // `crate::ui_widgets::focus`'s registration API. The action row
+            // is spawned first (top), so it tabs before the category row
+            // (bottom) whenever it is populated -- both rows read top to
+            // bottom, matching this tree order.
+            TabGroup::new(0),
+        ))
         .with_children(|bar| {
             bar.spawn((
                 Node {
@@ -306,6 +327,9 @@ fn spawn_category_button(
                 ..default()
             },
             BackgroundColor(BUTTON_NORMAL),
+            // #213: category buttons are always focusable — never disabled.
+            Focusable,
+            TabIndex(0),
         ))
         .with_children(|button| {
             button.spawn((
@@ -371,6 +395,10 @@ fn spawn_action_button(
             },
             node,
             BackgroundColor(BUTTON_NORMAL),
+            // #213: disabled actions stay focusable so their reason is
+            // reachable — see `crate::ui_widgets::focus`'s registration API.
+            Focusable,
+            TabIndex(0),
         ))
         .with_children(|button| {
             spawn_glyph_well(button, descriptor.pictogram_id, ui_font);
@@ -434,6 +462,10 @@ fn spawn_phone_action_button(
             ..default()
         },
         BackgroundColor(background),
+        // #213: focusable regardless of `enabled` — see this bar's
+        // registration API doc in `crate::ui_widgets::focus`.
+        Focusable,
+        TabIndex(0),
     ));
     if !enabled {
         button.insert(DisabledButton);
@@ -688,6 +720,17 @@ pub(super) fn update_action_buttons(
 /// its true current enabled/disabled state. Closing (or switching away from)
 /// a category despawns its buttons without touching anything else — no
 /// duel-state side effect.
+///
+/// #213: if focus was on one of the about-to-despawn action buttons, it is
+/// redirected — via [`redirect_focus_if_inside`] — to the category button of
+/// whichever category was open *before* this change (`previously_open`, a
+/// per-system [`Local`] snapshot taken on the previous changed frame). That
+/// button is never despawned by this system (only the action row is), so it
+/// is always a safe, still-alive neighbor: closing a category moves focus to
+/// its own control, and switching to a different category does too (the
+/// just-closed category's button, not the newly opened one) — a player who
+/// tabs away from what they were looking at lands back on the exact control
+/// that made it disappear.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn sync_phone_open_category(
     mut commands: Commands,
@@ -698,15 +741,28 @@ pub(super) fn sync_phone_open_category(
     extra: Res<ExtraDescriptors>,
     player: PlayerStats,
     enemy: EnemyStats,
+    mut input_focus: ResMut<InputFocus>,
+    categories: Query<(Entity, &CategoryButton)>,
+    mut previously_open: Local<Option<ActionCategory>>,
     row: Query<(Entity, Option<&Children>), With<PhoneActionsRow>>,
 ) {
     if !state.is_changed() {
         return;
     }
+    let closing = *previously_open;
+    *previously_open = state.open;
+
     let Ok((row_entity, children)) = row.single() else {
         return;
     };
     if let Some(children) = children {
+        let fallback = closing.and_then(|category| {
+            categories
+                .iter()
+                .find(|(_, button)| button.category == category)
+                .map(|(entity, _)| entity)
+        });
+        redirect_focus_if_inside(&mut input_focus, children.iter(), fallback);
         for child in children.iter() {
             commands.entity(child).despawn();
         }
@@ -743,6 +799,16 @@ pub(super) fn sync_phone_open_category(
 /// small HUD subtree under [`ActionBarRoot`] — and resets
 /// [`PhonePaletteState`] to closed so a category left open before the
 /// crossing never survives it.
+///
+/// #213: also clears [`InputFocus`] on an actual rebuild. Unlike the phone
+/// palette's own category open/close (a documented safe neighbor always
+/// exists — see [`sync_phone_open_category`]), a breakpoint crossing
+/// replaces the *entire* layout (seven flat buttons versus category
+/// disclosure), so there is no single control on the new layout that is the
+/// "same" one focus was on; clearing is the documented safe fallback here,
+/// and the next Tab press lands on the new layout's first control (the same
+/// behavior [`bevy::input_focus::tab_navigation::TabNavigation::navigate`]
+/// already gives an unset focus).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn rebuild_action_bar_on_breakpoint_change(
     mut commands: Commands,
@@ -751,6 +817,7 @@ pub(super) fn rebuild_action_bar_on_breakpoint_change(
     panel_texture: Res<PanelTexture>,
     extra: Res<ExtraDescriptors>,
     mut phone_state: ResMut<PhonePaletteState>,
+    mut input_focus: ResMut<InputFocus>,
     hud_root: Query<Entity, With<HudScreen>>,
     action_bar: Query<Entity, With<ActionBarRoot>>,
     mut last_is_mobile: Local<Option<bool>>,
@@ -778,6 +845,7 @@ pub(super) fn rebuild_action_bar_on_breakpoint_change(
         commands.entity(old_bar).despawn();
     }
     *phone_state = PhonePaletteState::default();
+    input_focus.clear();
     commands.entity(hud_root).with_children(|parent| {
         spawn_action_bar(parent, &ui_font, &panel_texture, viewport.is_mobile, &extra);
     });
@@ -1570,6 +1638,313 @@ mod tests {
                 .iter(app.world())
                 .count();
             assert_eq!(buttons, 0, "the new fight's action row starts empty");
+        }
+    }
+
+    // --- descriptor-driven keyboard/gamepad focus (#213) ---
+
+    mod focus_navigation {
+        use super::*;
+
+        fn press_key_and_settle(app: &mut App, key: KeyCode) {
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(key);
+            app.update();
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(key);
+            keys.clear();
+        }
+
+        fn focused_action_id(app: &mut App) -> Option<ActionId> {
+            let focus = app.world().resource::<InputFocus>().get()?;
+            app.world().get::<ActionButton>(focus).map(|b| b.id)
+        }
+
+        fn focused_category(app: &mut App) -> Option<ActionCategory> {
+            let focus = app.world().resource::<InputFocus>().get()?;
+            app.world().get::<CategoryButton>(focus).map(|b| b.category)
+        }
+
+        fn set_focus(app: &mut App, entity: Entity) {
+            app.world_mut()
+                .insert_resource(InputFocus::from_entity(entity));
+        }
+
+        fn spawn_gamepad(app: &mut App) -> Entity {
+            app.world_mut().spawn(Gamepad::default()).id()
+        }
+
+        fn press_gamepad_and_settle(app: &mut App, gamepad: Entity, button: GamepadButton) {
+            app.world_mut()
+                .get_mut::<Gamepad>(gamepad)
+                .unwrap()
+                .digital_mut()
+                .press(button);
+            app.update();
+            let mut gp = app.world_mut().get_mut::<Gamepad>(gamepad).unwrap();
+            gp.digital_mut().release(button);
+            gp.digital_mut().clear();
+        }
+
+        #[test]
+        fn desktop_tab_order_matches_the_seven_visible_buttons_left_to_right() {
+            let mut app = test_app();
+            let expected = [
+                "quick-strike",
+                "heavy-strike",
+                "block",
+                "rest",
+                "step-forward",
+                "step-back",
+                "leap-forward",
+            ];
+            let mut seen = Vec::new();
+            for _ in 0..expected.len() {
+                press_key_and_settle(&mut app, KeyCode::Tab);
+                seen.push(focused_action_id(&mut app).expect("a button is focused"));
+            }
+            assert_eq!(
+                seen, expected,
+                "tab order follows ALL_ACTIONS' visual order"
+            );
+
+            // An eighth Tab wraps back to the first button.
+            press_key_and_settle(&mut app, KeyCode::Tab);
+            assert_eq!(focused_action_id(&mut app), Some("quick-strike"));
+        }
+
+        #[test]
+        fn phone_closed_tab_order_visits_only_the_four_category_buttons() {
+            let mut app = mobile_test_app();
+            let expected = [
+                ActionCategory::Strikes,
+                ActionCategory::Defense,
+                ActionCategory::Movement,
+                ActionCategory::Utility,
+            ];
+            let mut seen = Vec::new();
+            for _ in 0..expected.len() {
+                press_key_and_settle(&mut app, KeyCode::Tab);
+                seen.push(focused_category(&mut app).expect("a category is focused"));
+                assert_eq!(
+                    focused_action_id(&mut app),
+                    None,
+                    "no action button exists while every category is closed"
+                );
+            }
+            assert_eq!(seen, expected, "categories tab in CATEGORY_ORDER");
+
+            press_key_and_settle(&mut app, KeyCode::Tab);
+            assert_eq!(focused_category(&mut app), Some(ActionCategory::Strikes));
+        }
+
+        #[test]
+        fn phone_open_tab_order_visits_the_open_actions_then_every_category() {
+            let mut app = mobile_test_app();
+            let strikes_button = find_category_button(&mut app, ActionCategory::Strikes);
+            press_button(&mut app, strikes_button);
+
+            let expected_actions = ["quick-strike", "heavy-strike"];
+            let expected_categories = [
+                ActionCategory::Strikes,
+                ActionCategory::Defense,
+                ActionCategory::Movement,
+                ActionCategory::Utility,
+            ];
+
+            for expected in expected_actions {
+                press_key_and_settle(&mut app, KeyCode::Tab);
+                assert_eq!(focused_action_id(&mut app), Some(expected));
+            }
+            for expected in expected_categories {
+                press_key_and_settle(&mut app, KeyCode::Tab);
+                assert_eq!(focused_category(&mut app), Some(expected));
+            }
+            // Wraps back to the first open action.
+            press_key_and_settle(&mut app, KeyCode::Tab);
+            assert_eq!(focused_action_id(&mut app), Some("quick-strike"));
+        }
+
+        #[test]
+        fn closing_a_category_moves_focus_to_its_own_category_button() {
+            let mut app = mobile_test_app();
+            let strikes_button = find_category_button(&mut app, ActionCategory::Strikes);
+            press_button(&mut app, strikes_button);
+
+            let quick_strike = find_button(&mut app, "quick-strike");
+            set_focus(&mut app, quick_strike);
+
+            // Close Strikes again: its action row despawns, focus must move
+            // to the still-alive Strikes category button, not be left
+            // dangling on the despawned action button.
+            press_button(&mut app, strikes_button);
+
+            assert_eq!(
+                app.world().resource::<InputFocus>().get(),
+                Some(strikes_button)
+            );
+        }
+
+        #[test]
+        fn switching_categories_moves_focus_to_the_just_closed_categorys_button() {
+            let mut app = mobile_test_app();
+            let strikes_button = find_category_button(&mut app, ActionCategory::Strikes);
+            press_button(&mut app, strikes_button);
+
+            let quick_strike = find_button(&mut app, "quick-strike");
+            set_focus(&mut app, quick_strike);
+
+            let defense_button = find_category_button(&mut app, ActionCategory::Defense);
+            press_button(&mut app, defense_button);
+
+            // The safe neighbor is the category whose actions just
+            // disappeared (Strikes), not the newly opened one (Defense).
+            assert_eq!(
+                app.world().resource::<InputFocus>().get(),
+                Some(strikes_button),
+                "focus lands on the just-closed category's own button"
+            );
+        }
+
+        #[test]
+        fn focus_left_on_a_category_button_survives_opening_a_different_category() {
+            let mut app = mobile_test_app();
+            let strikes_button = find_category_button(&mut app, ActionCategory::Strikes);
+            let defense_button = find_category_button(&mut app, ActionCategory::Defense);
+            set_focus(&mut app, defense_button);
+
+            // Opening Strikes via the mouse must not disturb focus that was
+            // never on a despawned control in the first place.
+            press_button(&mut app, strikes_button);
+            assert_eq!(
+                app.world().resource::<InputFocus>().get(),
+                Some(defense_button)
+            );
+        }
+
+        #[test]
+        fn selecting_a_focused_enabled_action_via_keyboard_emits_the_command() {
+            let mut app = test_app();
+            drain_enemy_stamina(&mut app);
+            let quick_strike = find_button(&mut app, "quick-strike");
+            set_focus(&mut app, quick_strike);
+
+            press_key_and_settle(&mut app, KeyCode::Enter);
+            advance_presentation(&mut app);
+            advance_presentation(&mut app);
+
+            assert_eq!(
+                enemy_pools(&mut app),
+                (64, 20),
+                "Enter on the focused quick-strike button resolves the same command a click does"
+            );
+            assert_eq!(turn(&app).side, CombatSide::Player);
+        }
+
+        #[test]
+        fn selecting_a_focused_disabled_action_via_keyboard_never_emits() {
+            let mut app = test_app();
+            set_player_stamina(&mut app, 10);
+            app.update();
+            let heavy = find_button(&mut app, "heavy-strike");
+            set_focus(&mut app, heavy);
+
+            let before = (player_pools(&mut app), enemy_pools(&mut app));
+            press_key_and_settle(&mut app, KeyCode::Enter);
+            app.update();
+
+            assert_eq!(
+                (player_pools(&mut app), enemy_pools(&mut app)),
+                before,
+                "a disabled focused action must not emit on Enter"
+            );
+            assert_eq!(turn(&app).side, CombatSide::Player, "turn did not pass");
+        }
+
+        #[test]
+        fn selecting_a_focused_category_via_gamepad_opens_it() {
+            let mut app = mobile_test_app();
+            let gamepad = spawn_gamepad(&mut app);
+            let strikes_button = find_category_button(&mut app, ActionCategory::Strikes);
+            set_focus(&mut app, strikes_button);
+
+            press_gamepad_and_settle(&mut app, gamepad, GamepadButton::South);
+
+            assert_eq!(
+                action_button_ids(&mut app),
+                vec!["heavy-strike", "quick-strike"],
+                "gamepad South on the focused Strikes button opens it, same as a tap"
+            );
+        }
+
+        #[test]
+        fn selecting_a_focused_disabled_action_via_gamepad_never_emits() {
+            let mut app = test_app();
+            set_player_stamina(&mut app, 10);
+            app.update();
+            let gamepad = spawn_gamepad(&mut app);
+            let heavy = find_button(&mut app, "heavy-strike");
+            set_focus(&mut app, heavy);
+
+            let before = (player_pools(&mut app), enemy_pools(&mut app));
+            press_gamepad_and_settle(&mut app, gamepad, GamepadButton::South);
+            app.update();
+
+            assert_eq!(
+                (player_pools(&mut app), enemy_pools(&mut app)),
+                before,
+                "a disabled focused action must not emit on gamepad South either"
+            );
+            assert_eq!(turn(&app).side, CombatSide::Player, "turn did not pass");
+        }
+
+        #[test]
+        fn a_test_registered_descriptor_participates_in_tab_order_with_no_palette_specific_code() {
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, FlowPlugin));
+            app.add_plugins((ArenaPlugin, CombatPlugin));
+            app.init_resource::<ButtonInput<KeyCode>>();
+            app.world_mut()
+                .resource_mut::<Time<Virtual>>()
+                .set_max_delta(Duration::from_secs(10));
+            app.insert_resource(PlayerCharacter {
+                name: "Făt-Frumos".to_string(),
+                attributes: PLAYER_ATTRIBUTES,
+                appearance: crate::character::PlayerAppearance::default(),
+            });
+            app.insert_resource(CombatRng(strikes_rng(4)));
+            app.insert_resource(ExtraDescriptors(vec![ActionDescriptor {
+                id: "test-extra-action",
+                category: ActionCategory::Special,
+                label: "Acțiune de test",
+                pictogram_id: "test-extra-action",
+                cost: ActionCost::None,
+                hit_chance: None,
+                position_legal: true,
+                enabled: true,
+                disabled_reason: None,
+                intent: CombatAction::Rest,
+            }]));
+            app.update();
+            app.world_mut()
+                .resource_mut::<NextState<GameState>>()
+                .set(GameState::Fight);
+            app.update();
+
+            for _ in 0..8 {
+                press_key_and_settle(&mut app, KeyCode::Tab);
+            }
+            let visited: Vec<ActionId> = (0..8)
+                .map(|_| {
+                    press_key_and_settle(&mut app, KeyCode::Tab);
+                    focused_action_id(&mut app).expect("a button is focused")
+                })
+                .collect();
+            assert!(
+                visited.contains(&"test-extra-action"),
+                "the registered eighth descriptor's button must be reachable by Tab: {visited:?}"
+            );
         }
     }
 }

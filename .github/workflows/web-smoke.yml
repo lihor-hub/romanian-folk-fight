@@ -3,7 +3,7 @@ name: Browser smoke
 # Separate from `ci.yml` (native/wasm build+test) and `deploy.yml` (GitHub
 # Pages publish): this workflow builds+serves the WASM game and drives a
 # real, freshly-launched Chrome against it via `cargo xtask web-smoke
-# --scenario <name>` (#144/#168/#187/#189/#191/#198/#199/#200/#214). It
+# --scenario <name>` (#144/#168/#187/#189/#191/#198/#199/#200/#213/#214). It
 # never touches #141's future asset workflow.
 #
 # `gold-journey` now walks the full #198 matrix in one invocation: both
@@ -405,6 +405,57 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: web-smoke-fight-palette-phone
+        path: target/xtask-artifacts/web-smoke/
+        if-no-files-found: ignore
+        retention-days: 14
+
+  fight-palette-accessible:
+    name: fight-palette-accessible (real-keyboard focus, disabled reasons, category-close recovery)
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Add wasm target
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.8
+
+    - name: Set up Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "sccache"
+
+    - name: Install Trunk
+      uses: taiki-e/install-action@v2
+      with:
+        tool: trunk
+
+    - name: Verify Chrome is available
+      run: google-chrome-stable --version || google-chrome --version
+
+    - name: Run the fight-palette-accessible browser smoke
+      # Same alias-independent invocation as the jobs above. Drives menu ->
+      # creation -> a fresh fight start through the review seam at both a
+      # desktop and a 390x844 phone viewport, then drives descriptor-driven
+      # keyboard focus (#213) with real CDP `Tab`/`Enter` keypresses (not
+      # seeded ECS state): asserts the real tab order matches
+      # `combat::actions::ALL_ACTIONS`/`CATEGORY_ORDER`, that the naturally-
+      # disabled `step-forward` button shows its exact Romanian reason with
+      # the gold focus marker visible, that Enter on it is inert, and that
+      # closing a phone category recovers focus onto that category's own
+      # button (see xtask/src/web_smoke/fight_palette_accessible.rs).
+      run: cargo run --locked --package xtask -- web-smoke --scenario fight-palette-accessible
+
+    - name: Upload smoke artifacts (always, for post-mortem on failure)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: web-smoke-fight-palette-accessible
         path: target/xtask-artifacts/web-smoke/
         if-no-files-found: ignore
         retention-days: 14

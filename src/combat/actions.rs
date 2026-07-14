@@ -384,6 +384,43 @@ fn hit_chance(action: CombatAction, attacker: &Attributes, defender: &Attributes
 /// of this function's result, so there is exactly one source of truth for
 /// action legality — this function *is* the engine-matching rule the
 /// pre-#189 `hud::action_enabled` documented, not a second copy of it.
+///
+/// # Priority rules (#213)
+///
+/// Every early `return` below is a strict short-circuit: the checks run in
+/// this fixed order, and the first one that applies is the *only* reason
+/// ever returned, so a disabled action always exposes exactly one sentence
+/// even when several conditions would independently disable it (e.g. it is
+/// also the enemy's turn *and* the player is out of stamina — the player
+/// only ever sees "not your turn").
+///
+/// 1. **Presentation busy** — a previous action's animation/resolution is
+///    still playing. Checked first because it is transient and about to
+///    clear on its own; every other reason describes the *next* decision the
+///    player will actually face, so this must never be masked by one of
+///    them.
+/// 2. **Turn over** — the duel has already ended; nothing is ever legal
+///    again this fight.
+/// 3. **Not your turn** — it is the enemy's turn.
+/// 4. **Per-action legality** (only reached once 1–3 all pass, i.e. it is
+///    live and the player's turn):
+///    - Strikes ([`CombatAction::QuickStrike`]/[`CombatAction::HeavyStrike`]):
+///      **reach** (too far to land the strike) before **stamina** (can't
+///      afford it) — reach is checked first because it is the more
+///      fundamental constraint (no amount of stamina makes an out-of-reach
+///      strike legal), matching
+///      `combat::engine::resolve_action_at_distance`'s own gating order.
+///    - [`CombatAction::Block`]/[`CombatAction::Rest`]: never disabled once
+///      1–3 pass (no reach or stamina gate).
+///    - Movement ([`CombatAction::StepForward`]/[`CombatAction::StepBack`]/
+///      [`CombatAction::LeapForward`]): a single **distance-bound** check
+///      (already at the closest/farthest band).
+///
+/// A future action (spell, consumable, ranged attack, taunt/shove) that adds
+/// a *new* kind of constraint (e.g. a mana or item-count gate) extends step 4
+/// with its own ordered checks inside its `match` arm — steps 1–3 (and every
+/// other action's arm) never change, so its reason always composes with the
+/// existing priority chain rather than needing a second copy of it.
 pub fn action_disabled_reason(
     turn: &CombatTurn,
     stamina: i32,
@@ -722,6 +759,71 @@ mod tests {
         assert_eq!(
             action_disabled_reason(&over, 50, false, CombatAction::Rest),
             Some("Lupta s-a încheiat.".to_string())
+        );
+    }
+
+    /// #213's documented priority chain: when multiple conditions would
+    /// independently disable an action, exactly one reason is ever returned,
+    /// and it is always the highest-priority one — presentation-busy beats
+    /// turn-over beats not-your-turn beats the per-action reach/stamina
+    /// checks, and within a strike's own check, reach beats stamina.
+    #[test]
+    fn disabled_reason_priority_picks_exactly_one_highest_priority_cause() {
+        let far_enemy_turn_over_and_busy = CombatTurn {
+            side: CombatSide::Enemy,
+            over: true,
+            distance: DuelDistance::FAR,
+            ..PLAYER_TURN
+        };
+        // Presentation-busy outranks every turn/reach/stamina condition,
+        // even when all of them also apply.
+        assert_eq!(
+            action_disabled_reason(
+                &far_enemy_turn_over_and_busy,
+                0,
+                true,
+                CombatAction::QuickStrike
+            ),
+            Some("Se așteaptă finalizarea acțiunii precedente.".to_string()),
+            "presentation-busy must win over every other simultaneous cause"
+        );
+
+        let far_enemy_turn_over = CombatTurn {
+            side: CombatSide::Enemy,
+            over: true,
+            distance: DuelDistance::FAR,
+            ..PLAYER_TURN
+        };
+        // With presentation clear, turn-over outranks not-your-turn and
+        // reach/stamina.
+        assert_eq!(
+            action_disabled_reason(&far_enemy_turn_over, 0, false, CombatAction::QuickStrike),
+            Some("Lupta s-a încheiat.".to_string()),
+            "turn-over must win over not-your-turn and reach/stamina"
+        );
+
+        let far_enemy_turn = CombatTurn {
+            side: CombatSide::Enemy,
+            distance: DuelDistance::FAR,
+            ..PLAYER_TURN
+        };
+        // With the duel still live, not-your-turn outranks reach/stamina.
+        assert_eq!(
+            action_disabled_reason(&far_enemy_turn, 0, false, CombatAction::QuickStrike),
+            Some("Nu e rândul tău.".to_string()),
+            "not-your-turn must win over reach/stamina"
+        );
+
+        let far = CombatTurn {
+            distance: DuelDistance::FAR,
+            ..PLAYER_TURN
+        };
+        // On the player's live turn, out of reach *and* out of stamina:
+        // reach is checked first.
+        assert_eq!(
+            action_disabled_reason(&far, 0, false, CombatAction::QuickStrike),
+            Some("Prea departe pentru lovitură.".to_string()),
+            "reach must win over stamina within a strike's own check"
         );
     }
 
