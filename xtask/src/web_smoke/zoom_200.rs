@@ -429,36 +429,74 @@ fn run_checks(
         &checkpoint,
         serde_json::json!({"cmd": "selectPreset", "preset": KEYBOARD_ACCESSIBILITY_PRESET}),
     )?;
+    // Screens with continuous idle animation (the creation/shop cutout
+    // previews, the fight screen's parallax) can never satisfy
+    // `assert_screen_ok`'s byte-identical-frames stability streak with the
+    // clock running -- freeze `Time<Virtual>` around each check, the same
+    // pause/capture pattern `gold_journey::captured_checkpoint` documents.
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "setTimePaused", "paused": true}),
+    )?;
     assert_screen_ok(&checkpoint, "CharacterCreation")?;
     let creation_shot = checkpoint.screenshot_png(ZOOMED_WIDTH, ZOOMED_HEIGHT)?;
     let _ = artifacts::write_artifact(dir, "3-creation.png", &creation_shot);
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "setTimePaused", "paused": false}),
+    )?;
 
     send_command(
         &checkpoint,
         serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
     )?;
     wait_for_screen(&checkpoint, "Fight", false)?;
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "setTimePaused", "paused": true}),
+    )?;
     assert_screen_ok(&checkpoint, "Fight")?;
     let fight_shot = checkpoint.screenshot_png(ZOOMED_WIDTH, ZOOMED_HEIGHT)?;
     let _ = artifacts::write_artifact(dir, "4-fight.png", &fight_shot);
+    // Unpause: autoplay (and the fight-end delay after it) need the clock.
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "setTimePaused", "paused": false}),
+    )?;
 
     send_command(
         &checkpoint,
         serde_json::json!({"cmd": "setAutoplay", "enabled": true}),
     )?;
     wait_for_screen(&checkpoint, "FightResult", false)?;
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "setTimePaused", "paused": true}),
+    )?;
     assert_screen_ok(&checkpoint, "FightResult")?;
     let result_shot = checkpoint.screenshot_png(ZOOMED_WIDTH, ZOOMED_HEIGHT)?;
     let _ = artifacts::write_artifact(dir, "5-fight-result.png", &result_shot);
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "setTimePaused", "paused": false}),
+    )?;
 
     send_command(
         &checkpoint,
         serde_json::json!({"cmd": "pressButton", "button": "GoToShop"}),
     )?;
     wait_for_screen(&checkpoint, "Shop", false)?;
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "setTimePaused", "paused": true}),
+    )?;
     assert_screen_ok(&checkpoint, "Shop")?;
     let shop_shot = checkpoint.screenshot_png(ZOOMED_WIDTH, ZOOMED_HEIGHT)?;
     let _ = artifacts::write_artifact(dir, "6-shop.png", &shop_shot);
+    let _ = send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "setTimePaused", "paused": false}),
+    );
 
     Ok(())
 }
