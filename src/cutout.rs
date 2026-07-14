@@ -170,7 +170,7 @@ pub fn spawn_cutout_rig(
                     transform,
                     size: part.size,
                 },
-                part_sprite(&part, asset_server),
+                part_sprite(&part, asset_server, flip_x),
                 transform,
             ));
         }
@@ -200,7 +200,7 @@ pub fn spawn_cutout_rig_with_gear(
                     transform,
                     size: part.size,
                 },
-                part_sprite(&part, asset_server),
+                part_sprite(&part, asset_server, flip_x),
                 transform,
             ))
             .with_children(|part_children| {
@@ -306,13 +306,20 @@ pub fn gear_attachment_transform(offset: (f32, f32), z_offset: f32) -> Transform
     Transform::from_xyz(offset.0, offset.1, z_offset)
 }
 
-fn part_sprite(part: &CutoutPart, asset_server: Option<&AssetServer>) -> Sprite {
+/// Builds one body-part sprite. `flip_x` mirrors the artwork itself so a
+/// mirrored rig faces its opponent; [`part_transform`] mirrors only the
+/// position/rotation.
+fn part_sprite(part: &CutoutPart, asset_server: Option<&AssetServer>, flip_x: bool) -> Sprite {
     match (asset_server, part.asset_path) {
         (Some(asset_server), Some(path)) => Sprite {
             custom_size: Some(part.size),
+            flip_x,
             ..Sprite::from_image(asset_server.load(path))
         },
-        _ => Sprite::from_color(part.color, part.size),
+        _ => Sprite {
+            flip_x,
+            ..Sprite::from_color(part.color, part.size)
+        },
     }
 }
 
@@ -1004,6 +1011,71 @@ mod tests {
             assert_eq!(left_transform.translation.y, right_transform.translation.y);
             assert_eq!(left_transform.translation.z, right_transform.translation.z);
         }
+    }
+
+    #[test]
+    fn spawned_body_part_sprites_flip_with_the_rig() {
+        let mut world = World::new();
+        let player = world.spawn_empty().id();
+        let enemy = world.spawn_empty().id();
+        world.commands().queue(move |world: &mut World| {
+            let mut commands = world.commands();
+            spawn_cutout_rig(&mut commands, player, human_template(), None, false);
+            spawn_cutout_rig(&mut commands, enemy, enemy_template(), None, true);
+        });
+        world.flush();
+
+        let player_children = world.get::<Children>(player).unwrap().to_vec();
+        assert!(!player_children.is_empty(), "player rig has body parts");
+        for child in player_children {
+            let sprite = world.get::<Sprite>(child).expect("body part has a sprite");
+            assert!(
+                !sprite.flip_x,
+                "player rig sprites stay unflipped (byte-for-byte unchanged)"
+            );
+        }
+
+        let enemy_children = world.get::<Children>(enemy).unwrap().to_vec();
+        assert!(!enemy_children.is_empty(), "enemy rig has body parts");
+        for child in enemy_children {
+            let sprite = world.get::<Sprite>(child).expect("body part has a sprite");
+            assert!(
+                sprite.flip_x,
+                "enemy rig sprites mirror the artwork so the fighter faces the player"
+            );
+        }
+    }
+
+    #[test]
+    fn gear_layer_sprites_spawned_through_the_gear_rig_helper_stay_unflipped() {
+        // spawn_cutout_rig_with_gear is only ever used by player-facing preview
+        // screens (shop/creation) with flip_x = false; assert the gear-layer
+        // sprites it produces stay unflipped so that path remains
+        // byte-for-byte unchanged by this fix.
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let mut equipment = Equipment::default();
+        equipment.equip(ItemId::Palos);
+        world.commands().queue(move |world: &mut World| {
+            let mut commands = world.commands();
+            spawn_cutout_rig_with_gear(
+                &mut commands,
+                root,
+                human_template(),
+                None,
+                false,
+                &equipment,
+            );
+        });
+        world.flush();
+
+        let mut found_gear_layer = false;
+        let mut query = world.query::<(&GearVisualLayer, &Sprite)>();
+        for (_, sprite) in query.iter(&world) {
+            found_gear_layer = true;
+            assert!(!sprite.flip_x, "player gear layers stay unflipped");
+        }
+        assert!(found_gear_layer, "the equipped weapon spawns a gear layer");
     }
 
     #[test]

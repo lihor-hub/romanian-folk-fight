@@ -248,6 +248,22 @@ type ChangedFighterEquipment<'w, 's> = Query<
     (With<crate::character::Fighter>, Changed<Equipment>),
 >;
 
+/// Query alias for fighter roots read by [`sync_gear_visual_layers`].
+/// `Without<GearVisualLayer>` keeps this read disjoint from that system's
+/// `&mut Sprite` gear-layer access (Bevy error B0001): fighter roots are
+/// never gear layers.
+type FighterAnimationSources<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static FighterClip,
+        &'static animation::SpriteAnimation,
+        Option<&'static Sprite>,
+        Option<&'static CutoutRig>,
+    ),
+    Without<GearVisualLayer>,
+>;
+
 /// Spawns gear overlays from each fighter's current equipment.
 /// The shop copies [`crate::shop::PlayerEquipment`] onto the player fighter
 /// after spawn, and roster opponents also carry [`Equipment`]. This system
@@ -294,21 +310,17 @@ fn spawn_equipped_gear_layers(
 /// and applies a small local transform so static overlay art feels attached
 /// to hands, shield arm, head, torso, or feet during each clip.
 fn sync_gear_visual_layers(
-    fighters: Query<(
-        &FighterClip,
-        &animation::SpriteAnimation,
-        Option<&Sprite>,
-        Option<&CutoutRig>,
-    )>,
+    fighters: FighterAnimationSources,
     parts: Query<&ChildOf, With<CutoutPartMarker>>,
     mut layers: Query<(
         &GearVisualLayer,
         &ChildOf,
         &mut GearAnimationState,
         &mut Transform,
+        &mut Sprite,
     )>,
 ) {
-    for (layer, child_of, mut state, mut transform) in &mut layers {
+    for (layer, child_of, mut state, mut transform, mut gear_sprite) in &mut layers {
         let Ok(part_parent) = parts.get(child_of.parent()) else {
             continue;
         };
@@ -325,6 +337,9 @@ fn sync_gear_visual_layers(
             .unwrap_or_else(|| rig.map(|rig| rig.flip_x).unwrap_or(false));
         *state = GearAnimationState { clip: *clip, frame };
         *transform = gear_local_transform(layer.motion, *clip, frame, layer.z_offset, flip_x);
+        // Mirror the artwork itself, not only the attachment transform, so
+        // an equipped weapon/shield faces the same way as its fighter.
+        gear_sprite.flip_x = flip_x;
     }
 }
 
@@ -648,6 +663,47 @@ mod tests {
     }
 
     #[test]
+    fn arena_fighter_body_part_sprites_flip_to_match_the_rig() {
+        let mut app = test_app();
+
+        let player = app
+            .world_mut()
+            .query_filtered::<Entity, With<PlayerFighter>>()
+            .single(app.world())
+            .expect("player fighter exists");
+        let enemy = app
+            .world_mut()
+            .query_filtered::<Entity, With<EnemyFighter>>()
+            .single(app.world())
+            .expect("enemy fighter exists");
+
+        let part_owners: Vec<(Entity, Entity)> = app
+            .world_mut()
+            .query::<(Entity, &CutoutPartMarker, &ChildOf)>()
+            .iter(app.world())
+            .map(|(part, _, child_of)| (part, child_of.parent()))
+            .collect();
+
+        let mut player_parts = 0;
+        let mut enemy_parts = 0;
+        let mut query = app.world_mut().query::<(Entity, &Sprite)>();
+        for (entity, sprite) in query.iter(app.world()) {
+            let Some((_, owner)) = part_owners.iter().find(|(part, _)| *part == entity) else {
+                continue;
+            };
+            if *owner == player {
+                player_parts += 1;
+                assert!(!sprite.flip_x, "player body part sprites stay unflipped");
+            } else if *owner == enemy {
+                enemy_parts += 1;
+                assert!(sprite.flip_x, "enemy body part sprites mirror the artwork");
+            }
+        }
+        assert!(player_parts > 0, "player has body-part sprites");
+        assert!(enemy_parts > 0, "enemy has body-part sprites");
+    }
+
+    #[test]
     fn player_fighter_carries_the_confirmed_appearance_component() {
         let appearance = PlayerAppearance {
             skin_tone: SkinTone::Deep,
@@ -821,6 +877,59 @@ mod tests {
             ],
             "roster equipment is visible, not only stat-bearing"
         );
+    }
+
+    #[test]
+    fn equipped_opponent_gear_layer_sprites_mirror_with_the_rig() {
+        let mut app = test_app_at(LadderProgress(9));
+        app.update();
+
+        let enemy = app
+            .world_mut()
+            .query_filtered::<Entity, With<EnemyFighter>>()
+            .single(app.world())
+            .expect("enemy fighter exists");
+        let part_owners: Vec<(Entity, Entity)> = app
+            .world_mut()
+            .query::<(Entity, &CutoutPartMarker, &ChildOf)>()
+            .iter(app.world())
+            .map(|(part, _, child_of)| (part, child_of.parent()))
+            .collect();
+
+        let mut checked = 0;
+        let mut query = app
+            .world_mut()
+            .query::<(&GearVisualLayer, &ChildOf, &Sprite)>();
+        for (_, child_of, sprite) in query.iter(app.world()) {
+            let Some((_, owner)) = part_owners
+                .iter()
+                .find(|(part, _)| *part == child_of.parent())
+            else {
+                continue;
+            };
+            if *owner == enemy {
+                checked += 1;
+                assert!(sprite.flip_x, "enemy gear layers mirror with the rig");
+            }
+        }
+        assert!(checked > 0, "the boss enemy has gear layers to check");
+    }
+
+    #[test]
+    fn equipped_player_gear_layer_sprites_stay_unflipped() {
+        let mut loadout = Equipment::default();
+        loadout.equip(ItemId::Palos);
+        loadout.equip(ItemId::ScutFerecat);
+
+        let mut app = player_with_loadout(loadout);
+
+        let mut checked = 0;
+        let mut query = app.world_mut().query::<(&GearVisualLayer, &Sprite)>();
+        for (_, sprite) in query.iter(app.world()) {
+            checked += 1;
+            assert!(!sprite.flip_x, "player gear layers stay unflipped");
+        }
+        assert!(checked > 0, "the player has gear layers to check");
     }
 
     #[test]
