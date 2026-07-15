@@ -1191,4 +1191,68 @@ mod tests {
             "accessibility preferences are untouched by run deletion, same as audio"
         );
     }
+
+    /// #201: the main menu's Romanian recovery action (pressed after a
+    /// corrupt run save shows [`crate::menu::RecoverSaveButton`]) quarantines
+    /// only the run's own [`crate::save::SaveStore`] -- this settings store
+    /// is a completely separate resource/backend/key
+    /// ([`SettingsStore`]/[`SETTINGS_KEY`]) and must come through untouched,
+    /// the same guarantee `game_over_deletes_the_run_save_but_not_the_settings`
+    /// proves for the game-over delete path.
+    #[test]
+    fn recovering_a_corrupt_run_save_clears_only_the_run_snapshot_never_the_settings() {
+        use crate::flow::FlowPlugin;
+        use crate::menu::{MenuAction, MenuPlugin, RecoverSaveButton};
+        use crate::save::SaveStore;
+
+        let (mut app, settings_cell) = test_app();
+        app.add_plugins((FlowPlugin, MenuPlugin));
+
+        let (run_store, run_cell) = SaveStore::in_memory();
+        run_store.store("not a valid run snapshot");
+        app.insert_resource(run_store);
+
+        *settings_cell.lock().expect("test store lock") = Some(
+            SettingsSave {
+                version: SETTINGS_VERSION,
+                music: 4,
+                sfx: 6,
+                muted: false,
+                reduced_motion: true,
+                high_contrast: false,
+            }
+            .to_json()
+            .expect("plain data serializes"),
+        );
+
+        app.update(); // PreStartup runs; no `AssetServer` -> fall-through queued.
+        app.update(); // fall-through applies; `OnEnter(MainMenu)` spawns the menu.
+
+        let recovery_button = app
+            .world_mut()
+            .query_filtered::<(Entity, &MenuAction), With<RecoverSaveButton>>()
+            .iter(app.world())
+            .next()
+            .map(|(entity, _)| entity)
+            .expect("a corrupt run save shows the recovery button");
+        app.world_mut()
+            .entity_mut(recovery_button)
+            .insert(Interaction::Pressed);
+        app.update();
+
+        assert_eq!(
+            *run_cell.lock().expect("test store lock"),
+            None,
+            "recovery quarantines the run snapshot"
+        );
+        let settings = settings_cell
+            .lock()
+            .expect("test store lock")
+            .as_deref()
+            .and_then(SettingsSave::from_json)
+            .expect("settings survive a run-snapshot recovery untouched");
+        assert_eq!((settings.music, settings.sfx), (4, 6));
+        assert!(settings.reduced_motion);
+        assert!(!settings.high_contrast);
+    }
 }

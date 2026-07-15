@@ -98,6 +98,7 @@ pub mod artifacts;
 pub mod baseline;
 pub mod browser;
 mod cold_menu;
+mod corrupt_save_recovery;
 pub mod error;
 mod fight_palette_accessible;
 mod fight_palette_desktop;
@@ -131,6 +132,7 @@ pub const SCENARIOS: &[&str] = &[
     "keyboard-accessibility",
     "zoom-200",
     "touch-targets",
+    "corrupt-save-recovery",
 ];
 
 /// Dispatches `--scenario <name>` to the matching scenario module. Known
@@ -163,6 +165,7 @@ pub fn run_scenario(
         "keyboard-accessibility" => keyboard_accessibility::run(update_baselines),
         "zoom-200" => zoom_200::run(update_baselines),
         "touch-targets" => touch_targets::run(update_baselines),
+        "corrupt-save-recovery" => corrupt_save_recovery::run(update_baselines),
         other => Err(SmokeError::usage(format!(
             "unknown --scenario `{other}` (known scenarios: {})",
             SCENARIOS.join(", ")
