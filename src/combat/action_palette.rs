@@ -407,6 +407,15 @@ fn spawn_action_button(
                 ui_font.text_font(15.0),
                 TextColor(CREAM),
             ));
+            // #124: `descriptor.cost.display_text()`, not `sublabel()` —
+            // this spawn runs from `DescriptorContext::spawn_placeholder()`
+            // (see `spawn_action_bar`), whose `Attributes` are both defaults,
+            // not the real fighters', so a hit chance computed from it here
+            // would be wrong. The cost text alone is safe: it depends only
+            // on the fixed action, never on placeholder data.
+            // `update_action_buttons` resyncs this text (including the real
+            // hit chance) the moment real duel state exists, later in this
+            // same `OnEnter` frame and before anything renders.
             button.spawn((
                 Text::new(descriptor.cost.display_text()),
                 ui_font.text_font(11.0),
@@ -435,7 +444,12 @@ fn spawn_phone_action_button(
         (BUTTON_DISABLED, TEXT_DISABLED)
     };
     let cost_or_reason = if enabled {
-        descriptor.cost.display_text()
+        // #124: `descriptor` here always carries the real, live-queried
+        // `Attributes` for both fighters (this button only spawns once a
+        // category is opened, from `sync_phone_open_category`'s
+        // `live_descriptors` — never the bar's cosmetic spawn-time
+        // placeholder), so `sublabel()`'s hit chance is always correct.
+        descriptor.sublabel()
     } else {
         descriptor
             .disabled_reason
@@ -650,11 +664,24 @@ fn live_descriptors(
 /// Greys out (and un-greys) action buttons to match each button's current
 /// [`ActionDescriptor::enabled`], and swaps the cost-line text to the
 /// descriptor's [`ActionDescriptor::disabled_reason`] while disabled (#189's
-/// "expose their reason" acceptance criterion). Only touches buttons whose
-/// enabled state actually flipped, so it does not fight the hover-feedback
-/// system — the exact cadence the pre-#189 HUD already used for color alone.
-/// Applies identically to desktop's seven buttons and phone's (0–3) open
-/// action-row buttons — both carry the same [`ActionButton`] component.
+/// "expose their reason" acceptance criterion). The background/greyed-marker
+/// swap below only touches buttons whose enabled state actually flipped, so
+/// it does not fight the hover-feedback system — the exact cadence the
+/// pre-#189 HUD already used for color alone. Applies identically to
+/// desktop's seven buttons and phone's (0–3) open action-row buttons — both
+/// carry the same [`ActionButton`] component.
+///
+/// The cost-or-reason *text* itself is resynced every call regardless of
+/// that flip (#124), unlike before: the stamina/restore cost is fixed per
+/// action, but the two strikes' hit-chance line depends on both fighters'
+/// `Attributes` — which the desktop bar's cosmetic spawn-time placeholder
+/// (`DescriptorContext::spawn_placeholder`, see [`spawn_action_bar`]) has no
+/// real values for. Resyncing unconditionally corrects that placeholder text
+/// as soon as this system runs with real duel state, the same frame `OnEnter`
+/// spawned the bar and before anything is rendered — the same guarantee
+/// `spawn_placeholder`'s docs already describe for cost text, extended to
+/// hit chance — rather than waiting on an enabled/disabled flip that may
+/// never happen for a button that starts (and stays) enabled.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn update_action_buttons(
     mut commands: Commands,
@@ -681,31 +708,36 @@ pub(super) fn update_action_buttons(
         // disabled rather than making a claim about state that isn't real
         // yet.
         let enabled = has_turn && descriptor.enabled;
-        if enabled != was_disabled {
-            // Already in the right state; leave hover feedback alone.
-            continue;
+        // Only the background/greyed-marker swap is gated on a real flip;
+        // see this function's doc comment for why the text below is not.
+        if enabled == was_disabled {
+            if enabled {
+                commands.entity(entity).remove::<DisabledButton>();
+                background.0 = BUTTON_NORMAL;
+            } else {
+                commands.entity(entity).insert(DisabledButton);
+                background.0 = BUTTON_DISABLED;
+            }
         }
-        let text_color = if enabled {
-            commands.entity(entity).remove::<DisabledButton>();
-            background.0 = BUTTON_NORMAL;
-            CREAM
+        let text_color = if enabled { CREAM } else { TEXT_DISABLED };
+        let cost_or_reason_text = if enabled {
+            descriptor.sublabel()
         } else {
-            commands.entity(entity).insert(DisabledButton);
-            background.0 = BUTTON_DISABLED;
-            TEXT_DISABLED
+            descriptor
+                .disabled_reason
+                .clone()
+                .unwrap_or_else(|| "Lupta nu a început încă.".to_string())
         };
         for child in children.iter() {
             if let Ok((mut color, text, is_cost_or_reason)) = text_nodes.get_mut(child) {
-                color.0 = text_color;
-                if is_cost_or_reason && let Some(mut text) = text {
-                    text.0 = if enabled {
-                        descriptor.cost.display_text()
-                    } else {
-                        descriptor
-                            .disabled_reason
-                            .clone()
-                            .unwrap_or_else(|| "Lupta nu a început încă.".to_string())
-                    };
+                if color.0 != text_color {
+                    color.0 = text_color;
+                }
+                if is_cost_or_reason
+                    && let Some(mut text) = text
+                    && text.0 != cost_or_reason_text
+                {
+                    text.0 = cost_or_reason_text.clone();
                 }
             }
         }
