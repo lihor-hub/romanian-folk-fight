@@ -459,3 +459,138 @@ jobs:
         path: target/xtask-artifacts/web-smoke/
         if-no-files-found: ignore
         retention-days: 14
+
+  keyboard-accessibility:
+    name: keyboard-accessibility (keyboard-only nav + audio controls, every screen)
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Add wasm target
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.8
+
+    - name: Set up Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "sccache"
+
+    - name: Install Trunk
+      uses: taiki-e/install-action@v2
+      with:
+        tool: trunk
+
+    - name: Verify Chrome is available
+      run: google-chrome-stable --version || google-chrome --version
+
+    - name: Run the keyboard-accessibility browser smoke
+      # #216: drives every current screen (menu, creation, settings, pause,
+      # fight HUD, result/game-over/victory, shop) with real CDP keypresses,
+      # asserting a deterministic focus lap that wraps back to its starting
+      # control (keyed on `focused_entity`, skipping hidden/disabled), the
+      # gold focus marker, and keyboard-operable audio controls. Same
+      # alias-independent invocation as the jobs above.
+      run: cargo run --locked --package xtask -- web-smoke --scenario keyboard-accessibility
+
+    - name: Upload smoke artifacts (always, for post-mortem on failure)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: web-smoke-keyboard-accessibility
+        path: target/xtask-artifacts/web-smoke/
+        if-no-files-found: ignore
+        retention-days: 14
+
+  zoom-200:
+    name: zoom-200 (required screens playable at 200% desktop zoom)
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Add wasm target
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.8
+
+    - name: Set up Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "sccache"
+
+    - name: Install Trunk
+      uses: taiki-e/install-action@v2
+      with:
+        tool: trunk
+
+    - name: Verify Chrome is available
+      run: google-chrome-stable --version || google-chrome --version
+
+    - name: Run the zoom-200 browser smoke
+      # #216: emulates 200% desktop browser zoom and asserts no required
+      # control is clipped and the page does not scroll unexpectedly on any
+      # current screen. Same alias-independent invocation as the jobs above.
+      run: cargo run --locked --package xtask -- web-smoke --scenario zoom-200
+
+    - name: Upload smoke artifacts (always, for post-mortem on failure)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: web-smoke-zoom-200
+        path: target/xtask-artifacts/web-smoke/
+        if-no-files-found: ignore
+        retention-days: 14
+
+  touch-targets:
+    name: touch-targets (interactive targets meet 44x44 CSS px)
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Add wasm target
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.8
+
+    - name: Set up Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "sccache"
+
+    - name: Install Trunk
+      uses: taiki-e/install-action@v2
+      with:
+        tool: trunk
+
+    - name: Verify Chrome is available
+      run: google-chrome-stable --version || google-chrome --version
+
+    - name: Run the touch-targets browser smoke
+      # #216: measures every current interactive target on the phone
+      # viewport and asserts none is below the 44x44 CSS-pixel minimum. Same
+      # alias-independent invocation as the jobs above.
+      run: cargo run --locked --package xtask -- web-smoke --scenario touch-targets
+
+    - name: Upload smoke artifacts (always, for post-mortem on failure)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: web-smoke-touch-targets
+        path: target/xtask-artifacts/web-smoke/
+        if-no-files-found: ignore
+        retention-days: 14
