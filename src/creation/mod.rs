@@ -1034,6 +1034,7 @@ mod tests {
         app.insert_resource(store);
         app.insert_resource(crate::progression::Level::default());
         app.insert_resource(crate::progression::Wallet::default());
+        app.insert_resource(crate::progression::LifetimeEarnings::default());
         app.insert_resource(crate::roster::LadderProgress::default());
         app.insert_resource(OwnedItems::default());
         app.insert_resource(PlayerEquipment::default());

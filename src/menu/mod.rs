@@ -696,7 +696,7 @@ mod tests {
     use crate::character::Attributes;
     use crate::creation::PlayerCharacter;
     use crate::items::ItemId;
-    use crate::progression::{Level, Wallet};
+    use crate::progression::{Level, LifetimeEarnings, Wallet};
     use crate::roster::LadderProgress;
     use crate::save::SaveGame;
     use crate::shop::{OwnedItems, PlayerEquipment};
@@ -725,6 +725,7 @@ mod tests {
             &player,
             &level,
             &Wallet(210),
+            &LifetimeEarnings(260),
             &OwnedItems(HashSet::from([ItemId::ToporDePadurar])),
             &PlayerEquipment(equipment),
             &LadderProgress(4),
@@ -814,6 +815,11 @@ mod tests {
             }
         );
         assert_eq!(*app.world().resource::<Wallet>(), Wallet(210));
+        assert_eq!(
+            *app.world().resource::<LifetimeEarnings>(),
+            LifetimeEarnings(260),
+            "the saved lifetime-earnings total is restored too (#193)"
+        );
         assert_eq!(
             *app.world().resource::<OwnedItems>(),
             OwnedItems(HashSet::from([ItemId::ToporDePadurar]))

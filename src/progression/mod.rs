@@ -20,11 +20,9 @@ use bevy::prelude::*;
 
 use crate::combat::{CombatEvent, CombatLogEvent, CombatSide};
 use crate::core::{GameState, despawn_screen};
-use crate::creation::PlayerCharacter;
 use crate::flow::FlowIntent;
 use crate::roster::LadderProgress;
 use crate::save::SaveRequested;
-use crate::shop::{OwnedItems, PlayerEquipment};
 use crate::ui_widgets::focus::{FocusNavigationPlugin, FocusNavigationSet};
 
 /// Galbeni a fresh run starts with, so the first shop visit isn't pointless.
@@ -216,7 +214,8 @@ fn clear_fight_end_delay(mut commands: Commands) {
 }
 
 /// Drops the level-up allocation draft when the result screen exits: only a
-/// confirmed allocation touches [`PlayerCharacter`] and [`Level`], so points
+/// confirmed allocation touches [`crate::creation::PlayerCharacter`] and
+/// [`Level`], so points
 /// left in an abandoned draft simply stay unspent (a fresh draft is built on
 /// the next visit).
 fn clear_level_up_draft(mut commands: Commands) {
@@ -331,15 +330,16 @@ fn award_victory(
 /// Resets every run-scoped resource so the next run starts clean: a fresh
 /// [`Wallet`], level 1 with no XP or points, no owned or equipped shop gear,
 /// the opponent ladder back at the first rung, no confirmed
-/// [`PlayerCharacter`], no stale [`FightOutcome`].
+/// [`crate::creation::PlayerCharacter`], no stale [`FightOutcome`].
+///
+/// #193: the run-scoped half of this (everything but [`FightOutcome`], which
+/// is a per-fight ephemeral never captured in a save) delegates to
+/// [`crate::save::snapshot::reset`] — the single authoritative list of
+/// run-scoped fields that `SaveGame::capture`/`restore` also use, so this
+/// can never drift into a second, hand-maintained reset list the way it did
+/// pre-#193.
 pub(crate) fn reset_run(commands: &mut Commands) {
-    commands.insert_resource(Wallet::default());
-    commands.insert_resource(Level::default());
-    commands.insert_resource(LifetimeEarnings::default());
-    commands.insert_resource(LadderProgress::default());
-    commands.insert_resource(OwnedItems::default());
-    commands.insert_resource(PlayerEquipment::default());
-    commands.remove_resource::<PlayerCharacter>();
+    crate::save::snapshot::reset(commands);
     commands.remove_resource::<FightOutcome>();
 }
 
@@ -748,6 +748,76 @@ mod tests {
         assert!(
             app.world().get_resource::<FightEndDelay>().is_none(),
             "OnExit(Fight) clears the countdown"
+        );
+    }
+
+    /// #193: `reset_run` no longer hand-maintains its own list of run-scoped
+    /// resources — it delegates to `crate::save::snapshot::reset`, the same
+    /// authoritative contract `SaveGame::capture`/`restore` use. This seeds
+    /// every one of those resources (plus the ephemeral `FightOutcome`,
+    /// which the snapshot contract does not own) with non-default values and
+    /// checks every single one lands back at its fresh-run value.
+    #[test]
+    fn reset_run_clears_every_snapshot_owned_resource_and_the_fight_outcome() {
+        use crate::character::{Attributes, PlayerAppearance};
+        use crate::creation::PlayerCharacter;
+        use crate::items::{Equipment, ItemId};
+        use crate::shop::{OwnedItems, PlayerEquipment};
+        use std::collections::HashSet;
+
+        let mut app = test_app();
+        app.insert_resource(PlayerCharacter {
+            name: "Someone".to_string(),
+            attributes: Attributes {
+                putere: 9,
+                agilitate: 9,
+                vitalitate: 9,
+                noroc: 9,
+            },
+            appearance: PlayerAppearance::default(),
+        });
+        app.insert_resource(Wallet(12_345));
+        app.insert_resource(Level {
+            level: 8,
+            xp: 77,
+            unspent_points: 3,
+        });
+        app.insert_resource(LifetimeEarnings(9_999));
+        app.insert_resource(LadderProgress(15));
+        app.insert_resource(OwnedItems(HashSet::from([ItemId::Palos])));
+        let mut equipment = Equipment::default();
+        equipment.equip(ItemId::Palos);
+        app.insert_resource(PlayerEquipment(equipment));
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
+
+        fn reset_system(mut commands: Commands) {
+            reset_run(&mut commands);
+        }
+        app.add_systems(Update, reset_system);
+        app.update();
+
+        assert!(
+            app.world().get_resource::<PlayerCharacter>().is_none(),
+            "a fresh run has no confirmed hero yet"
+        );
+        assert_eq!(*app.world().resource::<Wallet>(), Wallet::default());
+        assert_eq!(*app.world().resource::<Level>(), Level::default());
+        assert_eq!(
+            *app.world().resource::<LifetimeEarnings>(),
+            LifetimeEarnings::default()
+        );
+        assert_eq!(
+            *app.world().resource::<LadderProgress>(),
+            LadderProgress::default()
+        );
+        assert_eq!(*app.world().resource::<OwnedItems>(), OwnedItems::default());
+        assert_eq!(
+            *app.world().resource::<PlayerEquipment>(),
+            PlayerEquipment::default()
+        );
+        assert!(
+            app.world().get_resource::<FightOutcome>().is_none(),
+            "the ephemeral fight outcome is cleared alongside the snapshot-owned contract"
         );
     }
 }
