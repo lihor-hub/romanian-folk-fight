@@ -3,7 +3,8 @@ name: Browser smoke
 # Separate from `ci.yml` (native/wasm build+test) and `deploy.yml` (GitHub
 # Pages publish): this workflow builds+serves the WASM game and drives a
 # real, freshly-launched Chrome against it via `cargo xtask web-smoke
-# --scenario <name>` (#144/#168/#187/#189/#191/#198/#199/#200/#201/#213/#214).
+# --scenario <name>`
+# (#144/#168/#187/#189/#191/#198/#199/#200/#201/#213/#214/#217).
 # It never touches #141's future asset workflow.
 #
 # `gold-journey` now walks the full #198 matrix in one invocation: both
@@ -650,6 +651,102 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: web-smoke-touch-targets
+        path: target/xtask-artifacts/web-smoke/
+        if-no-files-found: ignore
+        retention-days: 14
+
+  save-reload:
+    name: save-reload (result -> shop -> real reload resumes at Shop, run values intact)
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Add wasm target
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.8
+
+    - name: Set up Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "sccache"
+
+    - name: Install Trunk
+      uses: taiki-e/install-action@v2
+      with:
+        tool: trunk
+
+    - name: Verify Chrome is available
+      run: google-chrome-stable --version || google-chrome --version
+
+    - name: Run the save-reload browser smoke
+      # #217: drives menu -> creation -> a won first fight -> result -> shop
+      # (buying one affordable item through the review seam), reads the run
+      # snapshot straight out of localStorage (rff_save_v1), issues a real
+      # Page.reload (a full wasm re-boot, not an in-memory reset), presses
+      # Continuă, and asserts the game resumes on the shop screen with the
+      # exact same stored snapshot as before the reload (see
+      # xtask/src/web_smoke/save_reload.rs).
+      run: cargo run --locked --package xtask -- web-smoke --scenario save-reload
+
+    - name: Upload smoke artifacts (always, for post-mortem on failure)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: web-smoke-save-reload
+        path: target/xtask-artifacts/web-smoke/
+        if-no-files-found: ignore
+        retention-days: 14
+
+  abandon-forfeit:
+    name: abandon-forfeit (Abandonează clears the run snapshot, disables Continuă)
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Add wasm target
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.8
+
+    - name: Set up Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "sccache"
+
+    - name: Install Trunk
+      uses: taiki-e/install-action@v2
+      with:
+        tool: trunk
+
+    - name: Verify Chrome is available
+      run: google-chrome-stable --version || google-chrome --version
+
+    - name: Run the abandon-forfeit browser smoke
+      # #217: drives menu -> creation -> fight (the hero-confirmation
+      # checkpoint autosaves), presses a real Escape key to open the pause
+      # overlay, then presses Abandonează through the review seam
+      # (pressButton PauseAbandon). Asserts the run snapshot reads back null
+      # from localStorage (forfeited, not merely unchanged), the screen is
+      # MainMenu, and a further Continue press does not navigate anywhere
+      # (see xtask/src/web_smoke/abandon_forfeit.rs).
+      run: cargo run --locked --package xtask -- web-smoke --scenario abandon-forfeit
+
+    - name: Upload smoke artifacts (always, for post-mortem on failure)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: web-smoke-abandon-forfeit
         path: target/xtask-artifacts/web-smoke/
         if-no-files-found: ignore
         retention-days: 14

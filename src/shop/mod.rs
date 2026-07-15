@@ -18,7 +18,7 @@ use crate::flow::FlowIntent;
 use crate::items::{CATALOG, Equipment, Item, ItemId, Slot};
 use crate::menu::DisabledButton;
 use crate::progression::Wallet;
-use crate::save::SaveRequested;
+use crate::save::{ResumeDestination, SaveRequested};
 use crate::theme::{
     ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD,
     MIN_TOUCH_TARGET, PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
@@ -231,7 +231,10 @@ impl Plugin for ShopPlugin {
             .add_plugins((crate::ui_widgets::ScrollInputPlugin, FocusNavigationPlugin))
             .add_message::<SaveRequested>()
             .add_systems(PreStartup, load_shop_icons)
-            .add_systems(OnEnter(GameState::Shop), spawn_shop_screen)
+            .add_systems(
+                OnEnter(GameState::Shop),
+                (spawn_shop_screen, autosave_on_shop_entry),
+            )
             .add_systems(
                 Update,
                 (
@@ -817,12 +820,24 @@ type ChangedButton = (Changed<Interaction>, With<Button>);
 /// Query filter: like [`ChangedButton`], but skipping disabled buttons.
 type ChangedEnabledButton = (Changed<Interaction>, With<Button>, Without<DisabledButton>);
 
+/// Autosaves immediately on arriving in the shop -- both routes that reach
+/// [`GameState::Shop`] (`FightResult`'s **La prăvălie** and `Victory`'s
+/// **Turul 2**, see `crate::flow`'s transition table) are safe checkpoints in
+/// their own right (#217): the shop is the resume destination even before
+/// any purchase or equip happens here, so a reload right after arriving still
+/// resumes at the shop with every current run value intact, not stranded at
+/// whatever destination the *previous* checkpoint stored.
+fn autosave_on_shop_entry(mut save_requests: MessageWriter<SaveRequested>) {
+    save_requests.write(SaveRequested(ResumeDestination::Shop));
+}
+
 /// Runs the [`ShopAction`] of whichever shop button was pressed: buys (via
 /// [`try_buy`]) and auto-equips, equips owned items, or emits
 /// [`FlowIntent::BackToArena`] to leave for the fight. State is re-derived
 /// from the resources on every press, so a stale-looking button can never
 /// overdraw the wallet. Every successful purchase or equip swap autosaves
-/// the run (see [`crate::save`]) before any intent is written.
+/// the run (see [`crate::save`]), tagged [`ResumeDestination::Shop`], before
+/// any intent is written.
 fn handle_shop_actions(
     interactions: Query<(&Interaction, &ShopAction), ChangedButton>,
     mut wallet: ResMut<Wallet>,
@@ -843,12 +858,12 @@ fn handle_shop_actions(
                 match ItemButtonState::of(id, &wallet, &owned, &equipment) {
                     ItemButtonState::Equip => {
                         equipment.0.equip(id);
-                        save_requests.write(SaveRequested);
+                        save_requests.write(SaveRequested(ResumeDestination::Shop));
                     }
                     ItemButtonState::Buy => {
                         if try_buy(&mut wallet, &mut owned, id).is_ok() {
                             equipment.0.equip(id);
-                            save_requests.write(SaveRequested);
+                            save_requests.write(SaveRequested(ResumeDestination::Shop));
                         }
                     }
                     // Inert markers; presses on them change nothing.

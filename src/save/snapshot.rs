@@ -139,17 +139,35 @@ fn parse_item(name: &str) -> Option<ItemId> {
 /// small, closed set rather than the raw [`crate::core::GameState`] (which
 /// has states, like `FightResult` or `CharacterCreation`, that are never
 /// safe to land on directly from a stored snapshot). Pure save-schema data:
-/// nothing today reads it back out of a restored run (no gameplay system
-/// tracks "the current resume destination" as a live resource), so
-/// [`SaveGame::restore`] does not insert it as one. #217 owns wiring an
-/// actual Continue journey that consults [`SaveGame::resume_destination`];
-/// until then, every capture uses the one variant that matches v1's only
-/// real behavior.
+/// nothing reads it back out of a *restored* run (no gameplay system tracks
+/// "the current resume destination" as a live resource), so
+/// [`SaveGame::restore`] does not insert it as one -- it is only ever read
+/// off the still-serialized [`SaveGame`] by `crate::menu`'s **Continuă**
+/// handler (#217), which turns it into exactly one
+/// [`crate::flow::FlowIntent::ContinueRun`]/[`crate::flow::FlowIntent::ContinueToShop`]
+/// (never interpreted as a raw field by any other screen -- see
+/// `crate::flow`'s ownership-boundary docs).
+///
+/// #217 wires every safe checkpoint (hero confirmation, the result/reward
+/// autosave, shop entry/purchases/equips, and the victory/lap autosave) to
+/// pass the destination that actually matches where **Continuă** should
+/// land, via [`SaveGame::capture`]'s explicit parameter -- there is no
+/// implicit/default destination for a fresh capture, precisely so a new
+/// checkpoint can never forget to pick one. A future safe destination (a
+/// child of #133/#137/#140) adds a new variant here plus a new arm wherever
+/// `crate::menu` maps [`ResumeDestination`] to a `FlowIntent` -- see that
+/// module's doc comment for the exact extension steps.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ResumeDestination {
+    /// Resume straight into the next fight -- the destination for the hero-
+    /// confirmation and result/reward checkpoints.
     #[default]
     Fight,
+    /// Resume into the shop -- the destination for shop entry (whether
+    /// reached from the result screen or from victory's next-lap), and every
+    /// shop purchase/equip autosave (#217).
+    Shop,
 }
 
 /// Just enough of a stored payload to read which version it claims to be,
@@ -282,7 +300,14 @@ pub struct SaveGame {
 }
 
 impl SaveGame {
-    /// Snapshots the current run from its resources.
+    /// Snapshots the current run from its resources, tagged with the exact
+    /// [`ResumeDestination`] **Continuă** should land on if this snapshot is
+    /// the one later restored. #217: every call site is one of the safe
+    /// checkpoints (hero confirmation, result/reward, shop entry/purchase/
+    /// equip, victory/lap) and passes the destination that specific
+    /// checkpoint implies -- there is deliberately no default here (unlike
+    /// pre-#217, which always captured [`ResumeDestination::Fight`]), so a
+    /// new checkpoint can never forget to choose one.
     // A Bevy-adjacent capture helper: each parameter is a distinct run-scoped
     // resource being snapshotted (see the module docs' ownership contract).
     #[allow(clippy::too_many_arguments)]
@@ -294,6 +319,7 @@ impl SaveGame {
         owned: &OwnedItems,
         equipment: &PlayerEquipment,
         ladder: &LadderProgress,
+        resume_destination: ResumeDestination,
     ) -> Self {
         let mut owned_items: Vec<String> = owned.0.iter().map(|id| item_name(*id)).collect();
         owned_items.sort();
@@ -316,11 +342,7 @@ impl SaveGame {
             equipped,
             ladder_progress: ladder.0,
             lap: ladder.lap(),
-            // Every autosave point today (victory payout, level-up confirm,
-            // shop purchase/equip) resumes into the same place — see the
-            // pre-#193 doc this replaces. #217 will compute this from
-            // richer context once it builds the actual Continue journey.
-            resume_destination: ResumeDestination::default(),
+            resume_destination,
         }
     }
 
@@ -530,7 +552,19 @@ pub(crate) mod tests {
         )
     }
 
+    /// A sample save whose resume destination is [`ResumeDestination::Fight`]
+    /// -- the destination every existing fixture/migration/round-trip test in
+    /// this module (and every consumer test in `save::mod`/`save::storage`)
+    /// was already written against pre-#217, so it stays the default here
+    /// rather than every one of those call sites needing to spell it out.
     pub(crate) fn sample_save() -> SaveGame {
+        sample_save_with_destination(ResumeDestination::Fight)
+    }
+
+    /// Like [`sample_save`], but with an explicit [`ResumeDestination`] --
+    /// used by this module's own destination-specific tests (e.g. the shop
+    /// checkpoint).
+    pub(crate) fn sample_save_with_destination(resume_destination: ResumeDestination) -> SaveGame {
         let (player, level, wallet, lifetime_earnings, owned, equipment, ladder) = sample_run();
         SaveGame::capture(
             &player,
@@ -540,6 +574,7 @@ pub(crate) mod tests {
             &owned,
             &equipment,
             &ladder,
+            resume_destination,
         )
     }
 
@@ -586,7 +621,22 @@ pub(crate) mod tests {
         assert_eq!(
             save.resume_destination,
             ResumeDestination::Fight,
-            "every autosave point resumes into the arena today"
+            "sample_save's destination defaults to Fight"
+        );
+    }
+
+    /// #217: `capture` stores whichever [`ResumeDestination`] the caller
+    /// passes -- e.g. the shop checkpoint's -- not a hardcoded default.
+    #[test]
+    fn capture_stores_the_shop_resume_destination_when_given_it() {
+        let save = sample_save_with_destination(ResumeDestination::Shop);
+        assert_eq!(save.resume_destination, ResumeDestination::Shop);
+        let json = save.to_json().expect("plain data serializes");
+        let restored = SaveGame::from_json(&json).expect("own JSON loads");
+        assert_eq!(
+            restored.resume_destination(),
+            ResumeDestination::Shop,
+            "the shop destination round-trips through JSON"
         );
     }
 
@@ -609,6 +659,7 @@ pub(crate) mod tests {
             &owned,
             &equipment,
             &ladder,
+            ResumeDestination::Fight,
         )
         .to_json()
         .expect("plain data serializes");

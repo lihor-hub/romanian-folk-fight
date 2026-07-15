@@ -24,6 +24,7 @@
 //! |---|---|---|---|---|
 //! | `MainMenu` | `StartNewGame` | `CharacterCreation` | #155 | button |
 //! | `MainMenu` | `ContinueRun` | `Fight` | #155 | button |
+//! | `MainMenu` | `ContinueToShop` | `Shop` | #217 | button |
 //! | `CharacterCreation` | `ConfirmHero` | `Fight` | #155 | button |
 //! | `CharacterCreation` | `BackToMenu` | `MainMenu` | #155 | button |
 //! | `FightResult` | `GoToShop` | `Shop` | #164 | button |
@@ -78,9 +79,17 @@ pub enum FlowIntent {
     /// Menu → creation: start a fresh run. The run reset must already have
     /// happened.
     StartNewGame,
-    /// Menu → its current v1 destination (Fight): resume a restored save.
-    /// The save must already be restored into the run resources.
+    /// Menu → Fight: resume a restored save whose stored
+    /// [`crate::save::ResumeDestination`] is `Fight` (hero confirmation and
+    /// the result/reward checkpoint both resume here). The save must already
+    /// be restored into the run resources.
     ContinueRun,
+    /// Menu → Shop: resume a restored save whose stored
+    /// [`crate::save::ResumeDestination`] is `Shop` (the shop-entry and
+    /// purchase/equip checkpoints, and the victory/lap checkpoint, all
+    /// resume here) (#217). The save must already be restored into the run
+    /// resources.
+    ContinueToShop,
     /// Creation → Fight: the hero/loadout is confirmed and stored.
     ConfirmHero,
     /// Creation → menu, game-over → menu (with the run reset), or victory →
@@ -101,9 +110,12 @@ pub enum FlowIntent {
     /// Victory → Shop: continue the looping run into lap 2 (**Turul 2**).
     /// The ladder already advanced past the last lap-1 opponent.
     NextLap,
-    /// Paused Fight → menu: **Abandonează**. Not a defeat and does not touch
-    /// the save — the run keeps its last autosave and the fight restarts
-    /// fresh on return (#146 owns any future change to this policy).
+    /// Paused Fight → menu: **Abandonează**. Not a defeat, but a forfeit
+    /// (#217): the run snapshot is already cleared and every run-scoped
+    /// resource already reset before this is emitted (see
+    /// `combat::pause::handle_overlay_buttons`), so **Continuă** goes back to
+    /// disabled and there is no fresh full-health retry of the abandoned
+    /// fight -- only a whole new run via character creation.
     AbandonFight,
     /// Fight → FightResult: the player won a non-final fight. Emitted by
     /// `progression::tick_fight_end_delay` once the end-of-fight delay
@@ -149,6 +161,7 @@ fn transition_for(from: GameState, intent: FlowIntent) -> Option<GameState> {
     match (from, intent) {
         (MainMenu, StartNewGame) => Some(CharacterCreation),
         (MainMenu, ContinueRun) => Some(Fight),
+        (MainMenu, ContinueToShop) => Some(Shop),
         (CharacterCreation, ConfirmHero) => Some(Fight),
         (CharacterCreation, BackToMenu) => Some(MainMenu),
         (FightResult, GoToShop) => Some(Shop),
@@ -310,6 +323,16 @@ mod tests {
         );
     }
 
+    /// #217: a save whose stored resume destination is the shop routes
+    /// **Continuă** there instead of the arena.
+    #[test]
+    fn menu_continue_to_shop_routes_to_shop() {
+        assert_eq!(
+            transition_for(GameState::MainMenu, FlowIntent::ContinueToShop),
+            Some(GameState::Shop)
+        );
+    }
+
     #[test]
     fn creation_confirm_hero_routes_to_fight() {
         assert_eq!(
@@ -414,6 +437,7 @@ mod tests {
         let owned = [
             (GameState::MainMenu, FlowIntent::StartNewGame),
             (GameState::MainMenu, FlowIntent::ContinueRun),
+            (GameState::MainMenu, FlowIntent::ContinueToShop),
             (GameState::CharacterCreation, FlowIntent::ConfirmHero),
             (GameState::CharacterCreation, FlowIntent::BackToMenu),
             (GameState::FightResult, FlowIntent::GoToShop),
@@ -440,6 +464,7 @@ mod tests {
         let all_intents = [
             FlowIntent::StartNewGame,
             FlowIntent::ContinueRun,
+            FlowIntent::ContinueToShop,
             FlowIntent::ConfirmHero,
             FlowIntent::BackToMenu,
             FlowIntent::GoToShop,
@@ -723,6 +748,25 @@ mod tests {
             step(&mut app, FlowIntent::BackToArena),
             GameState::Fight,
             "leaving the shop starts the next fight"
+        );
+    }
+
+    /// menu -> shop -> arena: #217's other **Continuă** destination. A save
+    /// captured at a shop checkpoint resumes straight into the shop instead
+    /// of the arena, and from there the run continues exactly like any other
+    /// shop visit.
+    #[test]
+    fn journey_menu_continue_to_shop_then_back_to_arena() {
+        let mut app = test_app();
+        assert_eq!(
+            step(&mut app, FlowIntent::ContinueToShop),
+            GameState::Shop,
+            "Continuă resumes into the shop when that's the saved destination"
+        );
+        assert_eq!(
+            step(&mut app, FlowIntent::BackToArena),
+            GameState::Fight,
+            "leaving the shop starts the fight, same as any other shop visit"
         );
     }
 

@@ -22,7 +22,7 @@ use crate::cutout::{CutoutRig, human_template_for, spawn_cutout_rig_with_gear};
 use crate::flow::FlowIntent;
 use crate::items::Equipment;
 use crate::menu::DisabledButton;
-use crate::save::SaveRequested;
+use crate::save::{ResumeDestination, SaveRequested};
 use crate::shop::{OwnedItems, PlayerEquipment};
 use crate::theme::{
     ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD,
@@ -815,7 +815,7 @@ fn handle_creation_actions(
                         draft.starter_items().iter().copied().collect(),
                     ));
                     commands.insert_resource(PlayerEquipment(equipment));
-                    save_requests.write(SaveRequested);
+                    save_requests.write(SaveRequested(ResumeDestination::Fight));
                     draft.reset();
                     flow_intents.write(FlowIntent::ConfirmHero);
                 }
@@ -1727,6 +1727,11 @@ mod tests {
         assert!(
             save.equipped.contains(&"BataCiobaneasca".to_string()),
             "preset starter loadout is captured"
+        );
+        assert_eq!(
+            save.resume_destination(),
+            crate::save::ResumeDestination::Fight,
+            "hero confirmation resumes straight into the arena (#217)"
         );
     }
 

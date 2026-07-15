@@ -5,7 +5,7 @@ use bevy::prelude::*;
 
 use crate::core::{GameState, UiFont, despawn_screen};
 use crate::flow::FlowIntent;
-use crate::save::{SaveStore, SnapshotLoad, load_save, load_save_outcome};
+use crate::save::{ResumeDestination, SaveStore, SnapshotLoad, load_save, load_save_outcome};
 use crate::settings::SettingsOpen;
 use crate::theme::{
     ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD,
@@ -56,8 +56,11 @@ enum MainMenuLayoutRole {
 pub enum MenuAction {
     /// Start a new game (transition to [`GameState::CharacterCreation`]).
     NewGame,
-    /// Resume the saved run: restore every run resource from the save and
-    /// enter [`GameState::Fight`]. Only spawned when a valid save loads.
+    /// Resume the saved run: restore every run resource from the save, then
+    /// emit exactly one flow resume intent chosen from the save's own
+    /// [`crate::save::ResumeDestination`] (#217) --
+    /// [`FlowIntent::ContinueRun`] (the arena) or [`FlowIntent::ContinueToShop`]
+    /// (the shop). Only spawned when a valid save loads.
     Continue,
     /// Clears (quarantines) the stored run snapshot after it failed to load
     /// as invalid or a newer-than-this-build version (#201) — see
@@ -378,8 +381,20 @@ fn handle_menu_actions(
                 let save = store.as_ref().and_then(|store| load_save(store));
                 match save {
                     Some(save) => {
+                        // #217: read the destination off the still-serialized
+                        // snapshot *before* restoring it into resources (the
+                        // destination itself is never inserted as a live
+                        // resource -- see `ResumeDestination`'s doc comment),
+                        // then emit exactly one flow resume intent chosen
+                        // from it. `crate::flow`'s transition table (not this
+                        // handler) is what actually validates and applies the
+                        // resulting `GameState` change.
+                        let destination = save.resume_destination();
                         save.restore(&mut commands);
-                        flow_intents.write(FlowIntent::ContinueRun);
+                        flow_intents.write(match destination {
+                            ResumeDestination::Fight => FlowIntent::ContinueRun,
+                            ResumeDestination::Shop => FlowIntent::ContinueToShop,
+                        });
                     }
                     None => warn!("Continuă pressed but no valid save loads; staying on the menu"),
                 }
@@ -762,8 +777,16 @@ mod tests {
     use crate::shop::{OwnedItems, PlayerEquipment};
     use std::collections::HashSet;
 
-    /// A valid mid-run save as stored JSON.
+    /// A valid mid-run save as stored JSON, resuming into the arena
+    /// ([`ResumeDestination::Fight`]) -- the destination every pre-#217 test
+    /// in this module already assumed.
     fn saved_run_json() -> String {
+        saved_run_json_with_destination(ResumeDestination::Fight)
+    }
+
+    /// Like [`saved_run_json`], but with an explicit [`ResumeDestination`] --
+    /// used to prove **Continuă** follows the shop destination too (#217).
+    fn saved_run_json_with_destination(resume_destination: ResumeDestination) -> String {
         let player = PlayerCharacter {
             name: "Greuceanu".to_string(),
             attributes: Attributes {
@@ -789,6 +812,7 @@ mod tests {
             &OwnedItems(HashSet::from([ItemId::ToporDePadurar])),
             &PlayerEquipment(equipment),
             &LadderProgress(4),
+            resume_destination,
         )
         .to_json()
         .expect("plain data serializes")
@@ -895,6 +919,34 @@ mod tests {
             *app.world().resource::<LadderProgress>(),
             LadderProgress(4),
             "the run resumes on the saved opponent"
+        );
+    }
+
+    /// #217: a save whose stored [`ResumeDestination`] is `Shop` resumes
+    /// straight into the shop, not the arena -- `MenuAction::Continue` emits
+    /// exactly one flow intent, chosen from the save, and restores every run
+    /// resource exactly like the Fight-destination case above.
+    #[test]
+    fn pressing_continua_resumes_into_the_shop_when_the_saved_destination_is_shop() {
+        let (mut app, _cell) = test_app_with_save(Some(&saved_run_json_with_destination(
+            ResumeDestination::Shop,
+        )));
+        let button = continue_button(&mut app).expect("Continuă is enabled");
+        app.world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        app.update(); // handler restores + queues the transition
+        app.update(); // transition applies
+
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::Shop,
+            "Continuă resumes into the shop when that's the saved destination"
+        );
+        assert_eq!(
+            *app.world().resource::<Wallet>(),
+            Wallet(210),
+            "run resources are restored exactly like the Fight-destination case"
         );
     }
 

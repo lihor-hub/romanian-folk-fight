@@ -12,6 +12,7 @@ use bevy::prelude::*;
 use crate::core::{GameState, LetterboxRect, UiFont, despawn_screen};
 use crate::flow::FlowIntent;
 use crate::menu::DisabledButton;
+use crate::save::SaveStore;
 use crate::settings::SettingsOpen;
 use crate::theme::{
     BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, PanelTexture, SCRIM, panel_bundle,
@@ -45,16 +46,25 @@ struct PausePanel;
 #[derive(Component)]
 pub(super) struct PauseButton;
 
-/// What an overlay button does when clicked.
+/// What an overlay button does when clicked. `pub` (not `pub(super)`) since
+/// #217's review seam (`crate::review`) needs to press **Abandonează**
+/// through the same `pressButton` command channel every other screen's
+/// navigation buttons use.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PauseAction {
+pub enum PauseAction {
     /// «Continuă lupta» — unpause and resume the same turn.
     Resume,
     /// «Setări» — open the settings overlay on top of the pause panel;
     /// closing it returns here, still paused.
     Settings,
-    /// «Abandonează» — back to the main menu; the run keeps its last
-    /// autosave, and the fight restarts fresh on return.
+    /// «Abandonează» — forfeits the run (#217): clears the run snapshot
+    /// (`SaveStore::clear`), resets every run-scoped resource exactly like a
+    /// game-over or a fresh new game (`crate::progression::reset_run`), and
+    /// returns to the main menu with **Continuă** disabled. This is *not* a
+    /// "keep the save, retry the same fight" pause -- there is no fresh
+    /// full-health retry of the abandoned fight; the player starts an
+    /// entirely new run via character creation, same as after any other
+    /// run-ending screen.
     Abandon,
 }
 
@@ -135,15 +145,16 @@ type ChangedEnabledPauseButton = (
 
 /// Applies the clicked overlay action: resume the duel (a [`PauseState`]
 /// substate change, outside the [`FlowIntent`] table's scope), open
-/// settings, or abandon to the main menu via [`FlowIntent::AbandonFight`].
-/// Abandoning is not a defeat and never touches the save — the run keeps
-/// its last autosave and the fight restarts on return (no domain side
-/// effect precedes the intent here; #146 owns any future change to this
-/// persistence policy).
+/// settings, or forfeit the run via [`FlowIntent::AbandonFight`] (#217).
+/// Abandoning applies its domain side effects -- clearing the run snapshot
+/// and resetting every run-scoped resource -- *before* writing the intent,
+/// per `crate::flow`'s ordering contract, so the flow table never routes to
+/// the main menu with a stale run (or a stale save) still in place.
 fn handle_overlay_buttons(
     mut commands: Commands,
     interactions: Query<(&Interaction, &PauseAction), ChangedEnabledOverlayButton>,
     mut next_pause: ResMut<NextState<PauseState>>,
+    store: Option<Res<SaveStore>>,
     mut intents: MessageWriter<FlowIntent>,
 ) {
     for (interaction, action) in &interactions {
@@ -154,6 +165,17 @@ fn handle_overlay_buttons(
             PauseAction::Resume => next_pause.set(PauseState::Running),
             PauseAction::Settings => commands.insert_resource(SettingsOpen),
             PauseAction::Abandon => {
+                // Forfeit (#217): reset every run-scoped resource (same list
+                // `crate::progression::reset_run` uses for a fresh new game
+                // or a game-over reset) and clear the run's own snapshot --
+                // never a fresh full-health retry of the abandoned fight, and
+                // **Continuă** goes back to disabled exactly like after game
+                // over.
+                crate::progression::reset_run(&mut commands);
+                match &store {
+                    Some(store) => store.clear(),
+                    None => warn!("Abandon pressed but no SaveStore resource exists"),
+                }
                 intents.write(FlowIntent::AbandonFight);
             }
         }
@@ -314,7 +336,7 @@ mod tests {
     use crate::core::CorePlugin;
     use crate::creation::PlayerCharacter;
     use crate::flow::FlowPlugin;
-    use crate::save::SaveRequested;
+    use crate::save::{SaveRequested, SaveStore};
     use bevy::state::app::StatesPlugin;
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
@@ -326,13 +348,20 @@ mod tests {
         noroc: 3,
     };
 
-    /// Headless app already on the fight screen with a fixed duel RNG.
+    /// Headless app already on the fight screen with a fixed duel RNG, and an
+    /// in-memory [`SaveStore`] (#217: `PauseAction::Abandon` reads/clears it)
+    /// -- every test in this module can seed/inspect it via
+    /// `app.world().resource::<SaveStore>()` directly, so there is no need to
+    /// thread a separate cell handle through every one of this helper's many
+    /// call sites.
     fn test_app() -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, FlowPlugin));
         app.add_plugins((ArenaPlugin, CombatPlugin));
         app.add_message::<SaveRequested>();
         app.init_resource::<ButtonInput<KeyCode>>();
+        let (store, _cell) = SaveStore::in_memory();
+        app.insert_resource(store);
         app.insert_resource(PlayerCharacter {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
@@ -600,19 +629,72 @@ mod tests {
     }
 
     #[test]
-    fn abandoneaza_returns_to_the_menu_without_touching_the_save() {
+    fn abandoneaza_forfeits_the_run_clearing_the_save_and_resetting_state() {
+        use crate::progression::{Level, LifetimeEarnings, Wallet};
+        use crate::roster::LadderProgress;
+        use crate::save::snapshot::tests::sample_save;
+        use crate::shop::{OwnedItems, PlayerEquipment};
+
         let mut app = test_app();
+        // A prior autosave sits in the store, and the run is mid-progress --
+        // exactly what a real abandon would find.
+        let seeded_json = sample_save().to_json().expect("plain data serializes");
+        app.world().resource::<SaveStore>().store(&seeded_json);
+        app.insert_resource(Wallet(9_999));
+        app.insert_resource(Level {
+            level: 8,
+            xp: 40,
+            unspent_points: 3,
+        });
+        app.insert_resource(LifetimeEarnings(12_345));
+        app.insert_resource(LadderProgress(37));
+        app.update();
+
         press_esc(&mut app);
         let button = find_overlay_button(&mut app, "Abandonează");
         click(&mut app, button);
-        assert_eq!(game_state(&app), GameState::MainMenu);
+
+        assert_eq!(
+            game_state(&app),
+            GameState::MainMenu,
+            "abandon returns to the main menu"
+        );
         assert_eq!(overlay_count(&mut app), 0, "overlay gone with the fight");
+        assert_eq!(
+            app.world().resource::<SaveStore>().load(),
+            None,
+            "abandon forfeits the run: the snapshot is cleared, so Continuă goes back to disabled"
+        );
+        assert!(
+            app.world().get_resource::<PlayerCharacter>().is_none(),
+            "no confirmed hero survives a forfeit -- no fresh full-health retry is possible"
+        );
+        assert_eq!(*app.world().resource::<Wallet>(), Wallet::default());
+        assert_eq!(*app.world().resource::<Level>(), Level::default());
+        assert_eq!(
+            *app.world().resource::<LifetimeEarnings>(),
+            LifetimeEarnings::default()
+        );
+        assert_eq!(*app.world().resource::<OwnedItems>(), OwnedItems::default());
+        assert_eq!(
+            *app.world().resource::<PlayerEquipment>(),
+            PlayerEquipment::default()
+        );
+        assert_eq!(
+            *app.world().resource::<LadderProgress>(),
+            LadderProgress::default(),
+            "run state is reset exactly like a game-over or a fresh new game"
+        );
         let saves = app
             .world_mut()
             .resource_mut::<Messages<SaveRequested>>()
             .drain()
             .count();
-        assert_eq!(saves, 0, "abandoning requests no save");
+        assert_eq!(
+            saves, 0,
+            "abandon forfeits directly (SaveStore::clear) -- it never goes through the autosave \
+             request/persist path"
+        );
     }
 
     #[test]
