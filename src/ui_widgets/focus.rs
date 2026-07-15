@@ -92,6 +92,35 @@ const FOCUS_RING_OFFSET: f32 = 2.0;
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Focusable;
 
+/// The most recent still-unresolved navigation request (#268), if any.
+///
+/// [`navigate_keyboard_focus`]/[`navigate_gamepad_focus`] only ever *learn
+/// about* a navigation key/button on the one frame `just_pressed` is true
+/// for it -- but on a slow first wasm boot, that frame can race ahead of the
+/// active screen's `TabGroup`/`Focusable` controls actually finishing their
+/// spawn (`OnEnter` having *started* is not the same as its UI commands
+/// having been *applied*), so [`navigate_with_fallback`] has nothing to
+/// navigate yet and fails. Without this resource remembering the request,
+/// that failure was final: `just_pressed` clears on the very next frame
+/// regardless of whether anything ever came of it, so nothing ever retried
+/// once the controls actually existed -- reproduced headlessly in this
+/// module's `arrow_right_pressed_before_the_tab_group_exists_...` test, and
+/// the real-browser shape of `keyboard-accessibility`'s "the first
+/// ArrowRight press left nothing focused" on MainMenu. Holding onto the
+/// action here and only clearing it once [`navigate_with_fallback`] actually
+/// succeeds turns that one-frame window into a "retry every frame until it
+/// lands" one instead.
+///
+/// This retries indefinitely rather than expiring: every current screen
+/// registers at least one `TabGroup` with at least one `Focusable` child as
+/// part of its own `OnEnter` (this module's registration API step 2/3), so
+/// the window a press can be stuck pending in is at most the handful of
+/// frames until that same screen's own UI finishes spawning, never a whole
+/// screen transition later -- there is no screen in this game a stale
+/// pending action could "leak" into.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Default)]
+struct PendingFocusNav(Option<NavAction>);
+
 /// System set every system in this module runs in. A screen's own
 /// activation-sensitive handler (its `Changed<Interaction>`-gated click
 /// system) orders itself `.after(FocusNavigationSet)` so a same-frame Enter/
@@ -128,19 +157,21 @@ impl Plugin for FocusNavigationPlugin {
         if app.is_plugin_added::<Self>() {
             return;
         }
-        app.init_resource::<InputFocus>().add_systems(
-            Update,
-            (
-                ensure_focus_outline,
-                navigate_keyboard_focus,
-                navigate_gamepad_focus,
-                activate_focused_control,
-                scroll_focused_into_view,
-                render_focus_marker,
-            )
-                .chain()
-                .in_set(FocusNavigationSet),
-        );
+        app.init_resource::<InputFocus>()
+            .init_resource::<PendingFocusNav>()
+            .add_systems(
+                Update,
+                (
+                    ensure_focus_outline,
+                    navigate_keyboard_focus,
+                    navigate_gamepad_focus,
+                    activate_focused_control,
+                    scroll_focused_into_view,
+                    render_focus_marker,
+                )
+                    .chain()
+                    .in_set(FocusNavigationSet),
+            );
     }
 
     fn is_unique(&self) -> bool {
@@ -174,24 +205,26 @@ fn navigate_keyboard_focus(
     keys: Option<Res<ButtonInput<KeyCode>>>,
     nav: TabNavigation,
     mut focus: ResMut<InputFocus>,
+    mut pending: ResMut<PendingFocusNav>,
 ) {
-    let Some(keys) = keys else { return };
-    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    let action = if keys.just_pressed(KeyCode::Tab) {
-        Some(if shift {
-            NavAction::Previous
-        } else {
-            NavAction::Next
-        })
-    } else if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::ArrowDown) {
-        Some(NavAction::Next)
-    } else if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::ArrowUp) {
-        Some(NavAction::Previous)
-    } else {
-        None
-    };
-    let Some(action) = action else { return };
-    navigate_with_fallback(&nav, &mut focus, action);
+    if let Some(keys) = keys {
+        let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+        if keys.just_pressed(KeyCode::Tab) {
+            pending.0 = Some(if shift {
+                NavAction::Previous
+            } else {
+                NavAction::Next
+            });
+        } else if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::ArrowDown) {
+            pending.0 = Some(NavAction::Next);
+        } else if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::ArrowUp) {
+            pending.0 = Some(NavAction::Previous);
+        }
+    }
+    let Some(action) = pending.0 else { return };
+    if navigate_with_fallback(&nav, &mut focus, action) {
+        pending.0 = None;
+    }
 }
 
 /// Gamepad tab order: any connected gamepad's D-pad drives the same linear
@@ -200,6 +233,7 @@ fn navigate_gamepad_focus(
     gamepads: Query<&Gamepad>,
     nav: TabNavigation,
     mut focus: ResMut<InputFocus>,
+    mut pending: ResMut<PendingFocusNav>,
 ) {
     let mut next = false;
     let mut previous = false;
@@ -207,43 +241,50 @@ fn navigate_gamepad_focus(
         next |= gamepad.any_just_pressed([GamepadButton::DPadRight, GamepadButton::DPadDown]);
         previous |= gamepad.any_just_pressed([GamepadButton::DPadLeft, GamepadButton::DPadUp]);
     }
-    let action = if next {
-        Some(NavAction::Next)
+    if next {
+        pending.0 = Some(NavAction::Next);
     } else if previous {
-        Some(NavAction::Previous)
-    } else {
-        None
-    };
-    let Some(action) = action else { return };
-    navigate_with_fallback(&nav, &mut focus, action);
+        pending.0 = Some(NavAction::Previous);
+    }
+    let Some(action) = pending.0 else { return };
+    if navigate_with_fallback(&nav, &mut focus, action) {
+        pending.0 = None;
+    }
 }
 
 /// Navigates `focus` by `action`, falling back to "as if nothing were
-/// focused" if the current focus can't be resolved (#216).
+/// focused" if the current focus can't be resolved (#216), and reporting
+/// whether `focus` actually moved so callers ([`navigate_keyboard_focus`]/
+/// [`navigate_gamepad_focus`]) know whether to keep the request pending for
+/// a retry on a later frame (#268).
 ///
 /// A real windowed app is observed to leave [`InputFocus`] pointing at the
 /// primary window entity (not `None`) before the player ever interacts with
-/// a focusable control (unclear which upstream system sets this -- the
-/// game's own code never does; discovered via the `keyboard-accessibility`
-/// browser scenario, which found the very first ArrowRight press in a real
-/// browser session did nothing at all). `TabNavigation::navigate` treats
-/// "focus is `Some(x)` but `x` has no `TabGroup` ancestor" as a hard error
-/// (`NoTabGroupForCurrentFocus`) rather than falling back the way "focus is
-/// `None`" already does -- so a first press silently changed nothing.
-/// Retrying with an explicitly-cleared `InputFocus` reproduces the "nothing
-/// focused yet" success path for this case too, without weakening any other
-/// behavior: a genuinely-invalid `Err` (no tab groups/focusable entities at
-/// all) still leaves `focus` untouched either way.
-fn navigate_with_fallback(nav: &TabNavigation, focus: &mut InputFocus, action: NavAction) {
+/// a focusable control (`bevy_input_focus::set_initial_focus`, a
+/// `PostStartup` system this game's own code never calls). `TabNavigation
+/// ::navigate` treats "focus is `Some(x)` but `x` has no `TabGroup` ancestor"
+/// as a hard error (`NoTabGroupForCurrentFocus`) rather than falling back the
+/// way "focus is `None`" already does -- so a first press against that
+/// stuck-on-the-window state silently changed nothing. Retrying with an
+/// explicitly-cleared `InputFocus` reproduces the "nothing focused yet"
+/// success path for this case too. The retry is unconditional (#268: not
+/// gated on `focus.get().is_some()`) -- when focus is already `None` the two
+/// attempts are identical, so the guard only ever hid the fact that a
+/// genuinely-unresolvable press (e.g. the active screen's `TabGroup` hasn't
+/// finished spawning yet) gets exactly the same "no result yet" treatment
+/// regardless of what `focus` started as; [`PendingFocusNav`] is what
+/// actually recovers that case, by trying again next frame instead of
+/// discarding the request.
+fn navigate_with_fallback(nav: &TabNavigation, focus: &mut InputFocus, action: NavAction) -> bool {
     if let Ok(next) = nav.navigate(focus, action) {
         focus.set(next, FocusCause::Navigated);
-        return;
+        return true;
     }
-    if focus.get().is_some()
-        && let Ok(next) = nav.navigate(&InputFocus::default(), action)
-    {
+    if let Ok(next) = nav.navigate(&InputFocus::default(), action) {
         focus.set(next, FocusCause::Navigated);
+        return true;
     }
+    false
 }
 
 /// "Selects" the currently focused control on Enter/Space (keyboard) or the
@@ -485,6 +526,85 @@ mod tests {
             app.world().resource::<InputFocus>().get(),
             Some(children[0]),
             "Tab must still land on the first focusable control, not silently do nothing"
+        );
+    }
+
+    /// #268: the regression this fix targets. `InputFocus` genuinely
+    /// unset -- never inserted at all, the exact resource state
+    /// `FocusNavigationPlugin::build`'s own `init_resource::<InputFocus>()`
+    /// leaves it in, and (per `despawn_screen`, `crate::core::mod`) the
+    /// state a fresh screen like MainMenu actually starts in in the real
+    /// browser once the loading screen's `OnExit` clears focus -- is
+    /// distinct from [`tab_recovers_when_focus_starts_on_an_unrelated_entity_with_no_tab_group_ancestor`]'s
+    /// case just above, where focus is `Some` (pointing at a window
+    /// stand-in). Both must land on the first focusable control on the very
+    /// first press; this is the case the `keyboard-accessibility` browser
+    /// scenario's first `ArrowRight` on MainMenu actually exercises.
+    #[test]
+    fn arrow_right_focuses_the_first_control_when_input_focus_starts_genuinely_unset() {
+        let mut app = test_app();
+        let (_, children) = spawn_group(&mut app, 3);
+        // No `InputFocus` inserted at all -- left exactly as
+        // `FocusNavigationPlugin::build`'s `init_resource` leaves it.
+
+        press_and_settle(&mut app, KeyCode::ArrowRight);
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            Some(children[0]),
+            "the first ArrowRight press must focus the first control, not leave nothing focused"
+        );
+    }
+
+    /// #268, the actual gap behind "the first ArrowRight press left nothing
+    /// focused" on `keyboard-accessibility`/MainMenu: `navigate_keyboard_focus`
+    /// (and its gamepad counterpart) only ever acted on `just_pressed`, a
+    /// flag true for exactly one frame. On a slow first wasm boot the very
+    /// first ArrowRight can land on a frame where `MainMenu`'s `OnEnter` has
+    /// been *entered* (so the harness's `wait_for_screen` already sees the
+    /// screen name) but its `TabGroup`/`Focusable` button panel has not
+    /// finished spawning yet -- `TabNavigation::navigate` then returns
+    /// `NoTabGroups`/`NoFocusableEntities` for that one frame, and with no
+    /// memory of the unresolved request, the press was simply dropped
+    /// forever: `just_pressed` clears on the next frame regardless, so
+    /// nothing ever retries it once the panel *does* finish spawning a
+    /// frame later. Confirmed red against the pre-fix code (only the
+    /// `Local`/pending-retry state below closes it).
+    #[test]
+    fn arrow_right_pressed_before_the_tab_group_exists_still_focuses_the_first_control_once_it_appears()
+     {
+        let mut app = test_app();
+
+        // The press happens on a frame where nothing focusable exists yet.
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ArrowRight);
+        app.update();
+        // Mirror the real engine's `InputPlugin`, which clears `just_pressed`
+        // exactly once per frame (absent from this `MinimalPlugins` test
+        // app) -- so, just like in the shipped build, the key is only ever
+        // seen as freshly pressed on that one frame.
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::ArrowRight);
+            keys.clear();
+        }
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            None,
+            "sanity: no focusable control exists on the press frame yet"
+        );
+
+        // The screen's button panel (its `TabGroup` + `Focusable` children)
+        // finishes spawning one frame later than the keypress.
+        let (_, children) = spawn_group(&mut app, 3);
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            Some(children[0]),
+            "a navigation press that arrived before the tab group existed must not be \
+             dropped -- once a focusable control exists, the very next frame must still \
+             land focus on it"
         );
     }
 
