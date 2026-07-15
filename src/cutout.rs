@@ -243,7 +243,7 @@ pub fn spawn_cutout_rig(
     asset_server: Option<&AssetServer>,
     flip_x: bool,
 ) {
-    spawn_cutout_rig_impl(commands, root, template, asset_server, flip_x, None);
+    spawn_cutout_rig_impl(commands, root, template, asset_server, flip_x, None, None);
 }
 
 /// Attaches a cutout rig and its currently equipped gear to `root`.
@@ -262,6 +262,33 @@ pub fn spawn_cutout_rig_with_gear(
         asset_server,
         flip_x,
         Some(equipment),
+        None,
+    );
+}
+
+/// Attaches a cutout rig tinted with one opponent accent hue (#118):
+/// `accent_hue`, when given, replaces `Sprite::color` on the rig's
+/// clothing/accent parts only (see [`is_accent_part`]) -- never skin,
+/// outline/footwear, or hair -- so an opponent reads as visually distinct
+/// from the untinted player template it may otherwise share pixel-for-pixel.
+/// `None` leaves every part's sprite at its default (untinted) color, same
+/// as [`spawn_cutout_rig`].
+pub fn spawn_cutout_rig_with_accent(
+    commands: &mut Commands,
+    root: Entity,
+    template: CutoutRigTemplate,
+    asset_server: Option<&AssetServer>,
+    flip_x: bool,
+    accent_hue: Option<Color>,
+) {
+    spawn_cutout_rig_impl(
+        commands,
+        root,
+        template,
+        asset_server,
+        flip_x,
+        None,
+        accent_hue,
     );
 }
 
@@ -272,6 +299,7 @@ fn spawn_cutout_rig_impl(
     asset_server: Option<&AssetServer>,
     flip_x: bool,
     equipment: Option<&Equipment>,
+    accent_hue: Option<Color>,
 ) {
     commands.entity(root).insert(CutoutRig {
         template: template.template,
@@ -298,7 +326,15 @@ fn spawn_cutout_rig_impl(
 
     commands.entity(root).with_children(|body| {
         for kind in root_order {
-            spawn_part_and_children(body, &parts_by_kind, kind, flip_x, asset_server, equipment);
+            spawn_part_and_children(
+                body,
+                &parts_by_kind,
+                kind,
+                flip_x,
+                asset_server,
+                equipment,
+                accent_hue,
+            );
         }
     });
 }
@@ -306,6 +342,7 @@ fn spawn_cutout_rig_impl(
 /// Spawns `kind`'s body-part entity and, recursively, every part rigged
 /// beneath it (see [`child_kinds`]) as its Bevy children -- and, if
 /// `equipment` is given, any gear layers attached to each of those parts.
+#[allow(clippy::too_many_arguments)]
 fn spawn_part_and_children(
     parent: &mut ChildSpawnerCommands,
     parts_by_kind: &HashMap<CutoutPartKind, CutoutPart>,
@@ -313,11 +350,13 @@ fn spawn_part_and_children(
     flip_x: bool,
     asset_server: Option<&AssetServer>,
     equipment: Option<&Equipment>,
+    accent_hue: Option<Color>,
 ) {
     let Some(part) = parts_by_kind.get(&kind) else {
         return;
     };
     let transform = part_transform(part, flip_x);
+    let tint = accent_hue.filter(|_| is_accent_part(kind));
     parent
         .spawn((
             CutoutPartMarker { kind },
@@ -325,7 +364,7 @@ fn spawn_part_and_children(
                 transform,
                 size: part.size,
             },
-            part_sprite(part, asset_server, flip_x),
+            part_sprite(part, asset_server, flip_x, tint),
             transform,
         ))
         .with_children(|part_children| {
@@ -346,9 +385,30 @@ fn spawn_part_and_children(
                     flip_x,
                     asset_server,
                     equipment,
+                    accent_hue,
                 );
             }
         });
+}
+
+/// Which cutout parts count as "clothing/accent" for the #118 opponent tint:
+/// the torso and limb cloth, never skin (head/hands), footwear/outline
+/// (feet, which render near-black like the palette's outline color), or
+/// hair.
+fn is_accent_part(kind: CutoutPartKind) -> bool {
+    use CutoutPartKind::*;
+    matches!(
+        kind,
+        Torso
+            | UpperArmBack
+            | UpperArmFront
+            | ForearmBack
+            | ForearmFront
+            | ThighBack
+            | ThighFront
+            | ShinBack
+            | ShinFront
+    )
 }
 
 /// Spawns equipped gear under already-existing cutout body part entities.
@@ -443,9 +503,17 @@ pub fn gear_attachment_transform(offset: (f32, f32), z_offset: f32) -> Transform
 
 /// Builds one body-part sprite. `flip_x` mirrors the artwork itself so a
 /// mirrored rig faces its opponent; [`part_transform`] mirrors only the
-/// position/rotation.
-fn part_sprite(part: &CutoutPart, asset_server: Option<&AssetServer>, flip_x: bool) -> Sprite {
-    match (asset_server, part.asset_path) {
+/// position/rotation. `tint`, when given, becomes this sprite's
+/// `Sprite::color` -- the #118 accent-hue wash -- overriding the default
+/// (untinted) color regardless of whether the part renders from a loaded
+/// image or the headless fallback color.
+fn part_sprite(
+    part: &CutoutPart,
+    asset_server: Option<&AssetServer>,
+    flip_x: bool,
+    tint: Option<Color>,
+) -> Sprite {
+    let mut sprite = match (asset_server, part.asset_path) {
         (Some(asset_server), Some(path)) => Sprite {
             custom_size: Some(part.size),
             flip_x,
@@ -455,7 +523,11 @@ fn part_sprite(part: &CutoutPart, asset_server: Option<&AssetServer>, flip_x: bo
             flip_x,
             ..Sprite::from_color(part.color, part.size)
         },
+    };
+    if let Some(tint) = tint {
+        sprite.color = tint;
     }
+    sprite
 }
 
 fn part_transform(part: &CutoutPart, flip_x: bool) -> Transform {

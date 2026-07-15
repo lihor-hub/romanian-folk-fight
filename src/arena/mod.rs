@@ -17,8 +17,8 @@ use crate::core::{GameState, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::cutout::{
     CutoutPartMarker, CutoutRig, CutoutRigTemplate, CutoutTemplate, GearVisualLayer, boss_template,
-    cutout_rig_owner, enemy_template, human_template, human_template_for, spawn_cutout_rig,
-    spawn_gear_attachment_layers,
+    cutout_rig_owner, enemy_template, human_template, human_template_for,
+    spawn_cutout_rig_with_accent, spawn_gear_attachment_layers,
 };
 use crate::items::{Equipment, GearMotion};
 use crate::roster::{Boss, LadderProgress, Opponent};
@@ -158,6 +158,7 @@ fn spawn_scene(
         human_template_for(player.appearance),
         false,
         asset_server,
+        None,
     );
     commands.entity(player_fighter).insert(player.appearance);
     let enemy = spawn_arena_fighter(
@@ -174,6 +175,7 @@ fn spawn_scene(
         opponent_template(opponent),
         true,
         asset_server,
+        Some(opponent.accent_hue),
     );
     let mut equipment = Equipment::default();
     for &id in opponent.equipment {
@@ -199,7 +201,10 @@ fn spawn_scenery(commands: &mut Commands) {
 
 /// Spawns one fighter through the shared [`spawn_fighter`] (so it carries the
 /// #8 components and full pools), then dresses it with the arena visuals: its
-/// animated sprite at its anchor (starting on the idle loop).
+/// animated sprite at its anchor (starting on the idle loop). `accent_hue`
+/// (#118) is the opponent's one muted accent color, tinted onto the rig's
+/// clothing/accent parts; the player is always spawned with `None` so its
+/// template stays untinted.
 // Each argument is one distinct piece of the fighter's dressing; bundling
 // them into a struct for one call site would only add indirection.
 #[allow(clippy::too_many_arguments)]
@@ -212,6 +217,7 @@ fn spawn_arena_fighter(
     template: CutoutRigTemplate,
     flip_x: bool,
     asset_server: Option<&AssetServer>,
+    accent_hue: Option<Color>,
 ) -> Entity {
     let name = name.into();
     let fighter = spawn_fighter(commands, name, attrs, marker);
@@ -221,7 +227,14 @@ fn spawn_arena_fighter(
         FighterClip::Idle.animation(),
         anchor,
     ));
-    spawn_cutout_rig(commands, fighter, template, asset_server, flip_x);
+    spawn_cutout_rig_with_accent(
+        commands,
+        fighter,
+        template,
+        asset_server,
+        flip_x,
+        accent_hue,
+    );
     fighter
 }
 
@@ -696,6 +709,67 @@ mod tests {
         assert_eq!(
             cutout_child_count(&mut app, enemy),
             template_part_count(enemy_template)
+        );
+    }
+
+    /// Maps every `CutoutPartMarker` entity under `root`, at any depth, to
+    /// its rendered `Sprite::color`. Forearms/hands/shins/feet nest several
+    /// joints deep (#117), so this walks the whole subtree rather than only
+    /// `root`'s immediate `Children`.
+    fn part_colors_by_kind(
+        app: &mut App,
+        root: Entity,
+    ) -> std::collections::HashMap<CutoutPartKind, Color> {
+        let world = app.world();
+        let mut colors = std::collections::HashMap::new();
+        let mut stack = vec![root];
+        while let Some(entity) = stack.pop() {
+            let Some(children) = world.get::<Children>(entity) else {
+                continue;
+            };
+            for child in children.iter() {
+                if let Some(marker) = world.get::<CutoutPartMarker>(child)
+                    && let Some(sprite) = world.get::<Sprite>(child)
+                {
+                    colors.insert(marker.kind, sprite.color);
+                }
+                stack.push(child);
+            }
+        }
+        colors
+    }
+
+    #[test]
+    fn the_hot_de_codru_carries_an_accent_tint_the_player_does_not() {
+        // #118: Hoț de codru (LADDER[0], the fight the default LadderProgress
+        // starts on) used to spawn from the exact same untinted human
+        // template as the player -- pixel-identical fighters. At least one
+        // clothing/accent part must now render with a different
+        // `Sprite::color` than the player's corresponding part.
+        let mut app = test_app();
+        let player = app
+            .world_mut()
+            .query_filtered::<Entity, With<PlayerFighter>>()
+            .single(app.world())
+            .expect("player fighter exists");
+        let enemy = app
+            .world_mut()
+            .query_filtered::<Entity, With<EnemyFighter>>()
+            .single(app.world())
+            .expect("enemy fighter exists");
+
+        let player_colors = part_colors_by_kind(&mut app, player);
+        let enemy_colors = part_colors_by_kind(&mut app, enemy);
+
+        let differing = enemy_colors.iter().any(|(kind, enemy_color)| {
+            player_colors
+                .get(kind)
+                .is_some_and(|player_color| player_color != enemy_color)
+        });
+        assert!(
+            differing,
+            "Hoț de codru should render at least one body part with a Sprite::color \
+             different from the player's corresponding part"
         );
     }
 
