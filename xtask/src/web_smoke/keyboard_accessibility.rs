@@ -644,14 +644,54 @@ fn exercise_settings_overlay(
     ));
 
     press_arrow_until_label(checkpoint, "Înapoi")?;
+    press_enter_and_wait_for_overlay_close(checkpoint)?;
+    Ok(())
+}
+
+/// Presses `Enter` on the focused **Înapoi** button and waits for the
+/// settings overlay to actually finish closing, before any caller races
+/// ahead with further key presses.
+///
+/// This is deliberately *not* `read_screen(checkpoint)? == Some(parent_screen)`
+/// polled in a loop, which is what this function replaced: opening the
+/// settings overlay never changes the `GameState` (see this function's
+/// caller, which asserts exactly that right after opening), so that
+/// condition is already true on the very first iteration -- one single
+/// `wait_for_frame` after dispatching the `Enter` keypress, then an
+/// immediate return, regardless of whether the browser had actually gotten
+/// around to processing that keypress yet. On slow CI, a real CDP keypress
+/// is not guaranteed to be reflected in the very next rendered frame (the
+/// same asynchronous-dispatch race `press_key_and_wait_for_change`'s own doc
+/// comment describes) -- racing ahead into more `ArrowRight` presses before
+/// `Înapoi`'s own click has actually despawned the overlay risks those
+/// presses landing *inside* the still-open settings modal instead (moving
+/// its own focus around, or activating whatever it lands on), so the
+/// overlay may never actually close at all within the caller's own press
+/// budget. This waits for the accessibility snapshot to actually change from
+/// its pre-press value instead -- proof the close (and whatever refocus
+/// follows it: back into a still-open parent modal, or a clear to `None` if
+/// there is none, see `settings::despawn_overlay`'s doc comment) has already
+/// been applied -- before returning control to the caller.
+///
+/// Deliberately does *not* also require `focused_entity.is_some()` the way
+/// [`press_key_and_wait_for_change`] does for `ArrowRight`: closing the
+/// overlay legitimately clears focus to `None` when there is no parent modal
+/// to return to (opened from `MainMenu`, see
+/// `settings::tests::closing_the_overlay_clears_focus`), which is a correct
+/// settled outcome here, not a race still in progress.
+fn press_enter_and_wait_for_overlay_close(checkpoint: &Checkpoint) -> Result<(), String> {
+    let before = read_accessibility(checkpoint)?;
     checkpoint.press_key("Enter")?;
     for _ in 0..SETTLE_MAX_FRAMES {
         checkpoint.wait_for_frame()?;
-        if read_screen(checkpoint)?.as_deref() == Some(parent_screen) {
-            break;
+        if read_accessibility(checkpoint)? != before {
+            return Ok(());
         }
     }
-    Ok(())
+    Err(format!(
+        "closing the settings overlay (Enter on «Înapoi») produced no observable \
+         accessibility change within {SETTLE_MAX_FRAMES} frames (started from {before:?})"
+    ))
 }
 
 /// Character creation: every preset tile, the name arrows, the appearance

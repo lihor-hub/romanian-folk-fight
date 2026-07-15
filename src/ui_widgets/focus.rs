@@ -121,6 +121,33 @@ pub struct Focusable;
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Default)]
 struct PendingFocusNav(Option<NavAction>);
 
+/// Every modal group root still waiting for its "focus the first control"
+/// request to land, because [`autofocus_first_in_group`] was called on a
+/// frame where the group had no focusable descendant *yet* (#268, the same
+/// class of race [`PendingFocusNav`] closes for keyboard/gamepad navigation,
+/// applied here to "open a modal overlay and focus its first control"
+/// instead of "navigate focus"). `autofocus_pause_overlay`
+/// (`combat::pause`), `autofocus_settings_overlay`, and `despawn_overlay`'s
+/// close-refocuses-still-open-modal branch (both `settings`) all go through
+/// [`autofocus_first_in_group`], and all three run on exactly one frame each
+/// (an `OnEnter`-chained system or a `resource_added`/`resource_removed`-
+/// gated one) -- with no memory of an unresolved request, a group whose
+/// `TabGroup`/`Focusable` children have not finished spawning *that specific
+/// frame* would silently end up with no focus at all, permanently: the
+/// triggering condition (`resource_added`, `resource_removed`, `OnEnter`)
+/// only holds true once. [`retry_pending_autofocus`] is what turns that back
+/// into "try again next frame until it lands," mirroring
+/// [`navigate_keyboard_focus`]'s own retry loop over [`PendingFocusNav`].
+///
+/// A `Vec` (not a single `Option`) because two modal groups can legitimately
+/// both be mid-request at once: e.g. the pause overlay's own autofocus is
+/// still pending (its panel hasn't finished spawning) when the player clicks
+/// -- not tabs to -- its **Setări** button with a pointer, which needs no
+/// existing focus at all and opens a second modal group on top before the
+/// first request resolved.
+#[derive(Resource, Debug, Clone, Default)]
+pub struct PendingAutofocus(Vec<Entity>);
+
 /// System set every system in this module runs in. A screen's own
 /// activation-sensitive handler (its `Changed<Interaction>`-gated click
 /// system) orders itself `.after(FocusNavigationSet)` so a same-frame Enter/
@@ -159,9 +186,11 @@ impl Plugin for FocusNavigationPlugin {
         }
         app.init_resource::<InputFocus>()
             .init_resource::<PendingFocusNav>()
+            .init_resource::<PendingAutofocus>()
             .add_systems(
                 Update,
                 (
+                    retry_pending_autofocus,
                     ensure_focus_outline,
                     navigate_keyboard_focus,
                     navigate_gamepad_focus,
@@ -410,10 +439,60 @@ fn render_focus_marker(
 /// the same system that spawns it), so the very next Tab press already
 /// starts confined to the overlay.
 ///
-/// A no-op if `group_root` has no focusable descendant yet.
-pub fn autofocus_first_in_group(nav: &TabNavigation, focus: &mut InputFocus, group_root: Entity) {
-    if let Ok(entity) = nav.initialize(group_root, NavAction::First) {
-        focus.set(entity, FocusCause::Navigated);
+/// If `group_root` has no focusable descendant *yet* (#268: the overlay's own
+/// spawn -- typically chained via `.chain()`'s auto-inserted `apply_deferred`
+/// the same frame -- can still be a frame or more behind a slow first wasm
+/// boot on CI), this is not a permanent no-op: `group_root` is remembered in
+/// [`PendingAutofocus`] and [`retry_pending_autofocus`] retries it every
+/// later frame until it lands, mirroring [`PendingFocusNav`]'s resilience for
+/// keyboard/gamepad navigation. Safe to call repeatedly with the same
+/// `group_root` (e.g. once eagerly, then again by the retry system) --
+/// [`TabNavigation::initialize`] is a pure read-then-write, not a one-shot.
+pub fn autofocus_first_in_group(
+    nav: &TabNavigation,
+    focus: &mut InputFocus,
+    pending: &mut PendingAutofocus,
+    group_root: Entity,
+) {
+    match nav.initialize(group_root, NavAction::First) {
+        Ok(entity) => {
+            focus.set(entity, FocusCause::Navigated);
+            pending.0.retain(|&e| e != group_root);
+        }
+        Err(_) => {
+            if !pending.0.contains(&group_root) {
+                pending.0.push(group_root);
+            }
+        }
+    }
+}
+
+/// Retries every still-pending [`autofocus_first_in_group`] request (#268):
+/// see [`PendingAutofocus`]'s doc comment for why a single attempt on the
+/// triggering frame is not always enough. A group that has since been
+/// despawned entirely (e.g. the overlay closed again before its autofocus
+/// ever landed) is silently dropped rather than retried forever -- `nav
+/// .initialize` on a nonexistent entity keeps failing, which would otherwise
+/// leak an ever-growing list of dead requests.
+fn retry_pending_autofocus(
+    nav: TabNavigation,
+    mut focus: ResMut<InputFocus>,
+    mut pending: ResMut<PendingAutofocus>,
+    groups: Query<()>,
+) {
+    if pending.0.is_empty() {
+        return;
+    }
+    let still_pending: Vec<Entity> = std::mem::take(&mut pending.0);
+    for group_root in still_pending {
+        if groups.get(group_root).is_err() {
+            // The group itself no longer exists -- drop the stale request.
+            continue;
+        }
+        match nav.initialize(group_root, NavAction::First) {
+            Ok(entity) => focus.set(entity, FocusCause::Navigated),
+            Err(_) => pending.0.push(group_root),
+        }
     }
 }
 
@@ -785,9 +864,13 @@ mod tests {
         let (root, children) = spawn_modal_group(&mut app, 3);
 
         app.world_mut()
-            .run_system_once(move |nav: TabNavigation, mut focus: ResMut<InputFocus>| {
-                autofocus_first_in_group(&nav, &mut focus, root);
-            })
+            .run_system_once(
+                move |nav: TabNavigation,
+                      mut focus: ResMut<InputFocus>,
+                      mut pending: ResMut<PendingAutofocus>| {
+                    autofocus_first_in_group(&nav, &mut focus, &mut pending, root);
+                },
+            )
             .unwrap();
 
         assert_eq!(
@@ -796,6 +879,55 @@ mod tests {
             "opening a modal overlay (settings, pause) must focus its first control \
              immediately -- otherwise the first Tab press still targets whatever \
              screen sits behind the scrim"
+        );
+    }
+
+    /// #268: the same "retry every frame until it lands" gap this fix targets
+    /// for the pause/settings overlays, reproduced directly against
+    /// [`autofocus_first_in_group`]/[`retry_pending_autofocus`]: a modal
+    /// group whose `Focusable` children have not finished spawning on the
+    /// exact frame autofocus is requested must still land focus once they
+    /// exist, without a second explicit request.
+    #[test]
+    fn autofocus_first_in_group_retries_until_the_modal_groups_children_exist() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut app = test_app();
+        let root = app.world_mut().spawn(TabGroup::modal()).id();
+
+        // Request autofocus before the group has any focusable child --
+        // mirrors `autofocus_pause_overlay`/`autofocus_settings_overlay`
+        // running on the one frame their own trigger condition
+        // (`OnEnter`/`resource_added`) is true, with the panel's children
+        // still a frame behind on a slow first wasm boot.
+        app.world_mut()
+            .run_system_once(
+                move |nav: TabNavigation,
+                      mut focus: ResMut<InputFocus>,
+                      mut pending: ResMut<PendingAutofocus>| {
+                    autofocus_first_in_group(&nav, &mut focus, &mut pending, root);
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            None,
+            "sanity: no focusable child exists on the request frame yet"
+        );
+
+        // The modal panel's first control finishes spawning one frame later.
+        let child = app
+            .world_mut()
+            .spawn((Button, Focusable, TabIndex(0), ChildOf(root)))
+            .id();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            Some(child),
+            "an autofocus request made before the modal group's first control existed \
+             must not be dropped -- once a focusable control exists, a later frame must \
+             still land focus on it"
         );
     }
 
