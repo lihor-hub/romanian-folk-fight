@@ -5,24 +5,38 @@
 //!
 //! #193 split this module in two: [`snapshot`] owns the schema, version
 //! envelope, migration, and run-field capture/restore/reset contract; this
-//! module owns *where the JSON physically lives* — the [`SaveBackend`]
-//! trait, its native/web/in-memory implementations, and the autosave/delete
-//! wiring below. Neither knows the other's concerns: this module never
-//! inspects a payload's fields, and `snapshot` never touches a filesystem or
-//! `localStorage`.
+//! module owns the autosave/delete wiring below plus, in turn, [`storage`]
+//! (#201) — *where the JSON physically lives*: the [`SaveBackend`] trait,
+//! its native/web/in-memory implementations (native writes are a
+//! same-directory temp file plus an atomic rename, never a torn in-place
+//! write — see [`storage`]'s module docs), and the shared typed load
+//! outcome ([`storage::SnapshotLoad`]) both platforms report. None of the
+//! three knows the others' concerns: `snapshot` never touches a filesystem
+//! or `localStorage`, `storage` never inspects a payload's fields (it always
+//! goes through [`snapshot::SaveGame::load`]), and this top-level module only
+//! wires autosave requests and the game-over delete — the main menu
+//! (`crate::menu`) is what turns [`storage::SnapshotLoad`] into a
+//! **Continuă** button or a Romanian recovery action.
 //!
 //! Autosave points write a [`SaveRequested`] message (after the victory
 //! payout, after a level-up allocation confirm, after every shop purchase or
 //! equip); [`persist_on_request`] turns it into a stored snapshot. A run is
 //! one life: game over deletes the save. The main menu's **Continuă** button
 //! loads the snapshot back into the resources and jumps straight into
-//! [`GameState::Fight`]. Corrupt or unsupported-version saves are discarded
-//! (never a panic, see [`snapshot::SaveGame::from_json`]) and the store is
-//! cleared.
+//! [`GameState::Fight`]. Corrupt, partially-written, or unsupported-version
+//! saves never panic (see [`snapshot::SaveGame::load`]); the menu offers a
+//! recovery action instead of the game silently discarding them (#201).
 
 pub mod snapshot;
+pub mod storage;
 
 pub use snapshot::{CURRENT_VERSION, ResumeDestination, SaveGame};
+pub use storage::{
+    SaveBackend, SaveStore, SnapshotLoad, load_save, load_save_outcome, platform_backend,
+};
+
+#[cfg(test)]
+pub(crate) use storage::MemoryBackend;
 
 use bevy::prelude::*;
 
@@ -43,211 +57,6 @@ pub const STORAGE_KEY: &str = "rff_save_v1";
 /// purchase/equip); [`persist_on_request`] snapshots the run in response.
 #[derive(Message, Debug, Clone, Copy, Default)]
 pub struct SaveRequested;
-
-/// Where save JSON physically lives; one implementation per platform plus an
-/// in-memory one for tests.
-pub trait SaveBackend: Send + Sync + 'static {
-    /// Writes the snapshot, replacing any previous one. Errors are logged,
-    /// never panicked on.
-    fn store(&self, json: &str);
-    /// The stored snapshot, if any.
-    fn load(&self) -> Option<String>;
-    /// Deletes the stored snapshot, if any.
-    fn clear(&self);
-}
-
-/// The save store of the running game: the platform backend by default
-/// ([`Default`]), an in-memory one in tests.
-#[derive(Resource)]
-pub struct SaveStore(Box<dyn SaveBackend>);
-
-impl SaveStore {
-    /// A store over a specific backend (tests use the in-memory one).
-    pub fn with_backend(backend: impl SaveBackend) -> Self {
-        Self(Box::new(backend))
-    }
-
-    /// Writes the snapshot, replacing any previous one.
-    pub fn store(&self, json: &str) {
-        self.0.store(json);
-    }
-
-    /// The stored snapshot, if any.
-    pub fn load(&self) -> Option<String> {
-        self.0.load()
-    }
-
-    /// Deletes the stored snapshot, if any.
-    pub fn clear(&self) {
-        self.0.clear();
-    }
-}
-
-impl Default for SaveStore {
-    fn default() -> Self {
-        Self(Box::new(platform_backend("save.json", STORAGE_KEY)))
-    }
-}
-
-/// The platform backend at a custom location: a file named `file_name` under
-/// the game's data directory on native, the `storage_key` entry of
-/// `localStorage` on wasm. Lets other persisted blobs (e.g. the audio
-/// settings, #30) reuse the same storage machinery under their own key.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn platform_backend(file_name: &'static str, _storage_key: &'static str) -> impl SaveBackend {
-    platform::PlatformBackend { file_name }
-}
-
-/// See the native `platform_backend`; on wasm the `storage_key` selects the
-/// `localStorage` entry and the file name is unused.
-#[cfg(target_arch = "wasm32")]
-pub fn platform_backend(_file_name: &'static str, storage_key: &'static str) -> impl SaveBackend {
-    platform::PlatformBackend { storage_key }
-}
-
-/// Loads and validates the stored save. A snapshot that fails validation
-/// (corrupt JSON, unsupported version, unknown items) is cleared from the
-/// store so the menu never re-reads a known-bad save.
-pub fn load_save(store: &SaveStore) -> Option<SaveGame> {
-    let json = store.load()?;
-    let save = SaveGame::from_json(&json);
-    if save.is_none() {
-        warn!("discarding invalid save");
-        store.clear();
-    }
-    save
-}
-
-/// Native backend: `dirs::data_dir()/romanian-folk-fight/save.json`.
-#[cfg(not(target_arch = "wasm32"))]
-mod platform {
-    use std::path::PathBuf;
-
-    use bevy::prelude::warn;
-
-    use super::SaveBackend;
-
-    pub struct PlatformBackend {
-        /// File name under the game's data directory (e.g. `save.json`).
-        pub file_name: &'static str,
-    }
-
-    impl PlatformBackend {
-        /// The backing file path; `None` when the platform has no data
-        /// directory.
-        fn path(&self) -> Option<PathBuf> {
-            Some(
-                dirs::data_dir()?
-                    .join("romanian-folk-fight")
-                    .join(self.file_name),
-            )
-        }
-    }
-
-    impl SaveBackend for PlatformBackend {
-        fn store(&self, json: &str) {
-            let Some(path) = self.path() else {
-                warn!("no platform data directory; save not written");
-                return;
-            };
-            if let Some(parent) = path.parent()
-                && let Err(err) = std::fs::create_dir_all(parent)
-            {
-                warn!("could not create save directory {parent:?}: {err}");
-                return;
-            }
-            if let Err(err) = std::fs::write(&path, json) {
-                warn!("could not write save file {path:?}: {err}");
-            }
-        }
-
-        fn load(&self) -> Option<String> {
-            std::fs::read_to_string(self.path()?).ok()
-        }
-
-        fn clear(&self) {
-            if let Some(path) = self.path() {
-                // A missing file is already "cleared"; other errors leave a
-                // stale save behind, which the version/validation guard on
-                // load keeps harmless.
-                let _ = std::fs::remove_file(path);
-            }
-        }
-    }
-}
-
-/// Web backend: `window.localStorage` under [`STORAGE_KEY`].
-#[cfg(target_arch = "wasm32")]
-mod platform {
-    use bevy::prelude::warn;
-
-    use super::SaveBackend;
-
-    pub struct PlatformBackend {
-        /// The `localStorage` key this backend reads and writes.
-        pub storage_key: &'static str,
-    }
-
-    /// The window's local storage; `None` when unavailable (e.g. blocked by
-    /// the browser).
-    fn local_storage() -> Option<web_sys::Storage> {
-        web_sys::window()?.local_storage().ok().flatten()
-    }
-
-    impl SaveBackend for PlatformBackend {
-        fn store(&self, json: &str) {
-            match local_storage() {
-                Some(storage) => {
-                    if storage.set_item(self.storage_key, json).is_err() {
-                        warn!("could not write save to localStorage");
-                    }
-                }
-                None => warn!("localStorage unavailable; save not written"),
-            }
-        }
-
-        fn load(&self) -> Option<String> {
-            local_storage()?.get_item(self.storage_key).ok().flatten()
-        }
-
-        fn clear(&self) {
-            if let Some(storage) = local_storage() {
-                let _ = storage.remove_item(self.storage_key);
-            }
-        }
-    }
-}
-
-/// In-memory backend for tests: a shared cell the test inspects.
-#[cfg(test)]
-pub(crate) struct MemoryBackend(pub(crate) std::sync::Arc<std::sync::Mutex<Option<String>>>);
-
-#[cfg(test)]
-impl SaveBackend for MemoryBackend {
-    fn store(&self, json: &str) {
-        *self.0.lock().expect("test store lock") = Some(json.to_string());
-    }
-
-    fn load(&self) -> Option<String> {
-        self.0.lock().expect("test store lock").clone()
-    }
-
-    fn clear(&self) {
-        *self.0.lock().expect("test store lock") = None;
-    }
-}
-
-#[cfg(test)]
-impl SaveStore {
-    /// An in-memory store plus the shared cell tests inspect and seed.
-    pub(crate) fn in_memory() -> (Self, std::sync::Arc<std::sync::Mutex<Option<String>>>) {
-        let cell = std::sync::Arc::new(std::sync::Mutex::new(None));
-        (
-            Self::with_backend(MemoryBackend(std::sync::Arc::clone(&cell))),
-            cell,
-        )
-    }
-}
 
 pub struct SavePlugin;
 
@@ -355,29 +164,12 @@ mod tests {
     use crate::save::snapshot::tests::sample_save;
     use crate::shop::{ShopAction, ShopPlugin};
 
-    #[test]
-    fn load_save_clears_an_invalid_store() {
-        let (store, cell) = SaveStore::in_memory();
-        store.store("definitely not a save");
-        assert!(load_save(&store).is_none());
-        assert_eq!(
-            *cell.lock().expect("test store lock"),
-            None,
-            "the corrupt save is cleared, not re-read forever"
-        );
-    }
-
-    #[test]
-    fn load_save_returns_a_valid_snapshot_and_keeps_it_stored() {
-        let (store, cell) = SaveStore::in_memory();
-        let save = sample_save();
-        store.store(&save.to_json().expect("plain data serializes"));
-        assert_eq!(load_save(&store), Some(save));
-        assert!(
-            cell.lock().expect("test store lock").is_some(),
-            "a valid save stays stored"
-        );
-    }
+    // `load_save`/`load_save_outcome` (and the `SnapshotLoad` classification
+    // they're built on) are storage-layer concerns now split into
+    // `save::storage` (#201) -- see `cargo test save::storage --lib` for
+    // their coverage, including the moved
+    // `load_save_clears_an_invalid_store`/
+    // `load_save_returns_a_valid_snapshot_and_keeps_it_stored` tests.
 
     // --- autosave and delete flows ---
 

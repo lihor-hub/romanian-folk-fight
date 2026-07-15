@@ -5,7 +5,7 @@ use bevy::prelude::*;
 
 use crate::core::{GameState, UiFont, despawn_screen};
 use crate::flow::FlowIntent;
-use crate::save::{SaveStore, load_save};
+use crate::save::{SaveStore, SnapshotLoad, load_save, load_save_outcome};
 use crate::settings::SettingsOpen;
 use crate::theme::{
     ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD,
@@ -18,6 +18,13 @@ use crate::ui_widgets::focus::{
 const MENU_ROOT_PADDING: f32 = 18.0;
 const MENU_TITLE_STAGE_WIDTH: f32 = 382.0;
 const MENU_BUTTON_PANEL_WIDTH: f32 = 318.0;
+
+/// Shown in place of **Continuă** (#201) when the stored run snapshot is
+/// present but unusable — corrupt/partially-written JSON, an unsupported old
+/// version, or a version written by a newer build than this one (see
+/// `crate::save::SnapshotLoad::Invalid`/`FutureVersion`). "Delete the
+/// corrupted save."
+const RECOVER_SAVE_LABEL: &str = "Șterge salvarea coruptă";
 
 /// Height of the embroidered divider band — the authored band in the panel
 /// texture is [`crate::theme::PANEL_BORDER_INSET`] px tall, so this renders
@@ -52,6 +59,13 @@ pub enum MenuAction {
     /// Resume the saved run: restore every run resource from the save and
     /// enter [`GameState::Fight`]. Only spawned when a valid save loads.
     Continue,
+    /// Clears (quarantines) the stored run snapshot after it failed to load
+    /// as invalid or a newer-than-this-build version (#201) — see
+    /// [`RecoverSaveButton`]. Never resumes a run, and never touches
+    /// settings/audio/accessibility storage (a completely separate
+    /// `SettingsStore`/key, see `crate::settings`) — only the run's own
+    /// [`SaveStore`] is cleared.
+    ClearCorruptSave,
     /// Open the settings overlay (#30) on top of the menu.
     Settings,
     /// Quit the app; native builds only.
@@ -62,6 +76,15 @@ pub enum MenuAction {
 /// Marker for buttons that are greyed out and ignore all interaction.
 #[derive(Component)]
 pub struct DisabledButton;
+
+/// Marker for the Romanian recovery button (#201) shown when the stored run
+/// snapshot is present but unusable. Distinct from [`DisabledButton`]: this
+/// button *is* clickable — its only job is to let the player deliberately
+/// discard the bad snapshot (via [`MenuAction::ClearCorruptSave`]) instead of
+/// the menu silently doing it before they ever saw it was there, or getting
+/// stuck presenting the same broken state with no way out.
+#[derive(Component)]
+pub struct RecoverSaveButton;
 
 /// Marker for the embroidered cross-stitch divider bands framing the title
 /// (#121) — real motif art sampled from the panel-border texture, never an
@@ -99,15 +122,27 @@ impl Plugin for MenuPlugin {
 }
 
 /// Spawns the main menu. **Continuă** is enabled exactly when a valid save
-/// loads from the [`SaveStore`]; a corrupt or version-mismatched save is
-/// discarded by [`load_save`] and the button stays a disabled marker.
+/// loads from the [`SaveStore`] (#201: [`SnapshotLoad::Valid`]). When
+/// nothing is stored yet ([`SnapshotLoad::NoSave`]), **Continuă** stays a
+/// disabled marker, same as before #201. When something *is* stored but
+/// unusable ([`SnapshotLoad::Invalid`]/[`SnapshotLoad::FutureVersion`] —
+/// corrupt/partially-written JSON, an unsupported old version, or a version
+/// from a newer build), the slot becomes [`RecoverSaveButton`] instead: a
+/// clickable Romanian recovery action, not an auto-discard. Deliberately
+/// does *not* call [`load_save`] here (which would immediately clear an
+/// invalid save) — the recovery button only appears if the data survives
+/// long enough for the player to see it and choose to discard it via
+/// [`MenuAction::ClearCorruptSave`].
 fn spawn_main_menu(
     mut commands: Commands,
     store: Option<Res<SaveStore>>,
     ui_font: Res<UiFont>,
     panel_texture: Res<PanelTexture>,
 ) {
-    let has_save = store.is_some_and(|store| load_save(&store).is_some());
+    let outcome = store
+        .as_deref()
+        .map(load_save_outcome)
+        .unwrap_or(SnapshotLoad::NoSave);
     commands
         .spawn((
             MainMenuScreen,
@@ -205,17 +240,30 @@ fn spawn_main_menu(
                         menu_button("Luptă nouă", CREAM, BUTTON_NORMAL, &ui_font),
                         MenuAction::NewGame,
                     ));
-                    if has_save {
-                        panel.spawn((
-                            menu_button("Continuă", CREAM, BUTTON_NORMAL, &ui_font),
-                            MenuAction::Continue,
-                        ));
-                    } else {
-                        // No (valid) save to resume: a greyed-out, inert marker.
-                        panel.spawn((
-                            menu_button("Continuă", TEXT_DISABLED, BUTTON_DISABLED, &ui_font),
-                            DisabledButton,
-                        ));
+                    match outcome {
+                        SnapshotLoad::Valid(_) => {
+                            panel.spawn((
+                                menu_button("Continuă", CREAM, BUTTON_NORMAL, &ui_font),
+                                MenuAction::Continue,
+                            ));
+                        }
+                        SnapshotLoad::Invalid | SnapshotLoad::FutureVersion => {
+                            // Something is stored but unusable: offer a
+                            // Romanian recovery action instead of an
+                            // automatic, silent discard (#201).
+                            panel.spawn((
+                                menu_button(RECOVER_SAVE_LABEL, CREAM, BUTTON_NORMAL, &ui_font),
+                                MenuAction::ClearCorruptSave,
+                                RecoverSaveButton,
+                            ));
+                        }
+                        SnapshotLoad::NoSave => {
+                            // No save to resume: a greyed-out, inert marker.
+                            panel.spawn((
+                                menu_button("Continuă", TEXT_DISABLED, BUTTON_DISABLED, &ui_font),
+                                DisabledButton,
+                            ));
+                        }
                     }
                     panel.spawn((
                         menu_button("Setări", CREAM, BUTTON_NORMAL, &ui_font),
@@ -334,6 +382,18 @@ fn handle_menu_actions(
                         flow_intents.write(FlowIntent::ContinueRun);
                     }
                     None => warn!("Continuă pressed but no valid save loads; staying on the menu"),
+                }
+            }
+            MenuAction::ClearCorruptSave => {
+                // Quarantines only the run snapshot -- `store` is this
+                // screen's `SaveStore` resource, a completely separate
+                // resource/backend/key from `crate::settings::SettingsStore`
+                // (see `game_over_deletes_the_run_save_but_not_the_settings`-
+                // style tests), so settings/audio/accessibility storage is
+                // never touched here.
+                match &store {
+                    Some(store) => store.clear(),
+                    None => warn!("ClearCorruptSave pressed but no SaveStore resource exists"),
                 }
             }
             MenuAction::Settings => commands.insert_resource(SettingsOpen),
@@ -838,18 +898,43 @@ mod tests {
         );
     }
 
+    // --- #201: recoverable-invalid-save menu states ---
+
+    fn recover_button(app: &mut App) -> Option<Entity> {
+        app.world_mut()
+            .query_filtered::<Entity, With<RecoverSaveButton>>()
+            .iter(app.world())
+            .next()
+    }
+
+    /// A future-version save: a well-formed payload, just claiming a version
+    /// this build has never seen (see `save::snapshot::SnapshotLoadError::FutureVersion`).
+    fn future_version_save_json() -> String {
+        let mut save = SaveGame::from_json(&saved_run_json()).expect("saved_run_json is valid");
+        save.version = crate::save::CURRENT_VERSION + 1;
+        save.to_json().expect("plain data serializes")
+    }
+
     #[test]
-    fn a_corrupt_save_keeps_continua_disabled_and_clears_the_store() {
+    fn a_corrupt_save_shows_a_recovery_button_and_preserves_the_data_until_recovery() {
         let (mut app, cell) = test_app_with_save(Some("garbage, not JSON"));
         assert!(
             continue_button(&mut app).is_none(),
             "no resumable button for a corrupt save"
         );
-        assert_eq!(count::<DisabledButton>(&mut app), 1, "greyed-out marker");
+        assert!(
+            recover_button(&mut app).is_some(),
+            "a Romanian recovery action is shown instead of silently discarding the save"
+        );
         assert_eq!(
-            *cell.lock().expect("test store lock"),
-            None,
-            "the corrupt save is cleared on the menu load"
+            count::<DisabledButton>(&mut app),
+            0,
+            "the recovery button is clickable, not the disabled marker"
+        );
+        assert!(
+            cell.lock().expect("test store lock").is_some(),
+            "the corrupt save is preserved on mere menu load -- never silently \
+             discarded before the player has a chance to see and act on it"
         );
         assert_eq!(
             *app.world().resource::<State<GameState>>().get(),
@@ -858,9 +943,48 @@ mod tests {
     }
 
     #[test]
+    fn a_future_version_save_shows_the_same_recovery_button() {
+        let (mut app, cell) = test_app_with_save(Some(&future_version_save_json()));
+        assert!(
+            continue_button(&mut app).is_none(),
+            "no resumable button for a future-version save"
+        );
+        assert!(
+            recover_button(&mut app).is_some(),
+            "a future-version save gets the same Romanian recovery action as a corrupt one"
+        );
+        assert!(cell.lock().expect("test store lock").is_some());
+    }
+
+    #[test]
+    fn pressing_the_recovery_button_clears_only_the_run_snapshot_and_never_navigates() {
+        let (mut app, cell) = test_app_with_save(Some("garbage, not JSON"));
+        let button = recover_button(&mut app).expect("recovery button exists for a corrupt save");
+        app.world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        app.update();
+
+        assert_eq!(
+            *cell.lock().expect("test store lock"),
+            None,
+            "recovery quarantines the run snapshot"
+        );
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::MainMenu,
+            "recovery never navigates away from the menu"
+        );
+    }
+
+    #[test]
     fn an_empty_store_keeps_continua_disabled() {
         let (mut app, _cell) = test_app_with_save(None);
         assert!(continue_button(&mut app).is_none());
+        assert!(
+            recover_button(&mut app).is_none(),
+            "no recovery action when there is nothing stored at all"
+        );
         assert_eq!(count::<DisabledButton>(&mut app), 1);
     }
 

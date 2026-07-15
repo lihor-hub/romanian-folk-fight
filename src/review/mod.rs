@@ -805,6 +805,11 @@ fn parse_button(name: &str) -> Option<ReviewButton> {
     match name {
         "NewGame" => Some(ReviewButton::Menu(MenuAction::NewGame)),
         "Continue" => Some(ReviewButton::Menu(MenuAction::Continue)),
+        // #201: the Romanian recovery action shown in place of Continuă
+        // when the stored run snapshot is present but unusable -- lets the
+        // `corrupt-save-recovery` browser scenario trigger recovery
+        // deterministically instead of guessing pixel coordinates.
+        "ClearCorruptSave" => Some(ReviewButton::Menu(MenuAction::ClearCorruptSave)),
         "ConfirmHero" => Some(ReviewButton::Creation(CreationAction::Confirm)),
         "CreationBack" => Some(ReviewButton::Creation(CreationAction::Back)),
         "GoToShop" => Some(ReviewButton::Result(ResultAction::GoToShop)),
@@ -1224,6 +1229,10 @@ mod tests {
         for (name, expected) in [
             ("NewGame", ReviewButton::Menu(MenuAction::NewGame)),
             ("Continue", ReviewButton::Menu(MenuAction::Continue)),
+            (
+                "ClearCorruptSave",
+                ReviewButton::Menu(MenuAction::ClearCorruptSave),
+            ),
             (
                 "ConfirmHero",
                 ReviewButton::Creation(CreationAction::Confirm),

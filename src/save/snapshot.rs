@@ -159,6 +159,31 @@ struct VersionProbe {
     version: u32,
 }
 
+/// Why [`SaveGame::load`] could not produce a [`SaveGame`] -- the reason
+/// [`super::storage`] (#201) needs to pick a recoverable-vs-not menu
+/// treatment, kept separate from a bare `None` so that distinction survives
+/// past this module's parse/migrate/validate pipeline. Added for #201;
+/// deliberately does not change the pipeline itself (still fails closed on
+/// exactly the same inputs `from_json` always has -- see this module's
+/// `corrupt_json_is_rejected_without_panicking` and
+/// `a_future_version_is_rejected_without_panic` tests, both still green).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotLoadError {
+    /// The payload is unusable on its own terms: it fails to parse as JSON
+    /// at all, fails to parse as the shape its claimed version implies (e.g.
+    /// truncated by a torn write), claims a version this build has never
+    /// known how to read (older than any known [`Migrate`] source and not
+    /// [`CURRENT_VERSION`]), or references an item name outside
+    /// [`crate::items::ItemId::ALL`]. Never becomes readable by waiting --
+    /// the stored bytes themselves are the problem.
+    Invalid,
+    /// The payload parses its version field as strictly newer than
+    /// [`CURRENT_VERSION`] -- written by a newer build than this one (e.g.
+    /// after a rollback). Reported separately from [`Self::Invalid`] because
+    /// the payload is not necessarily corrupt, just from the future.
+    FutureVersion,
+}
+
 /// v1 payload (pre-#193, `SAVE_VERSION == 1`): kept only so
 /// [`SaveGame::from_json`] can parse and [`Migrate`] old saves. Nothing else
 /// in the codebase constructs this — new saves are always [`SaveGame`].
@@ -309,17 +334,38 @@ impl SaveGame {
     /// Parses, migrates, and validates a snapshot: corrupt JSON, an unknown
     /// or unsupported version, or an item name missing from the catalog all
     /// yield `None` — never a panic. See the module docs' version envelope
-    /// section for the full fail-closed contract.
+    /// section for the full fail-closed contract. A thin wrapper over
+    /// [`Self::load`] for callers that only need "did it work", not *why* it
+    /// didn't.
     pub fn from_json(json: &str) -> Option<Self> {
-        let probe: VersionProbe = serde_json::from_str(json).ok()?;
+        Self::load(json).ok()
+    }
+
+    /// Like [`Self::from_json`], but keeps *why* a load failed instead of
+    /// collapsing every failure into `None` — see [`SnapshotLoadError`].
+    /// Added for #201, whose storage layer ([`super::storage`]) needs this
+    /// distinction to decide whether the menu can offer a recovery action
+    /// (it always can, today: both variants are equally unresumable) without
+    /// re-implementing this module's own parse/migrate/validate pipeline.
+    pub fn load(json: &str) -> Result<Self, SnapshotLoadError> {
+        let probe: VersionProbe =
+            serde_json::from_str(json).map_err(|_| SnapshotLoadError::Invalid)?;
         let save = match probe.version {
-            1 => serde_json::from_str::<SnapshotV1>(json).ok()?.migrate(),
-            CURRENT_VERSION => serde_json::from_str::<Self>(json).ok()?,
+            1 => serde_json::from_str::<SnapshotV1>(json)
+                .map_err(|_| SnapshotLoadError::Invalid)?
+                .migrate(),
+            CURRENT_VERSION => {
+                serde_json::from_str::<Self>(json).map_err(|_| SnapshotLoadError::Invalid)?
+            }
+            other if other > CURRENT_VERSION => {
+                warn!("save version {other} is newer than this build supports ({CURRENT_VERSION})");
+                return Err(SnapshotLoadError::FutureVersion);
+            }
             other => {
                 warn!(
                     "save version {other} is not supported (current {CURRENT_VERSION}); discarding"
                 );
-                return None;
+                return Err(SnapshotLoadError::Invalid);
             }
         };
         if let Some(unknown) = save
@@ -329,9 +375,9 @@ impl SaveGame {
             .find(|name| parse_item(name).is_none())
         {
             warn!("save references unknown item {unknown:?}; discarding");
-            return None;
+            return Err(SnapshotLoadError::Invalid);
         }
-        Some(save)
+        Ok(save)
     }
 
     /// The saved [`PlayerCharacter`].
@@ -613,6 +659,46 @@ pub(crate) mod tests {
         // An unknown *old* version (neither a known past version nor the
         // current one) fails closed the same way.
         assert!(SaveGame::from_json(r#"{"version":0}"#).is_none());
+    }
+
+    /// #201: [`SaveGame::load`] classifies exactly why a load failed, so
+    /// [`super::super::storage`] can tell a corrupt/unsupported-old payload
+    /// apart from one written by a newer build — both still fail closed
+    /// (never a panic, never a resumed run), but only the typed distinction
+    /// lets a caller describe *which* happened.
+    #[test]
+    fn load_classifies_a_future_version_separately_from_invalid_data() {
+        let mut save = sample_save();
+        save.version = CURRENT_VERSION + 1;
+        let json = save.to_json().expect("plain data serializes");
+        assert_eq!(SaveGame::load(&json), Err(SnapshotLoadError::FutureVersion));
+    }
+
+    #[test]
+    fn load_classifies_corrupt_and_unsupported_old_data_as_invalid() {
+        for corrupt in [
+            "",
+            "not json at all",
+            "{",
+            "42",
+            r#"{"version":2}"#,
+            r#"{"version":1}"#,
+            r#"{"version":0}"#,
+        ] {
+            assert_eq!(
+                SaveGame::load(corrupt),
+                Err(SnapshotLoadError::Invalid),
+                "{corrupt:?} must classify as Invalid, not FutureVersion"
+            );
+        }
+    }
+
+    #[test]
+    fn load_classifies_an_unknown_item_as_invalid() {
+        let mut save = sample_save();
+        save.owned_items.push("SabiaLuiStefan".to_string());
+        let json = save.to_json().expect("plain data serializes");
+        assert_eq!(SaveGame::load(&json), Err(SnapshotLoadError::Invalid));
     }
 
     /// The exact v1 fixture this module's docs table describes, captured
