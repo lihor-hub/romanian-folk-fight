@@ -22,7 +22,7 @@ use crate::combat::{CombatEvent, CombatLogEvent, CombatSide};
 use crate::core::{GameState, despawn_screen};
 use crate::flow::FlowIntent;
 use crate::roster::LadderProgress;
-use crate::save::SaveRequested;
+use crate::save::{ResumeDestination, SaveRequested};
 use crate::ui_widgets::focus::{FocusNavigationPlugin, FocusNavigationSet};
 
 /// Galbeni a fresh run starts with, so the first shop visit isn't pointless.
@@ -301,13 +301,19 @@ fn tick_fight_end_delay(
 /// once per fight; the `rewarded` flag guards against a double award (or
 /// double advance) if the result screen is re-entered (e.g. via the shop)
 /// before the next fight clears the outcome. The credited run is autosaved
-/// (see [`crate::save`]).
+/// (see [`crate::save`]) with the resume destination that matches which
+/// screen this `OnEnter` fired for (#217): [`GameState::Victory`] — the
+/// lap-1 final boss fell, and the only way onward is the shop (**Turul 2**)
+/// — resumes into [`ResumeDestination::Shop`]; every other case (a regular
+/// [`GameState::FightResult`] win) resumes into [`ResumeDestination::Fight`],
+/// matching **Lupta următoare**.
 fn award_victory(
     mut wallet: ResMut<Wallet>,
     mut level: ResMut<Level>,
     mut earnings: ResMut<LifetimeEarnings>,
     outcome: Option<ResMut<FightOutcome>>,
     ladder: Option<ResMut<LadderProgress>>,
+    state: Res<State<GameState>>,
     mut save_requests: MessageWriter<SaveRequested>,
 ) {
     let Some(mut outcome) = outcome else {
@@ -324,7 +330,12 @@ fn award_victory(
         ladder.advance();
     }
     outcome.rewarded = true;
-    save_requests.write(SaveRequested);
+    let resume_destination = if *state.get() == GameState::Victory {
+        ResumeDestination::Shop
+    } else {
+        ResumeDestination::Fight
+    };
+    save_requests.write(SaveRequested(resume_destination));
 }
 
 /// Resets every run-scoped resource so the next run starts clean: a fresh

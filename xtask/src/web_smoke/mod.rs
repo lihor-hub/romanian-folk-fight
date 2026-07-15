@@ -93,6 +93,7 @@
 //! in `commands::mod.rs`, and not the shared `browser`/`server`/`artifacts`/
 //! `baseline` building blocks this module already provides.
 
+mod abandon_forfeit;
 mod accessibility_settings_reload;
 pub mod artifacts;
 pub mod baseline;
@@ -107,6 +108,7 @@ mod gold_journey;
 mod high_contrast;
 mod keyboard_accessibility;
 mod reduced_motion_fight;
+mod save_reload;
 pub mod server;
 mod touch_targets;
 mod zoom_200;
@@ -133,19 +135,23 @@ pub const SCENARIOS: &[&str] = &[
     "zoom-200",
     "touch-targets",
     "corrupt-save-recovery",
+    "save-reload",
+    "abandon-forfeit",
 ];
 
 /// Dispatches `--scenario <name>` to the matching scenario module. Known
 /// scenarios: `cold-menu` (#168), `gold-journey` (#187/#198),
 /// `accessibility-settings-reload` (#191), `reduced-motion-fight` (#200),
 /// `fight-palette-desktop` (#189), `fight-palette-phone` (#199),
-/// `high-contrast` (#214), and `fight-palette-accessible` (#213) -- each one
-/// the exact extension pattern the module docs above describe: a new module
-/// plus one match arm here, nothing else touched upstream. `strict_visual`
-/// (#198) is forwarded to the scenarios with screenshot baselines so a
-/// baseline diff can optionally fail the run instead of the default
-/// non-fatal report -- see `baseline`'s module docs; the baseline-free
-/// scenarios have nothing for it to gate.
+/// `high-contrast` (#214), `fight-palette-accessible` (#213),
+/// `corrupt-save-recovery` (#201), and `save-reload`/`abandon-forfeit`
+/// (#217) -- each one the exact extension pattern the module docs above
+/// describe: a new module plus one match arm here, nothing else touched
+/// upstream. `strict_visual` (#198) is forwarded to the scenarios with
+/// screenshot baselines so a baseline diff can optionally fail the run
+/// instead of the default non-fatal report -- see `baseline`'s module docs;
+/// the baseline-free scenarios (including both #217 additions) have nothing
+/// for it to gate.
 pub fn run_scenario(
     scenario: &str,
     update_baselines: bool,
@@ -166,6 +172,8 @@ pub fn run_scenario(
         "zoom-200" => zoom_200::run(update_baselines),
         "touch-targets" => touch_targets::run(update_baselines),
         "corrupt-save-recovery" => corrupt_save_recovery::run(update_baselines),
+        "save-reload" => save_reload::run(update_baselines),
+        "abandon-forfeit" => abandon_forfeit::run(update_baselines),
         other => Err(SmokeError::usage(format!(
             "unknown --scenario `{other}` (known scenarios: {})",
             SCENARIOS.join(", ")

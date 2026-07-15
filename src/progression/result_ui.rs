@@ -10,7 +10,7 @@ use crate::combat::hud::bar_percent;
 use crate::core::{LetterboxRect, UiFont};
 use crate::creation::PlayerCharacter;
 use crate::flow::FlowIntent;
-use crate::save::SaveRequested;
+use crate::save::{ResumeDestination, SaveRequested};
 use crate::theme::{
     BAR_TRACK, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK, PanelTexture,
     STAMINA_FILL, panel_bundle,
@@ -362,7 +362,10 @@ pub(super) fn handle_result_actions(
 /// applies the draft: [`PlayerCharacter`] takes the new attributes, a live
 /// player fighter's pools top up by exactly the vitalitate max-delta,
 /// leftover points persist on [`Level`], the panel closes, and the new
-/// build is autosaved (see [`crate::save`]).
+/// build is autosaved (see [`crate::save`]) with
+/// [`ResumeDestination::Fight`] -- this panel only ever shows on the
+/// [`crate::core::GameState::FightResult`] screen (never victory's), so its
+/// checkpoint shares the result/reward destination.
 // A Bevy system: each parameter is a distinct ECS handle the confirm branch
 // needs (draft, level, player, fighter pools, panel, autosave trigger).
 #[allow(clippy::too_many_arguments)]
@@ -407,7 +410,7 @@ pub(super) fn handle_allocation_actions(
                 for panel in &panels {
                     commands.entity(panel).despawn();
                 }
-                save_requests.write(SaveRequested);
+                save_requests.write(SaveRequested(ResumeDestination::Fight));
             }
         }
     }

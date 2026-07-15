@@ -99,10 +99,12 @@ use crate::combat::action_palette::{
 };
 use crate::combat::actions::{self, ActionCategory};
 use crate::combat::engine::QUICK_STRIKE_COST;
+use crate::combat::pause::PauseAction;
 use crate::combat::systems::{CombatPresentation, PlayerActionEvent};
 use crate::combat::{CombatAction, CombatRng, CombatSide, CombatTurn};
 use crate::core::{GameState, LetterboxRect, ViewportInfo, WorldCamera};
 use crate::creation::{CharacterDraft, CreationAction, HeroChoice, HeroPreset};
+use crate::items::ItemId;
 use crate::menu::{DisabledButton, MenuAction};
 use crate::progression::result_ui::{GameOverAction, ResultAction};
 use crate::progression::victory_ui::VictoryAction;
@@ -784,10 +786,12 @@ fn parse_preset(name: &str) -> Option<HeroPreset> {
 
 /// One pressable screen button, resolved from a `pressButton` command's
 /// name. Covers exactly the player-facing navigation buttons of the five
-/// journey screens (plus game-over/victory for later scenarios); in-screen
-/// editing buttons (attribute steppers, shop purchases, ...) are deliberately
-/// not exposed -- in-screen state is seeded through dedicated commands like
-/// `selectPreset` instead.
+/// journey screens (plus game-over/victory, the pause overlay's forfeit
+/// action, and shop purchases for the save/abandon browser scenarios --
+/// #217); in-screen editing buttons that aren't navigation or a checkpoint in
+/// their own right (attribute steppers, ...) are deliberately not exposed --
+/// in-screen state is seeded through dedicated commands like `selectPreset`
+/// instead.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ReviewButton {
     Menu(MenuAction),
@@ -796,12 +800,28 @@ enum ReviewButton {
     GameOver(GameOverAction),
     Victory(VictoryAction),
     Shop(ShopAction),
+    /// The paused-fight overlay's own actions (#217): only **Abandonează**
+    /// is exercised by a browser scenario today (`abandon-forfeit`), but
+    /// **Continuă lupta**/**Setări** are exposed the same way for symmetry
+    /// with every other screen's full action set.
+    Pause(PauseAction),
 }
 
 /// Maps a `pressButton` command's `button` field to the screen button it
 /// presses. An unrecognized name returns `None`, which
-/// [`poll_review_commands`] logs and drops.
+/// [`poll_review_commands`] logs and drops. `ShopItem:<name>` (#217) is a
+/// dynamic family rather than a fixed variant, since it addresses one of
+/// every catalog item's own buy/equip button by [`ItemId`]'s `Debug` name
+/// (the same stable name [`crate::save::snapshot`] uses for a save's
+/// `owned_items`/`equipped` lists) -- checked before the fixed-name match so
+/// a name never collides with one of the exact strings below.
 fn parse_button(name: &str) -> Option<ReviewButton> {
+    if let Some(item_name) = name.strip_prefix("ShopItem:") {
+        return ItemId::ALL
+            .into_iter()
+            .find(|id| format!("{id:?}") == item_name)
+            .map(|id| ReviewButton::Shop(ShopAction::Item(id)));
+    }
     match name {
         "NewGame" => Some(ReviewButton::Menu(MenuAction::NewGame)),
         "Continue" => Some(ReviewButton::Menu(MenuAction::Continue)),
@@ -818,6 +838,10 @@ fn parse_button(name: &str) -> Option<ReviewButton> {
         "VictoryNextLap" => Some(ReviewButton::Victory(VictoryAction::NextLap)),
         "VictoryBackToMenu" => Some(ReviewButton::Victory(VictoryAction::BackToMenu)),
         "BackToArena" => Some(ReviewButton::Shop(ShopAction::BackToArena)),
+        // #217: the paused-fight overlay's actions -- see `ReviewButton::Pause`.
+        "PauseResume" => Some(ReviewButton::Pause(PauseAction::Resume)),
+        "PauseSettings" => Some(ReviewButton::Pause(PauseAction::Settings)),
+        "PauseAbandon" => Some(ReviewButton::Pause(PauseAction::Abandon)),
         _ => None,
     }
 }
@@ -835,6 +859,7 @@ type PressableButton = (
     Option<&'static GameOverAction>,
     Option<&'static VictoryAction>,
     Option<&'static ShopAction>,
+    Option<&'static PauseAction>,
 );
 
 /// Drains and applies at most one pending [`ReviewCommand`] this frame (see
@@ -907,7 +932,7 @@ fn press_button(
     target: ReviewButton,
     buttons: &mut Query<PressableButton, (With<Button>, Without<CategoryButton>)>,
 ) {
-    for (mut interaction, disabled, menu, creation, result, game_over, victory, shop) in
+    for (mut interaction, disabled, menu, creation, result, game_over, victory, shop, pause) in
         buttons.iter_mut()
     {
         let matches = match target {
@@ -917,6 +942,7 @@ fn press_button(
             ReviewButton::GameOver(wanted) => game_over == Some(&wanted),
             ReviewButton::Victory(wanted) => victory == Some(&wanted),
             ReviewButton::Shop(wanted) => shop == Some(&wanted),
+            ReviewButton::Pause(wanted) => pause == Some(&wanted),
         };
         if !matches {
             continue;
@@ -1253,16 +1279,41 @@ mod tests {
                 ReviewButton::Victory(VictoryAction::BackToMenu),
             ),
             ("BackToArena", ReviewButton::Shop(ShopAction::BackToArena)),
+            // #217: the paused-fight overlay's actions.
+            ("PauseResume", ReviewButton::Pause(PauseAction::Resume)),
+            ("PauseSettings", ReviewButton::Pause(PauseAction::Settings)),
+            ("PauseAbandon", ReviewButton::Pause(PauseAction::Abandon)),
         ] {
             assert_eq!(parse_button(name), Some(expected), "{name}");
         }
     }
 
+    /// #217: `ShopItem:<name>` addresses one of every catalog item's own
+    /// buy/equip button by its stable [`ItemId`] `Debug` name -- used by the
+    /// `save-reload` browser scenario to prove a shop purchase autosaves and
+    /// survives a reload.
+    #[test]
+    fn parse_button_resolves_every_catalog_item_by_its_shop_item_command() {
+        for id in ItemId::ALL {
+            let name = format!("ShopItem:{id:?}");
+            assert_eq!(
+                parse_button(&name),
+                Some(ReviewButton::Shop(ShopAction::Item(id))),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            parse_button("ShopItem:NuExista"),
+            None,
+            "an unknown item name must be rejected"
+        );
+    }
+
     #[test]
     fn parse_button_rejects_unknown_and_non_navigation_names() {
         // The automated combat-outcome routes have no button and must stay
-        // unreachable from the seam; in-screen editors (attribute steppers,
-        // shop purchases) are seeded through dedicated commands instead.
+        // unreachable from the seam; in-screen editors (attribute steppers)
+        // are seeded through dedicated commands instead.
         for name in [
             "ResolveVictory",
             "ResolveDefeat",

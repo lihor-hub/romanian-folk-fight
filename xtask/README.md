@@ -45,6 +45,9 @@ cargo xtask web-smoke --scenario fight-palette-accessible  # real-keyboard palet
 cargo xtask web-smoke --scenario keyboard-accessibility  # real-keyboard-only pass over every current screen (menu, settings, creation, fight, pause, result, shop) (#216)
 cargo xtask web-smoke --scenario zoom-200      # every current screen at a 200%-desktop-zoom viewport: no scroll, no clipped control (#216)
 cargo xtask web-smoke --scenario touch-targets # every current screen at desktop+phone: no interactive target below 44x44 CSS px (#216)
+cargo xtask web-smoke --scenario corrupt-save-recovery  # seed a corrupt/future-version save, verify the Romanian recovery action (#201)
+cargo xtask web-smoke --scenario save-reload   # result -> shop -> real reload -> Continuă resumes at Shop with every run value intact (#217)
+cargo xtask web-smoke --scenario abandon-forfeit  # Abandonează clears the run snapshot, returns to Main Menu, disables Continuă (#217)
 cargo xtask web-smoke --all                    # every registered scenario back to back (#198)
 cargo xtask pre-push            # fmt check, clippy, cargo test, build-matrix -- stops at first failure
 ```
@@ -497,6 +500,43 @@ is accepted for CLI uniformity but has no effect). Diagnostics (menu/
 settings/post-reload screenshots, viewport and zoom-capability logs, both
 `localStorage` reads, the server request log) are always retained under
 `target/xtask-artifacts/web-smoke/accessibility-settings-reload/reload/`.
+
+### `web-smoke --scenario save-reload` (#217, a child of #146)
+
+Reuses the same review-seam harness `gold-journey`/`corrupt-save-recovery`
+already established, added as its own module (`save_reload.rs`) plus one
+match arm in `web_smoke::run_scenario` -- no dispatcher/CLI/harness-core
+change. Drives menu -> creation (`Voinicul`, seeded combat) -> a won first
+fight -> the result screen -> the shop, buys one affordable item
+(`CaciulaDeOaie`) through the review seam's `ShopItem:<name>` command, reads
+the run snapshot straight out of `localStorage` (`rff_save_v1`) to confirm
+the wallet/ladder/owned/equipped fields and a `resume_destination` of
+`"shop"`, then issues a **real** `Page.reload` (a full wasm re-boot, not an
+in-memory reset) and presses **Continuă** on the resulting main menu.
+Asserts the game lands back on the shop screen with the exact same stored
+snapshot as before the reload -- the real-browser proof that a safe resume
+destination survives the browser closing and reopening, not just a headless
+`App`'s in-process state. No screenshot baselines (pass/fail gate is exact
+`localStorage` reads); before/after-reload/after-Continuă screenshots are
+still captured as artifacts under
+`target/xtask-artifacts/web-smoke/save-reload/journey/`.
+
+### `web-smoke --scenario abandon-forfeit` (#217, a child of #146)
+
+Added the same way as `save-reload` above: a new module
+(`abandon_forfeit.rs`) plus one match arm, nothing else touched. Drives menu
+-> creation -> fight (the hero-confirmation checkpoint autosaves), presses a
+real Escape key to open the pause overlay, then presses **Abandonează**
+through the review seam's `pressButton PauseAbandon` command (#217 widened
+`combat::pause::PauseAction` to `pub` and `review::parse_button` to resolve
+it, exactly like every other screen's navigation buttons). Asserts: the run
+snapshot (`rff_save_v1`) reads back `null` -- forfeited, not merely
+"unchanged" -- the screen is `MainMenu`, and a further `pressButton Continue`
+does not navigate anywhere (the disabled **Continuă** marker spawned for
+`SnapshotLoad::NoSave` carries no `MenuAction::Continue` component for the
+seam to find, so the production handler never runs). No screenshot
+baselines; fight/pause-overlay/post-abandon screenshots are captured as
+artifacts under `target/xtask-artifacts/web-smoke/abandon-forfeit/journey/`.
 
 ### `pre-push`
 
