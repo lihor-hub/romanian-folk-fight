@@ -233,12 +233,35 @@ fn read_accessibility(checkpoint: &Checkpoint) -> Result<Option<AccessibilitySna
 }
 
 /// Presses `key` via a real CDP keypress and waits until the published
-/// accessibility snapshot actually differs from whatever was published just
-/// before the press (up to [`SETTLE_MAX_FRAMES`]), returning the changed
-/// snapshot. See `fight_palette_accessible::press_key_and_wait_for_change`
-/// for the full rationale (comparing against a captured "before" value is
+/// accessibility snapshot both (a) actually differs from whatever was
+/// published just before the press and (b) names a real focused control
+/// (`focused_entity.is_some()`), up to [`SETTLE_MAX_FRAMES`], returning the
+/// resulting snapshot. See `fight_palette_accessible::press_key_and_wait_for_change`
+/// for the base rationale (comparing against a captured "before" value is
 /// what makes this robust against the harness racing the browser's own
 /// asynchronous dispatch/render loop).
+///
+/// Every call site here presses `ArrowRight` to move focus, so a resulting
+/// `focused_entity: None` is never a legitimate settled outcome -- but
+/// requiring *only* "differs from `before`" is not enough to guarantee that:
+/// [`AccessibilitySnapshot::targets`] legitimately changes on frames that
+/// have nothing to do with the just-issued key press (e.g. a focusable
+/// control's on-screen box shifting as the shared widget's scroll-into-view
+/// settles, or one appearing/disappearing as a screen's own UI keeps
+/// finishing spawning) -- see `walk_full_lap`'s own doc comment on why a
+/// wrapped-around lap "need not be byte-identical" to the snapshot it
+/// started from. Read literally, the pre-#268 version of this loop would
+/// return on the *first* such incidental change even if it still carried
+/// `focused_entity: None`, which is exactly the shape of `keyboard-
+/// accessibility`'s "the first ArrowRight press left nothing focused"
+/// failure on a cold-booted MainMenu: the loop gave up one frame too early,
+/// before the press's own effect (focus actually landing) had been
+/// published, mistaking an unrelated field's settling for "done". Requiring
+/// `focused_entity.is_some()` here keeps waiting past that kind of noise
+/// instead of racing ahead of it, while still failing loudly (after
+/// `SETTLE_MAX_FRAMES`) if focus genuinely never lands -- this does not
+/// weaken the gate, it only stops the harness from asserting a false
+/// positive against its own noisy intermediate frames.
 fn press_key_and_wait_for_change(
     checkpoint: &Checkpoint,
     key: &str,
@@ -249,13 +272,14 @@ fn press_key_and_wait_for_change(
         checkpoint.wait_for_frame()?;
         if let Some(snapshot) = read_accessibility(checkpoint)?
             && Some(&snapshot) != before.as_ref()
+            && snapshot.focused_entity.is_some()
         {
             return Ok(snapshot);
         }
     }
     Err(format!(
-        "the accessibility snapshot never changed within {SETTLE_MAX_FRAMES} frames after \
-         pressing {key:?} (still {before:?})"
+        "the accessibility snapshot never settled on a focused control within \
+         {SETTLE_MAX_FRAMES} frames after pressing {key:?} (started from {before:?})"
     ))
 }
 
@@ -620,14 +644,64 @@ fn exercise_settings_overlay(
     ));
 
     press_arrow_until_label(checkpoint, "Înapoi")?;
+    press_enter_and_wait_for_overlay_close(checkpoint)?;
+    Ok(())
+}
+
+/// Presses `Enter` on the focused **Înapoi** button and waits for the
+/// settings overlay to actually finish closing -- specifically, for focus to
+/// leave the **Înapoi** control it was on -- before any caller races ahead
+/// with further key presses.
+///
+/// This is deliberately *not* `read_screen(checkpoint)? == Some(parent_screen)`
+/// polled in a loop, which is what this function replaced: opening the
+/// settings overlay never changes the `GameState` (see this function's
+/// caller, which asserts exactly that right after opening), so that
+/// condition is already true on the very first iteration -- so the old loop
+/// did a single `wait_for_frame` after dispatching the `Enter` keypress and
+/// then returned immediately, regardless of whether the game had actually
+/// processed that keypress yet. That is the concrete shape of `keyboard-
+/// accessibility`'s CI failure at the `press_arrow_until_label("Continuă
+/// lupta")` call right after this one: on a slow runner, returning before
+/// **Înapoi**'s activation has despawned the overlay means the caller's very
+/// next `ArrowRight` is dispatched while focus is *still inside the settings
+/// modal*. If that `ArrowRight` and the still-pending `Enter` land in the
+/// same slow game frame, the focus systems (which run before the settings
+/// button handler in `Update`) move focus off **Înapoi** first, so `Enter`
+/// then activates whatever control focus moved onto -- a volume stepper, say
+/// -- instead of **Înapoi**. The overlay never closes, focus stays trapped
+/// cycling the settings modal's own controls, and `press_arrow_until_label`
+/// exhausts all 64 of its presses without ever reaching the pause overlay's
+/// «Continuă lupta» underneath -- exactly the observed CI error.
+///
+/// Waiting for `focused_entity` to change away from the **Înapoi** control it
+/// started on is the precise, race-free signal that the close has been
+/// processed: over the paused fight, closing refocuses the pause overlay's
+/// own first control; over the main menu, it clears focus to `None` (see
+/// `settings::despawn_overlay`'s doc comment). Both leave `focused_entity`
+/// different from the **Înapoi** entity -- and both are correct settled
+/// outcomes here, so, unlike [`press_key_and_wait_for_change`], this does not
+/// also require `focused_entity.is_some()`. Comparing the whole snapshot (or
+/// merely "any field differs") would instead risk returning on an incidental
+/// `targets`-rect shift while focus is still on **Înapoi** -- the same false-
+/// positive class #268 is about -- so the comparison is specifically on
+/// `focused_entity`.
+fn press_enter_and_wait_for_overlay_close(checkpoint: &Checkpoint) -> Result<(), String> {
+    let before = read_accessibility(checkpoint)?;
+    let before_focus = before.as_ref().and_then(|s| s.focused_entity.clone());
     checkpoint.press_key("Enter")?;
     for _ in 0..SETTLE_MAX_FRAMES {
         checkpoint.wait_for_frame()?;
-        if read_screen(checkpoint)?.as_deref() == Some(parent_screen) {
-            break;
+        if let Some(snapshot) = read_accessibility(checkpoint)?
+            && snapshot.focused_entity != before_focus
+        {
+            return Ok(());
         }
     }
-    Ok(())
+    Err(format!(
+        "closing the settings overlay (Enter on «Înapoi») never moved focus off the \
+         back button within {SETTLE_MAX_FRAMES} frames (focus still {before_focus:?})"
+    ))
 }
 
 /// Character creation: every preset tile, the name arrows, the appearance

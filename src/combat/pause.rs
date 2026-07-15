@@ -17,7 +17,7 @@ use crate::theme::{
     BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, PanelTexture, SCRIM, panel_bundle,
 };
 use crate::ui_widgets::focus::{
-    FocusNavigationSet, Focusable, InputFocus, TabGroup, TabIndex, TabNavigation,
+    FocusNavigationSet, Focusable, InputFocus, PendingAutofocus, TabGroup, TabIndex, TabNavigation,
     autofocus_first_in_group,
 };
 
@@ -252,14 +252,21 @@ fn resize_pause_overlay(
 /// see [`autofocus_first_in_group`]'s doc comment for why a modal group
 /// needs this. Ordered right after `spawn_overlay` in the same
 /// `OnEnter(PauseState::Paused)` chain, which applies deferred `Commands`
-/// between the two, so the panel this queries for already exists.
+/// between the two, so the panel this queries for already exists -- but on
+/// a slow first wasm boot (#268) that panel's own `Focusable` children can
+/// still be a frame or more behind (the same class of race
+/// `ui_widgets::focus::PendingFocusNav` documents), so a failed attempt here
+/// is not final: see [`autofocus_first_in_group`]'s doc comment on
+/// [`PendingAutofocus`]/`retry_pending_autofocus` retrying it every later
+/// frame until it lands.
 fn autofocus_pause_overlay(
     nav: TabNavigation,
     mut focus: ResMut<InputFocus>,
+    mut pending: ResMut<PendingAutofocus>,
     panels: Query<Entity, With<PausePanel>>,
 ) {
     for panel in &panels {
-        autofocus_first_in_group(&nav, &mut focus, panel);
+        autofocus_first_in_group(&nav, &mut focus, &mut pending, panel);
     }
 }
 

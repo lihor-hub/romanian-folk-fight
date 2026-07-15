@@ -43,8 +43,8 @@ use crate::theme::{
     BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, PanelTexture, SCRIM_HEAVY, panel_bundle,
 };
 use crate::ui_widgets::focus::{
-    FocusNavigationPlugin, FocusNavigationSet, InputFocus, TabGroup, TabNavigation,
-    autofocus_first_in_group,
+    FocusNavigationPlugin, FocusNavigationSet, InputFocus, PendingAutofocus, TabGroup,
+    TabNavigation, autofocus_first_in_group,
 };
 use crate::ui_widgets::{attribute_row::spawn_stepper_row, wide_button, wide_button_labeled};
 
@@ -522,6 +522,7 @@ fn despawn_overlay(
     overlays: Query<Entity, With<SettingsOverlay>>,
     nav: TabNavigation,
     mut focus: Option<ResMut<InputFocus>>,
+    mut pending: ResMut<PendingAutofocus>,
     other_modals: Query<(Entity, &TabGroup), Without<SettingsPanel>>,
 ) {
     for entity in &overlays {
@@ -531,7 +532,14 @@ fn despawn_overlay(
         return;
     };
     match other_modals.iter().find(|(_, tg)| tg.modal) {
-        Some((other_modal, _)) => autofocus_first_in_group(&nav, focus, other_modal),
+        // #268: `other_modal`'s own `Focusable` children can, in principle,
+        // be mid-spawn on the exact frame this runs (the same slow-first-
+        // frame race documented on `autofocus_pause_overlay`) -- see
+        // `autofocus_first_in_group`'s doc comment on `PendingAutofocus`
+        // retrying this instead of leaving focus stuck nowhere.
+        Some((other_modal, _)) => {
+            autofocus_first_in_group(&nav, focus, &mut pending, other_modal);
+        }
         None => focus.clear(),
     }
 }
@@ -547,10 +555,11 @@ fn despawn_overlay(
 fn autofocus_settings_overlay(
     nav: TabNavigation,
     mut focus: ResMut<InputFocus>,
+    mut pending: ResMut<PendingAutofocus>,
     panels: Query<Entity, With<SettingsPanel>>,
 ) {
     for panel in &panels {
-        autofocus_first_in_group(&nav, &mut focus, panel);
+        autofocus_first_in_group(&nav, &mut focus, &mut pending, panel);
     }
 }
 
