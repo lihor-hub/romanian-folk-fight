@@ -42,6 +42,10 @@ use crate::save::{SaveBackend, platform_backend};
 use crate::theme::{
     BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, PanelTexture, SCRIM_HEAVY, panel_bundle,
 };
+use crate::ui_widgets::focus::{
+    FocusNavigationPlugin, FocusNavigationSet, InputFocus, TabGroup, TabNavigation,
+    autofocus_first_in_group,
+};
 use crate::ui_widgets::{attribute_row::spawn_stepper_row, wide_button, wide_button_labeled};
 
 /// The version written into every stored settings blob. Version `1`
@@ -229,9 +233,16 @@ impl Default for SettingsStore {
     }
 }
 
-/// Marker for the settings-overlay root.
+/// Marker for the settings-overlay root (the semi-transparent scrim).
 #[derive(Component)]
 struct SettingsOverlay;
+
+/// Marker for the settings panel nested inside [`SettingsOverlay`] -- the
+/// actual `TabGroup::modal()` root #216's [`autofocus_settings_overlay`]
+/// targets, and the entity `panel_bundle`'s own `Node` (not the full-window
+/// scrim) sizes to its content.
+#[derive(Component)]
+struct SettingsPanel;
 
 /// What a settings-overlay button does when clicked.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,14 +284,24 @@ impl Plugin for SettingsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SettingsStore>()
             .init_resource::<AccessibilityPreferences>()
+            .add_plugins((crate::ui_widgets::ScrollInputPlugin, FocusNavigationPlugin))
             .add_systems(Startup, load_settings)
             .add_systems(
                 Update,
                 (
                     spawn_overlay.run_if(resource_added::<SettingsOpen>),
-                    handle_settings_buttons.run_if(resource_exists::<SettingsOpen>),
+                    autofocus_settings_overlay.run_if(resource_added::<SettingsOpen>),
+                    handle_settings_buttons
+                        .after(FocusNavigationSet)
+                        .run_if(resource_exists::<SettingsOpen>),
                     update_button_backgrounds.run_if(resource_exists::<SettingsOpen>),
                     update_labels.run_if(resource_exists::<SettingsOpen>),
+                    // #216: the overlay's scrim scrolls on short viewports
+                    // (see `spawn_overlay`); this drives it for wheel/touch,
+                    // scoped to the overlay being open (each screen runs its
+                    // own instance for its own scrollables, per #31).
+                    crate::ui_widgets::scroll_with_wheel_and_touch
+                        .run_if(resource_exists::<SettingsOpen>),
                     despawn_overlay.run_if(resource_removed::<SettingsOpen>),
                     persist_on_change,
                 )
@@ -370,22 +391,40 @@ fn spawn_overlay(
                 height: Val::Percent(100.0),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
+                // #216: on a short viewport (200% desktop zoom halves the
+                // CSS-pixel height) the panel is taller than the window --
+                // the scrim scrolls it into reach (#31's `Scrollable`
+                // pattern), via wheel/touch for pointer users and via the
+                // shared focus widget's scroll-into-view for keyboard users.
+                overflow: Overflow::scroll_y(),
                 ..default()
             },
             BackgroundColor(SCRIM_HEAVY),
             GlobalZIndex(20),
+            ScrollPosition::default(),
+            crate::ui_widgets::Scrollable,
         ))
         .with_children(|parent| {
             parent
-                .spawn(panel_bundle(
-                    &panel_texture,
-                    Node {
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::Center,
-                        row_gap: Val::Px(14.0),
-                        padding: UiRect::all(Val::Px(28.0)),
-                        ..default()
-                    },
+                .spawn((
+                    panel_bundle(
+                        &panel_texture,
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            align_items: AlignItems::Center,
+                            row_gap: Val::Px(14.0),
+                            padding: UiRect::all(Val::Px(28.0)),
+                            ..default()
+                        },
+                    ),
+                    SettingsPanel,
+                    // #216: a *modal* group -- once focus is inside it, Tab
+                    // must never reach whatever screen the overlay sits
+                    // over (main menu or the paused fight). See
+                    // `crate::ui_widgets::focus`'s registration API and
+                    // `autofocus_settings_overlay` for why entry into this
+                    // group has to be set explicitly.
+                    TabGroup::modal(),
                 ))
                 .with_children(|panel| {
                     panel.spawn((
@@ -459,10 +498,59 @@ fn update_button_backgrounds(
     }
 }
 
-/// Removes the overlay tree when [`SettingsOpen`] is removed.
-fn despawn_overlay(mut commands: Commands, overlays: Query<Entity, With<SettingsOverlay>>) {
+/// Removes the overlay tree when [`SettingsOpen`] is removed, then either
+/// re-focuses another still-open modal overlay or clears [`InputFocus`]
+/// (#216).
+///
+/// The overlay's `TabGroup::modal()` confines focus to its own controls
+/// while open (see `spawn_overlay`'s doc comment), so whatever `InputFocus`
+/// names here is necessarily one of the entities just despawned. This
+/// overlay opens from *two* places — the main menu's **Setări** and the
+/// paused fight's own **Setări** — and in the second case the pause
+/// overlay's own `TabGroup::modal()` is still alive underneath. Plain
+/// clearing would leave the next Tab press to fall through to whatever
+/// non-modal group the *fight screen itself* has (its HUD, its action
+/// palette): `TabNavigation::navigate`'s modal handling only takes effect
+/// once focus is already inside a modal group (see
+/// [`autofocus_first_in_group`]'s doc comment), so re-entering the pause
+/// overlay after this one closes has to be explicit, the same as opening it
+/// was. Detecting "is there another modal overlay still open" generically
+/// (any other live `TabGroup::modal()`) keeps this overlay decoupled from
+/// knowing about `combat::pause` by name.
+fn despawn_overlay(
+    mut commands: Commands,
+    overlays: Query<Entity, With<SettingsOverlay>>,
+    nav: TabNavigation,
+    mut focus: Option<ResMut<InputFocus>>,
+    other_modals: Query<(Entity, &TabGroup), Without<SettingsPanel>>,
+) {
     for entity in &overlays {
         commands.entity(entity).despawn();
+    }
+    let Some(focus) = focus.as_mut() else {
+        return;
+    };
+    match other_modals.iter().find(|(_, tg)| tg.modal) {
+        Some((other_modal, _)) => autofocus_first_in_group(&nav, focus, other_modal),
+        None => focus.clear(),
+    }
+}
+
+/// Focuses the overlay's first control the instant it spawns (#216): see
+/// [`autofocus_first_in_group`]'s doc comment for why a modal group needs
+/// this rather than relying on `TabNavigation`'s own modal handling. Ordered
+/// after `spawn_overlay` in [`SettingsPlugin`]'s chained `Update` tuple,
+/// which — like every `.chain()`d tuple — applies deferred `Commands`
+/// between each pair of systems, so the panel this queries for already
+/// exists by the time this runs, in the same frame [`SettingsOpen`] was
+/// inserted.
+fn autofocus_settings_overlay(
+    nav: TabNavigation,
+    mut focus: ResMut<InputFocus>,
+    panels: Query<Entity, With<SettingsPanel>>,
+) {
+    for panel in &panels {
+        autofocus_first_in_group(&nav, &mut focus, panel);
     }
 }
 
@@ -778,6 +866,157 @@ mod tests {
         app.update();
         assert_eq!(overlay_count(&mut app), 0, "Înapoi closes the overlay");
         assert!(app.world().get_resource::<SettingsOpen>().is_none());
+    }
+
+    /// #216: opening the overlay must focus its first control immediately
+    /// -- see `autofocus_settings_overlay`'s doc comment for why a modal
+    /// group needs this rather than relying on `TabNavigation`'s own modal
+    /// handling.
+    #[test]
+    fn opening_the_overlay_autofocuses_its_first_control() {
+        let (mut app, _cell) = test_app();
+        app.update();
+        app.insert_resource(SettingsOpen);
+        app.update();
+
+        let music_decrease = find_button(&mut app, SettingsAction::MusicStep(-1));
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            Some(music_decrease),
+            "the overlay's first control (Music -) must be focused the instant it opens"
+        );
+    }
+
+    /// #216: a screen's own non-modal `TabGroup` (simulated here, since this
+    /// minimal `test_app` never spawns the main menu) must stay unreachable
+    /// while the modal settings overlay is open — the whole point of
+    /// `TabGroup::modal()`.
+    #[test]
+    fn tab_inside_the_open_overlay_never_reaches_a_screen_behind_it() {
+        let (mut app, _cell) = test_app();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.update();
+
+        // A stand-in for "whatever screen is behind the overlay" (main menu
+        // or the paused fight), its own non-modal focus region.
+        let screen_button = app
+            .world_mut()
+            .spawn((
+                Button,
+                crate::ui_widgets::focus::Focusable,
+                crate::ui_widgets::focus::TabIndex(0),
+                crate::ui_widgets::focus::TabGroup::new(0),
+            ))
+            .id();
+
+        app.insert_resource(SettingsOpen);
+        app.update();
+
+        for _ in 0..12 {
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::Tab);
+            app.update();
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::Tab);
+            keys.clear();
+            assert_ne!(
+                app.world().resource::<InputFocus>().get(),
+                Some(screen_button),
+                "Tab must never reach the screen behind an open modal overlay"
+            );
+        }
+    }
+
+    /// #216: audio settings must be operable keyboard-only -- Enter on the
+    /// focused Music `+` stepper must step the volume exactly like a click.
+    #[test]
+    fn enter_on_a_focused_stepper_steps_the_volume_like_a_click() {
+        let (mut app, _cell) = test_app();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.update();
+        app.insert_resource(SettingsOpen);
+        app.update();
+
+        let before = app.world().resource::<AudioSettings>().music_volume;
+        let music_increase = find_button(&mut app, SettingsAction::MusicStep(1));
+        app.world_mut()
+            .insert_resource(InputFocus::from_entity(music_increase));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+
+        assert!(
+            app.world().resource::<AudioSettings>().music_volume > before,
+            "Enter on the focused Music + must raise the volume like a click"
+        );
+    }
+
+    /// #216: closing the overlay must clear focus (the overlay's whole
+    /// subtree — including whatever was focused — despawns with it), so the
+    /// next Tab on the screen behind it starts fresh at that screen's own
+    /// first control.
+    #[test]
+    fn closing_the_overlay_clears_focus() {
+        let (mut app, _cell) = test_app();
+        app.update();
+        app.insert_resource(SettingsOpen);
+        app.update();
+        assert!(app.world().resource::<InputFocus>().get().is_some());
+
+        let back = find_button(&mut app, SettingsAction::Back);
+        app.world_mut()
+            .entity_mut(back)
+            .insert(Interaction::Pressed);
+        app.update();
+        app.update();
+
+        assert_eq!(app.world().resource::<InputFocus>().get(), None);
+    }
+
+    /// #216: this overlay opens from both the main menu and the paused
+    /// fight's own **Setări** button; in the second case the pause
+    /// overlay's `TabGroup::modal()` is still alive underneath when this
+    /// one closes. `despawn_overlay` must detect that (generically -- it
+    /// never names `combat::pause`) and re-focus into it rather than
+    /// leaking focus to the fight screen's own HUD/palette.
+    #[test]
+    fn closing_the_overlay_refocuses_another_still_open_modal_if_present() {
+        let (mut app, _cell) = test_app();
+        app.update();
+
+        // A stand-in for the pause overlay's own modal panel: a modal
+        // `TabGroup` that stays alive underneath this one.
+        let other_modal_root = app
+            .world_mut()
+            .spawn(crate::ui_widgets::focus::TabGroup::modal())
+            .id();
+        let other_modal_child = app
+            .world_mut()
+            .spawn((
+                Button,
+                crate::ui_widgets::focus::Focusable,
+                crate::ui_widgets::focus::TabIndex(0),
+                ChildOf(other_modal_root),
+            ))
+            .id();
+
+        app.insert_resource(SettingsOpen);
+        app.update();
+        let back = find_button(&mut app, SettingsAction::Back);
+        app.world_mut()
+            .entity_mut(back)
+            .insert(Interaction::Pressed);
+        app.update();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            Some(other_modal_child),
+            "closing settings-over-pause must refocus the still-open pause modal, \
+             never clear to the fight screen behind it"
+        );
     }
 
     #[test]

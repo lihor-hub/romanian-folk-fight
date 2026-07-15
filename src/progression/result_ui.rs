@@ -15,6 +15,7 @@ use crate::theme::{
     BAR_TRACK, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK, PanelTexture,
     STAMINA_FILL, panel_bundle,
 };
+use crate::ui_widgets::focus::TabGroup;
 use crate::ui_widgets::{attribute_row::spawn_attribute_row, wide_button};
 
 use super::{FightOutcome, Level, LevelUpDraft, Wallet, reset_run, top_up_pool, xp_to_next};
@@ -113,15 +114,21 @@ pub(super) fn spawn_result_screen(
         .spawn((screen_root(&letterbox), ResultScreen))
         .with_children(|screen| {
             screen
-                .spawn(panel_bundle(
-                    &panel_texture,
-                    Node {
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::Center,
-                        row_gap: Val::Px(16.0),
-                        padding: UiRect::all(Val::Px(28.0)),
-                        ..default()
-                    },
+                .spawn((
+                    panel_bundle(
+                        &panel_texture,
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            align_items: AlignItems::Center,
+                            row_gap: Val::Px(16.0),
+                            padding: UiRect::all(Val::Px(28.0)),
+                            ..default()
+                        },
+                    ),
+                    // #216: one shared focus region for the whole result
+                    // panel (including the level-up allocation rows) — see
+                    // `crate::ui_widgets::focus`'s registration API.
+                    TabGroup::new(0),
                 ))
                 .with_children(|parent| {
                     parent.spawn(screen_title("Victorie!", &ui_font));
@@ -239,7 +246,13 @@ pub(super) fn spawn_game_over_screen(
     letterbox: Res<LetterboxRect>,
 ) {
     commands
-        .spawn((screen_root(&letterbox), GameOverScreen))
+        .spawn((
+            screen_root(&letterbox),
+            GameOverScreen,
+            // #216: one shared focus region for the game-over screen — see
+            // `crate::ui_widgets::focus`'s registration API.
+            TabGroup::new(0),
+        ))
         .with_children(|parent| {
             parent.spawn(screen_title("Ai fost răpus…", &ui_font));
             parent.spawn(screen_line(
@@ -256,6 +269,11 @@ pub(super) fn spawn_game_over_screen(
 /// Centered column constrained to the letterboxed stage rect (#125) rather
 /// than the full window, so the result/game-over dialog never bleeds past
 /// the same 4:3 bounds the arena art and the combat HUD use.
+///
+/// Scrollable (#216, #31's `Scrollable` pattern): on a short viewport (200%
+/// desktop zoom halves the CSS-pixel height) the result panel is taller
+/// than the stage rect -- wheel/touch scroll it for pointer users, and the
+/// shared focus widget's scroll-into-view does for keyboard users.
 fn screen_root(letterbox: &LetterboxRect) -> impl Bundle {
     (
         Node {
@@ -268,9 +286,12 @@ fn screen_root(letterbox: &LetterboxRect) -> impl Bundle {
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             row_gap: Val::Px(16.0),
+            overflow: Overflow::scroll_y(),
             ..default()
         },
         BackgroundColor(NIGHT_BLACK),
+        ScrollPosition::default(),
+        crate::ui_widgets::Scrollable,
     )
 }
 
@@ -810,6 +831,36 @@ mod tests {
         assert_eq!(draft.attributes(), Attributes::default());
     }
 
+    /// #216: Enter on the focused **La prăvălie** button must drive the same
+    /// transition a click does (see
+    /// `la_pravalie_leads_to_the_shop_and_the_screen_despawns` for the click
+    /// version) -- `FocusNavigationPlugin::activate_focused_control` writes
+    /// the same `Interaction::Pressed` a click produces.
+    #[test]
+    fn enter_on_the_focused_la_pravalie_button_leads_to_the_shop() {
+        let mut app = test_app();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
+        set_state(&mut app, GameState::FightResult);
+
+        let button = app
+            .world_mut()
+            .query_filtered::<(Entity, &ResultAction), With<Button>>()
+            .iter(app.world())
+            .find(|&(_, &a)| a == ResultAction::GoToShop)
+            .map(|(entity, _)| entity)
+            .expect("La prăvălie button exists");
+        app.world_mut()
+            .insert_resource(crate::ui_widgets::focus::InputFocus::from_entity(button));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+        app.update();
+
+        assert_eq!(state(&app), GameState::Shop);
+    }
+
     #[test]
     fn la_pravalie_leads_to_the_shop_and_the_screen_despawns() {
         let mut app = test_app();
@@ -836,6 +887,31 @@ mod tests {
             texts.contains(&"Galbeni strânși: 123".to_string()),
             "{texts:?}"
         );
+    }
+
+    /// #216: Enter on the focused **Înapoi la menu** button must drive the
+    /// same transition a click does.
+    #[test]
+    fn enter_on_the_focused_game_over_back_to_menu_button_resets_the_run() {
+        let mut app = test_app();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Enemy, 1, false));
+        set_state(&mut app, GameState::GameOver);
+
+        let button = app
+            .world_mut()
+            .query_filtered::<Entity, (With<Button>, With<GameOverAction>)>()
+            .single(app.world())
+            .expect("back-to-menu button exists");
+        app.world_mut()
+            .insert_resource(crate::ui_widgets::focus::InputFocus::from_entity(button));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+        app.update();
+
+        assert_eq!(state(&app), GameState::MainMenu);
     }
 
     #[test]

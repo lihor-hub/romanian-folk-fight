@@ -15,6 +15,7 @@ use crate::creation::PlayerCharacter;
 use crate::flow::FlowIntent;
 use crate::roster::{LADDER, LadderProgress};
 use crate::theme::{CREAM, CREDITS_GRAY, NIGHT_BLACK, PanelTexture, panel_bundle};
+use crate::ui_widgets::focus::TabGroup;
 use crate::ui_widgets::wide_button;
 
 use super::{Level, LifetimeEarnings, result_ui::ChangedButton};
@@ -64,15 +65,20 @@ pub(super) fn spawn_victory_screen(
         .spawn((screen_root(), VictoryScreen))
         .with_children(|screen| {
             screen
-                .spawn(panel_bundle(
-                    &panel_texture,
-                    Node {
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::Center,
-                        row_gap: Val::Px(12.0),
-                        padding: UiRect::all(Val::Px(28.0)),
-                        ..default()
-                    },
+                .spawn((
+                    panel_bundle(
+                        &panel_texture,
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            align_items: AlignItems::Center,
+                            row_gap: Val::Px(12.0),
+                            padding: UiRect::all(Val::Px(28.0)),
+                            ..default()
+                        },
+                    ),
+                    // #216: one shared focus region for the victory panel —
+                    // see `crate::ui_widgets::focus`'s registration API.
+                    TabGroup::new(0),
                 ))
                 .with_children(|parent| {
                     parent.spawn(hero_name(&hero, &ui_font));
@@ -135,9 +141,14 @@ fn screen_root() -> impl Bundle {
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             row_gap: Val::Px(12.0),
+            // #216: scrollable on short viewports (200% zoom), same
+            // pattern as `result_ui::screen_root` -- see its doc comment.
+            overflow: Overflow::scroll_y(),
             ..default()
         },
         BackgroundColor(NIGHT_BLACK),
+        ScrollPosition::default(),
+        crate::ui_widgets::Scrollable,
     )
 }
 
@@ -321,6 +332,32 @@ mod tests {
                 "{line} comes from the pool"
             );
         }
+    }
+
+    /// #216: Enter on the focused **Turul 2** button must drive the same
+    /// transition a click does.
+    #[test]
+    fn enter_on_the_focused_turul_2_button_leads_to_the_shop() {
+        let mut app = test_app();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        set_state(&mut app, GameState::Victory);
+
+        let button = app
+            .world_mut()
+            .query_filtered::<(Entity, &VictoryAction), With<Button>>()
+            .iter(app.world())
+            .find(|&(_, &a)| a == VictoryAction::NextLap)
+            .map(|(entity, _)| entity)
+            .expect("Turul 2 button exists");
+        app.world_mut()
+            .insert_resource(crate::ui_widgets::focus::InputFocus::from_entity(button));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+        app.update();
+
+        assert_eq!(state(&app), GameState::Shop);
     }
 
     #[test]

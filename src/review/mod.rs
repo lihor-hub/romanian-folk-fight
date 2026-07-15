@@ -109,6 +109,7 @@ use crate::progression::victory_ui::VictoryAction;
 use crate::settings::AccessibilityPreferences;
 use crate::shop::ShopAction;
 use crate::theme::Palette;
+use crate::ui_widgets::focus::Focusable;
 
 /// `localStorage` key the harness writes a pending [`ReviewCommand`] to.
 /// Duplicated as a plain string in `xtask/src/web_smoke/gold_journey.rs`
@@ -154,6 +155,16 @@ pub const REVIEW_PALETTE_KEY: &str = "rff_review_palette_v1";
 /// See [`REVIEW_COMMAND_KEY`]'s doc comment for why the key itself is
 /// duplicated as a plain string on the `xtask` side.
 pub const REVIEW_THEME_KEY: &str = "rff_review_theme_v1";
+/// `localStorage` key this seam publishes an [`AccessibilitySnapshot`] to
+/// every frame -- added for #216's cross-screen `keyboard-accessibility`,
+/// `touch-targets`, and `zoom-200` browser scenarios. Unlike
+/// [`REVIEW_PALETTE_KEY`] (fight-HUD-only), this is published unconditionally
+/// like [`REVIEW_THEME_KEY`]: #216 rolls [`Focusable`] out to every screen,
+/// not just the fight HUD, so there is no single screen this is scoped to
+/// and no corresponding `clear_accessibility`. See [`REVIEW_COMMAND_KEY`]'s
+/// doc comment for why the key itself is duplicated as a plain string on the
+/// `xtask` side.
+pub const REVIEW_ACCESSIBILITY_KEY: &str = "rff_review_a11y_v1";
 
 /// One command the harness can queue through [`REVIEW_COMMAND_KEY`]. Plain
 /// JSON via `serde`, tagged by `cmd` so the wire format is a flat, readable
@@ -246,6 +257,7 @@ impl Plugin for ReviewPlugin {
                     publish_motion_state,
                     publish_palette_state,
                     publish_theme_state,
+                    publish_accessibility_state,
                     autoplay_player_turn,
                 ),
             );
@@ -649,6 +661,119 @@ fn publish_theme_state(palette: Res<Palette>, accessibility: Res<AccessibilityPr
     }
 }
 
+/// Everything the #216 cross-screen browser scenarios need that
+/// [`PaletteSnapshot`] (fight-HUD-only) cannot provide: which control is
+/// currently focused (by its own rendered label, so the scenario can assert
+/// against the exact Romanian text a player sees, the same way it already
+/// reads button labels through the DOM-less canvas), whether the gold focus
+/// marker is actually rendered, and every currently-visible [`Focusable`]
+/// control's on-screen box in logical (CSS) pixels -- the same unit the 44px
+/// touch-target floor and the window's own `innerWidth`/`innerHeight` are
+/// expressed in, so a scenario can assert both "nothing is smaller than
+/// 44x44" (`touch-targets`) and "nothing sits outside the viewport"
+/// (`zoom-200`) without any new native-side math.
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+struct AccessibilitySnapshot {
+    /// A stable identifier for the currently focused entity (its `Debug`
+    /// representation, e.g. `"16v0"`), or `None` if nothing is focused.
+    /// Several controls across a screen can share the exact same rendered
+    /// `focused_label` (both the music and the SFX steppers' decrease
+    /// buttons render literally "-"), so a scenario doing cycle detection
+    /// (walking `ArrowRight` until focus returns to where it started) needs
+    /// an identifier `focused_label` alone cannot provide.
+    focused_entity: Option<String>,
+    /// The focused control's own rendered label (its first `Text` child),
+    /// or `None` if nothing is focused or the focused control has no direct
+    /// `Text` child (every button built through this codebase's shared
+    /// button helpers or the palette's own bundles has exactly one).
+    focused_label: Option<String>,
+    /// Whether the focused control currently renders the visible gold focus
+    /// marker (a non-transparent `Outline`) -- read from the live
+    /// component, not a screenshot pixel probe. `false` when nothing is
+    /// focused.
+    focus_marker_visible: bool,
+    /// The focused control's *current* on-screen box (post-scroll: the
+    /// shared widget's `scroll_focused_into_view` runs before this snapshot
+    /// is published, so this is where the control actually renders after
+    /// any in-UI scrolling settled). The `zoom-200` scenario's clipping
+    /// gate reads this per tab-stop: "playable at 200% zoom" means every
+    /// control is *visible when focused*, not that every control of a
+    /// designed-to-scroll screen fits one viewport simultaneously.
+    focused_rect: Option<TargetRect>,
+    /// Every currently-visible `Focusable` control's on-screen box.
+    targets: Vec<TargetRect>,
+    /// `min(width, height)` across every entry in `targets`; `0.0` if
+    /// `targets` is empty.
+    min_target_size: f32,
+}
+
+/// The first `Text` among `entity`'s direct children, if any -- every button
+/// this codebase's shared helpers (`ui_widgets::{button_bundle, wide_button,
+/// small_button}`) and the screen-local equivalents (`menu::menu_button`,
+/// `combat::pause`'s overlay buttons) build carries its label exactly one
+/// level down, the same shape [`focus_snapshot`] already relies on for the
+/// palette's disabled-reason text.
+fn direct_child_label(
+    entity: Entity,
+    children_query: &Query<&Children>,
+    texts: &Query<&Text>,
+) -> Option<String> {
+    let children = children_query.get(entity).ok()?;
+    children
+        .iter()
+        .find_map(|child| texts.get(child).ok())
+        .map(|text| text.0.clone())
+}
+
+/// Publishes an [`AccessibilitySnapshot`] every frame (unconditionally --
+/// see [`REVIEW_ACCESSIBILITY_KEY`]'s doc comment for why there is no
+/// per-screen gate or corresponding `clear`).
+fn publish_accessibility_state(
+    input_focus: Res<InputFocus>,
+    focusables: Query<(Entity, &UiGlobalTransform, &ComputedNode), With<Focusable>>,
+    outlines: Query<&Outline>,
+    children_query: Query<&Children>,
+    texts: Query<&Text>,
+) {
+    let targets: Vec<TargetRect> = focusables
+        .iter()
+        .map(|(_, transform, node)| TargetRect::from_rect(logical_node_rect(transform, node)))
+        .collect();
+    let min_target_size = targets
+        .iter()
+        .map(|rect| rect.width.min(rect.height))
+        .fold(f32::INFINITY, f32::min);
+
+    let focused = input_focus.get();
+    let focused_label =
+        focused.and_then(|entity| direct_child_label(entity, &children_query, &texts));
+    let focus_marker_visible = focused
+        .and_then(|entity| outlines.get(entity).ok())
+        .is_some_and(|outline| outline.color != Color::NONE);
+    let focused_rect = focused.and_then(|entity| {
+        focusables
+            .get(entity)
+            .ok()
+            .map(|(_, transform, node)| TargetRect::from_rect(logical_node_rect(transform, node)))
+    });
+
+    let snapshot = AccessibilitySnapshot {
+        focused_entity: focused.map(|entity| format!("{entity:?}")),
+        focused_label,
+        focus_marker_visible,
+        focused_rect,
+        targets,
+        min_target_size: if min_target_size.is_finite() {
+            min_target_size
+        } else {
+            0.0
+        },
+    };
+    if let Ok(json) = serde_json::to_string(&snapshot) {
+        publish_accessibility(&json);
+    }
+}
+
 /// Maps a preset's exact display name (see [`HeroPreset::name`]) to the
 /// variant -- the same string a `selectPreset` review command carries.
 fn parse_preset(name: &str) -> Option<HeroPreset> {
@@ -958,6 +1083,16 @@ fn publish_theme(json: &str) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn publish_theme(_json: &str) {}
+
+#[cfg(target_arch = "wasm32")]
+fn publish_accessibility(json: &str) {
+    if let Some(storage) = local_storage() {
+        let _ = storage.set_item(REVIEW_ACCESSIBILITY_KEY, json);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_accessibility(_json: &str) {}
 
 #[cfg(test)]
 mod tests {

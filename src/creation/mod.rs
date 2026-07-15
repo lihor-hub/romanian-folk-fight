@@ -21,8 +21,9 @@ use crate::save::SaveRequested;
 use crate::shop::{OwnedItems, PlayerEquipment};
 use crate::theme::{
     ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD,
-    PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
+    MIN_TOUCH_TARGET, PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
 };
+use crate::ui_widgets::focus::{FocusNavigationPlugin, FocusNavigationSet, TabGroup};
 use crate::ui_widgets::{
     attribute_row::spawn_attribute_row, button_bundle, scroll_with_wheel_and_touch, small_button,
 };
@@ -140,12 +141,14 @@ impl Plugin for CreationPlugin {
         app.add_message::<SaveRequested>()
             .add_message::<FlowIntent>()
             .init_resource::<CharacterDraft>()
-            .add_plugins(crate::ui_widgets::ScrollInputPlugin)
+            .add_plugins((crate::ui_widgets::ScrollInputPlugin, FocusNavigationPlugin))
             .add_systems(OnEnter(GameState::CharacterCreation), spawn_creation_screen)
             .add_systems(
                 Update,
                 (
-                    handle_creation_actions.in_set(crate::flow::FlowIntentEmission),
+                    handle_creation_actions
+                        .in_set(crate::flow::FlowIntentEmission)
+                        .after(FocusNavigationSet),
                     update_button_backgrounds,
                     update_control_availability,
                     update_choice_button_styles,
@@ -345,6 +348,9 @@ fn spawn_control_deck(
             ),
             BackgroundColor(PANEL_LINEN),
             CreationLayoutRole::ControlDeck,
+            // #216: one shared focus region for the whole control deck --
+            // see `crate::ui_widgets::focus`'s registration API.
+            TabGroup::new(0),
         ))
         .with_children(|deck| {
             deck.spawn((
@@ -362,7 +368,15 @@ fn spawn_control_deck(
             .with_children(|row| {
                 for choice in HeroChoice::ALL {
                     row.spawn((
-                        button_bundle(choice.label(), Val::Px(118.0), Val::Px(42.0), 15.0, ui_font),
+                        // #216: height bumped 42 -> `MIN_TOUCH_TARGET` (44)
+                        // so this preset tile meets the touch-target floor.
+                        button_bundle(
+                            choice.label(),
+                            Val::Px(118.0),
+                            Val::Px(MIN_TOUCH_TARGET),
+                            15.0,
+                            ui_font,
+                        ),
                         CreationAction::SelectChoice(choice),
                     ));
                 }
@@ -389,15 +403,22 @@ fn spawn_control_deck(
             })
             .with_children(|row| {
                 row.spawn((small_button("<", ui_font), CreationAction::PreviousName));
+                // #216: 232 -> 192 (and the name font 24 -> 20) so the row
+                // fits the deck's inner width without flex-squeezing the
+                // 48x48 arrows below the touch-target floor -- buttons no
+                // longer shrink at all (see
+                // `ui_widgets::labeled_button_bundle`), so the row must
+                // genuinely fit. "Ileana Cosânzeana"/"Ucenicul Solomonar"
+                // still render on one line at 20px.
                 row.spawn(Node {
-                    width: Val::Px(232.0),
+                    width: Val::Px(192.0),
                     justify_content: JustifyContent::Center,
                     ..default()
                 })
                 .with_children(|slot| {
                     slot.spawn((
                         Text::new(draft.name()),
-                        ui_font.text_font(24.0),
+                        ui_font.text_font(20.0),
                         TextColor(CREAM),
                         CreationLabel::Name,
                     ));
@@ -497,19 +518,35 @@ fn spawn_option_row(
             ..default()
         })
         .with_children(|row| {
+            // #216: label 108 -> 76 and value 156 -> 100 so the row -- with
+            // its two `MIN_TOUCH_TARGET` (44x44) stepper buttons, which no
+            // longer flex-shrink at all (see
+            // `ui_widgets::labeled_button_bundle`) -- genuinely fits the
+            // deck's inner width (356 - 2x24 border inset = 308):
+            // 76 + 44 + 100 + 44 + 3x8 gaps = 288. The longest label
+            // ("Accent") and value ("Echilibrat") both fit their slots at
+            // 18px.
             row.spawn(Node {
-                width: Val::Px(108.0),
+                width: Val::Px(76.0),
                 ..default()
             })
             .with_children(|slot| {
                 slot.spawn((Text::new(label), ui_font.text_font(18.0), TextColor(CREAM)));
             });
             row.spawn((
-                button_bundle("<", Val::Px(36.0), Val::Px(36.0), 20.0, ui_font),
+                // #216: 36x36 -> `MIN_TOUCH_TARGET` (44) square so the
+                // appearance stepper meets the touch-target floor.
+                button_bundle(
+                    "<",
+                    Val::Px(MIN_TOUCH_TARGET),
+                    Val::Px(MIN_TOUCH_TARGET),
+                    20.0,
+                    ui_font,
+                ),
                 previous,
             ));
             row.spawn(Node {
-                width: Val::Px(156.0),
+                width: Val::Px(100.0),
                 justify_content: JustifyContent::Center,
                 ..default()
             })
@@ -522,7 +559,13 @@ fn spawn_option_row(
                 ));
             });
             row.spawn((
-                button_bundle(">", Val::Px(36.0), Val::Px(36.0), 20.0, ui_font),
+                button_bundle(
+                    ">",
+                    Val::Px(MIN_TOUCH_TARGET),
+                    Val::Px(MIN_TOUCH_TARGET),
+                    20.0,
+                    ui_font,
+                ),
                 next,
             ));
         });
@@ -1097,6 +1140,67 @@ mod tests {
         assert_eq!(draft(&app).appearance(), HeroPreset::Ciobanul.appearance());
         assert!(draft(&app).is_complete());
         assert!(label_text(&mut app, CreationLabel::Description).contains("Echipare:"));
+    }
+
+    /// #216: presses `Tab` once and returns the newly-focused entity.
+    fn tab_focus(app: &mut App) -> Option<Entity> {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Tab);
+        app.update();
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::Tab);
+        keys.clear();
+        app.world()
+            .resource::<crate::ui_widgets::focus::InputFocus>()
+            .get()
+    }
+
+    /// #216: every control on the control deck -- preset grid, name arrows,
+    /// appearance/attribute steppers, Confirm, Back -- shares one `TabGroup`
+    /// in the deck's visual (spawn) order: the first Tab from unset focus
+    /// lands on the first preset tile, and tabbing all the way around wraps
+    /// back to it.
+    #[test]
+    fn tab_order_starts_on_the_first_preset_and_wraps_around() {
+        let mut app = test_app();
+        app.init_resource::<ButtonInput<KeyCode>>();
+
+        let first_preset = find_button(&mut app, CreationAction::SelectChoice(HeroChoice::ALL[0]));
+        assert_eq!(tab_focus(&mut app), Some(first_preset));
+
+        // Walk all the way around: 5 presets, 2 name arrows, 4 appearance
+        // rows x2, 4 attribute rows x2, Confirm, Back = 20 controls total.
+        let total_controls = HeroChoice::ALL.len() + 2 + 4 * 2 + 4 * 2 + 2;
+        for _ in 1..total_controls {
+            tab_focus(&mut app);
+        }
+        assert_eq!(
+            tab_focus(&mut app),
+            Some(first_preset),
+            "tab order must wrap back to the first preset after every control"
+        );
+    }
+
+    /// #216: Enter on a focused preset tile selects it exactly like a click
+    /// (see `selecting_a_preset_populates_the_editable_draft` for the click
+    /// version) -- `FocusNavigationPlugin::activate_focused_control` writes
+    /// the same `Interaction::Pressed` a click produces.
+    #[test]
+    fn enter_on_a_focused_preset_selects_it_like_a_click() {
+        let mut app = test_app();
+        app.init_resource::<ButtonInput<KeyCode>>();
+
+        let target = HeroChoice::Preset(HeroPreset::Ciobanul);
+        let button = find_button(&mut app, CreationAction::SelectChoice(target));
+        app.world_mut()
+            .insert_resource(crate::ui_widgets::focus::InputFocus::from_entity(button));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+
+        assert_eq!(draft(&app).choice(), target);
     }
 
     #[test]

@@ -41,6 +41,10 @@ cargo xtask web-smoke --scenario reduced-motion-fight  # seed reduced-motion, dr
 cargo xtask web-smoke --scenario fight-palette-desktop  # deterministic fight screen, assert the seven-action desktop palette layout (#189)
 cargo xtask web-smoke --scenario fight-palette-phone  # phone fight screen, assert the category-driven action palette states (#199)
 cargo xtask web-smoke --scenario high-contrast  # seed high-contrast preference, verify menu+fight theming and non-color cues (#214)
+cargo xtask web-smoke --scenario fight-palette-accessible  # real-keyboard palette focus order, disabled reason, marker, category-close recovery (#213)
+cargo xtask web-smoke --scenario keyboard-accessibility  # real-keyboard-only pass over every current screen (menu, settings, creation, fight, pause, result, shop) (#216)
+cargo xtask web-smoke --scenario zoom-200      # every current screen at a 200%-desktop-zoom viewport: no scroll, no clipped control (#216)
+cargo xtask web-smoke --scenario touch-targets # every current screen at desktop+phone: no interactive target below 44x44 CSS px (#216)
 cargo xtask web-smoke --all                    # every registered scenario back to back (#198)
 cargo xtask pre-push            # fmt check, clippy, cargo test, build-matrix -- stops at first failure
 ```

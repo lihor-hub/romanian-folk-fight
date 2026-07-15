@@ -1661,6 +1661,18 @@ mod tests {
             app.world().get::<ActionButton>(focus).map(|b| b.id)
         }
 
+        /// #216: whether the HUD's ⏸ button (its own `TabGroup::new(-1)`,
+        /// ordered before the palette's `TabGroup::new(0)` to match its
+        /// top-of-screen visual position) is currently focused.
+        fn focused_is_pause_button(app: &mut App) -> bool {
+            let Some(focus) = app.world().resource::<InputFocus>().get() else {
+                return false;
+            };
+            app.world()
+                .get::<crate::combat::pause::PauseButton>(focus)
+                .is_some()
+        }
+
         fn focused_category(app: &mut App) -> Option<ActionCategory> {
             let focus = app.world().resource::<InputFocus>().get()?;
             app.world().get::<CategoryButton>(focus).map(|b| b.category)
@@ -1690,6 +1702,16 @@ mod tests {
         #[test]
         fn desktop_tab_order_matches_the_seven_visible_buttons_left_to_right() {
             let mut app = test_app();
+
+            // #216: the HUD's ⏸ button is its own `TabGroup::new(-1)`,
+            // ordered before the palette's `TabGroup::new(0)` to match its
+            // top-of-screen visual position, so it is reached first.
+            press_key_and_settle(&mut app, KeyCode::Tab);
+            assert!(
+                focused_is_pause_button(&mut app),
+                "the HUD's ⏸ button must be reachable first, above the palette"
+            );
+
             let expected = [
                 "quick-strike",
                 "heavy-strike",
@@ -1709,14 +1731,22 @@ mod tests {
                 "tab order follows ALL_ACTIONS' visual order"
             );
 
-            // An eighth Tab wraps back to the first button.
+            // The next Tab wraps back to the ⏸ button.
             press_key_and_settle(&mut app, KeyCode::Tab);
-            assert_eq!(focused_action_id(&mut app), Some("quick-strike"));
+            assert!(
+                focused_is_pause_button(&mut app),
+                "tab order wraps back to the ⏸ button, the first stop"
+            );
         }
 
         #[test]
         fn phone_closed_tab_order_visits_only_the_four_category_buttons() {
             let mut app = mobile_test_app();
+
+            // #216: the HUD's ⏸ button precedes the palette's own group.
+            press_key_and_settle(&mut app, KeyCode::Tab);
+            assert!(focused_is_pause_button(&mut app));
+
             let expected = [
                 ActionCategory::Strikes,
                 ActionCategory::Defense,
@@ -1736,7 +1766,10 @@ mod tests {
             assert_eq!(seen, expected, "categories tab in CATEGORY_ORDER");
 
             press_key_and_settle(&mut app, KeyCode::Tab);
-            assert_eq!(focused_category(&mut app), Some(ActionCategory::Strikes));
+            assert!(
+                focused_is_pause_button(&mut app),
+                "tab order wraps back to the ⏸ button"
+            );
         }
 
         #[test]
@@ -1744,6 +1777,10 @@ mod tests {
             let mut app = mobile_test_app();
             let strikes_button = find_category_button(&mut app, ActionCategory::Strikes);
             press_button(&mut app, strikes_button);
+
+            // #216: the HUD's ⏸ button precedes the palette's own group.
+            press_key_and_settle(&mut app, KeyCode::Tab);
+            assert!(focused_is_pause_button(&mut app));
 
             let expected_actions = ["quick-strike", "heavy-strike"];
             let expected_categories = [
@@ -1761,9 +1798,9 @@ mod tests {
                 press_key_and_settle(&mut app, KeyCode::Tab);
                 assert_eq!(focused_category(&mut app), Some(expected));
             }
-            // Wraps back to the first open action.
+            // Wraps back to the ⏸ button, the first stop.
             press_key_and_settle(&mut app, KeyCode::Tab);
-            assert_eq!(focused_action_id(&mut app), Some("quick-strike"));
+            assert!(focused_is_pause_button(&mut app));
         }
 
         #[test]
@@ -1932,13 +1969,18 @@ mod tests {
                 .set(GameState::Fight);
             app.update();
 
-            for _ in 0..8 {
+            // #216: the HUD's ⏸ button now also shares tab order with the
+            // palette (its own `TabGroup::new(-1)`, before the palette's
+            // `0`), so a blind walk must tolerate landing on it (no
+            // `ActionButton`, so `focused_action_id` is `None` there)
+            // instead of assuming every stop is an action button.
+            for _ in 0..9 {
                 press_key_and_settle(&mut app, KeyCode::Tab);
             }
-            let visited: Vec<ActionId> = (0..8)
-                .map(|_| {
+            let visited: Vec<ActionId> = (0..9)
+                .filter_map(|_| {
                     press_key_and_settle(&mut app, KeyCode::Tab);
-                    focused_action_id(&mut app).expect("a button is focused")
+                    focused_action_id(&mut app)
                 })
                 .collect();
             assert!(

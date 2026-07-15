@@ -104,8 +104,11 @@ mod fight_palette_desktop;
 mod fight_palette_phone;
 mod gold_journey;
 mod high_contrast;
+mod keyboard_accessibility;
 mod reduced_motion_fight;
 pub mod server;
+mod touch_targets;
+mod zoom_200;
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -125,6 +128,9 @@ pub const SCENARIOS: &[&str] = &[
     "fight-palette-phone",
     "high-contrast",
     "fight-palette-accessible",
+    "keyboard-accessibility",
+    "zoom-200",
+    "touch-targets",
 ];
 
 /// Dispatches `--scenario <name>` to the matching scenario module. Known
@@ -154,6 +160,9 @@ pub fn run_scenario(
         "fight-palette-accessible" => {
             fight_palette_accessible::run(update_baselines, strict_visual)
         }
+        "keyboard-accessibility" => keyboard_accessibility::run(update_baselines),
+        "zoom-200" => zoom_200::run(update_baselines),
+        "touch-targets" => touch_targets::run(update_baselines),
         other => Err(SmokeError::usage(format!(
             "unknown --scenario `{other}` (known scenarios: {})",
             SCENARIOS.join(", ")
