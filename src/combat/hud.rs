@@ -687,11 +687,15 @@ pub(super) fn apply_responsive_hud_layout(
 
 #[cfg(test)]
 mod tests {
-    use super::super::engine::{CombatAction, DuelDistance};
+    use super::super::action_palette::{ActionButton, ActionCostOrReason};
+    use super::super::engine::{
+        CombatAction, DuelDistance, HEAVY_STRIKE_BASE_HIT, QUICK_STRIKE_BASE_HIT,
+    };
     use super::super::systems::{CombatPlugin, CombatRng, PlayerActionEvent};
     use super::*;
     use crate::arena::ArenaPlugin;
     use crate::character::Attributes;
+    use crate::character::stats;
     use crate::character::stats::{CRIT_PERCENT_CAP, HIT_PERCENT_MIN};
     use crate::core::{CorePlugin, GameState};
     use crate::creation::PlayerCharacter;
@@ -1016,6 +1020,83 @@ mod tests {
             action_bars, 1,
             "the action bar rebuild must leave exactly one ActionBarRoot, never zero or two"
         );
+    }
+
+    /// Finds the `ActionButton` entity whose `intent` is `action`. Real
+    /// button entities live under `action_palette` (#189/#199), but #124's
+    /// acceptance test lives here per the issue's test expectations, so this
+    /// mirrors `action_palette::tests::find_button_by_action` rather than
+    /// importing a `cfg(test)`-only helper across module boundaries.
+    fn find_action_button(app: &mut App, action: CombatAction) -> Entity {
+        app.world_mut()
+            .query::<(Entity, &ActionButton)>()
+            .iter(app.world())
+            .find(|(_, button)| button.intent == action)
+            .map(|(e, _)| e)
+            .unwrap_or_else(|| panic!("button for {action:?} exists"))
+    }
+
+    /// The rendered sub-label text (cost/hit-chance, or the disabled reason)
+    /// under `action`'s button — the same `ActionCostOrReason` node
+    /// `action_palette::tests::find_cost_or_reason_text` reads.
+    fn action_sublabel_text(app: &mut App, action: CombatAction) -> String {
+        let entity = find_action_button(app, action);
+        let children = app
+            .world()
+            .get::<Children>(entity)
+            .expect("button has children")
+            .to_vec();
+        for child in children {
+            if app.world().get::<ActionCostOrReason>(child).is_some() {
+                return app
+                    .world()
+                    .get::<Text>(child)
+                    .expect("cost/reason node has Text")
+                    .0
+                    .clone();
+            }
+        }
+        panic!("no ActionCostOrReason child found for {action:?}");
+    }
+
+    /// #124's acceptance test: `Lovitură iute` and `Lovitură grea` each show a
+    /// hit percentage matching `stats::hit_percent` for the current matchup.
+    /// The fixture player ties the first ladder opponent's `agilitate`, so
+    /// each strike's percentage equals its own base hit chance exactly (see
+    /// `PLAYER_ATTRIBUTES`'s doc comment).
+    #[test]
+    fn strike_buttons_show_the_hit_chance_matching_stats_hit_percent() {
+        let mut app = test_app();
+        let enemy_attrs = crate::roster::LADDER[0].attrs;
+
+        let expected_quick =
+            stats::hit_percent(&PLAYER_ATTRIBUTES, &enemy_attrs, QUICK_STRIKE_BASE_HIT);
+        let quick_text = action_sublabel_text(&mut app, CombatAction::QuickStrike);
+        assert!(
+            quick_text.contains(&format!("{expected_quick}%")),
+            "quick strike sub-label {quick_text:?} must show {expected_quick}%"
+        );
+
+        let expected_heavy =
+            stats::hit_percent(&PLAYER_ATTRIBUTES, &enemy_attrs, HEAVY_STRIKE_BASE_HIT);
+        let heavy_text = action_sublabel_text(&mut app, CombatAction::HeavyStrike);
+        assert!(
+            heavy_text.contains(&format!("{expected_heavy}%")),
+            "heavy strike sub-label {heavy_text:?} must show {expected_heavy}%"
+        );
+    }
+
+    /// #124's second acceptance test: non-attack actions never show a `%`.
+    #[test]
+    fn non_attack_buttons_show_no_percent_sign() {
+        let mut app = test_app();
+        for action in [CombatAction::Block, CombatAction::Rest] {
+            let text = action_sublabel_text(&mut app, action);
+            assert!(
+                !text.contains('%'),
+                "{action:?} sub-label {text:?} must not show a percent"
+            );
+        }
     }
 
     /// #125: the HUD root must track [`crate::core::LetterboxRect`] instead

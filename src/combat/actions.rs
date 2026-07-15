@@ -138,6 +138,22 @@ pub struct ActionDescriptor {
     pub intent: CombatAction,
 }
 
+impl ActionDescriptor {
+    /// The line an action button shows under its label while enabled (#124):
+    /// the hit chance alongside the cost/restore text for the two strikes —
+    /// e.g. `"75% · -5 stamina"` — or just [`ActionCost::display_text`] for
+    /// every action with no hit roll (block, rest, movement), unchanged from
+    /// before #124. `action_palette`'s button-rendering/refresh functions
+    /// swap in [`Self::disabled_reason`] instead of this line while the
+    /// button is disabled; this method never reads that field.
+    pub fn sublabel(&self) -> String {
+        match self.hit_chance {
+            Some(chance) => format!("{chance}% · {}", self.cost.display_text()),
+            None => self.cost.display_text(),
+        }
+    }
+}
+
 /// The seven current combat actions, in the order the desktop palette
 /// renders them (unchanged from the pre-#189 HUD's button order).
 pub const ALL_ACTIONS: [CombatAction; 7] = [
@@ -923,6 +939,53 @@ mod tests {
             let descriptor = descriptor_for(action, &ctx(PLAYER_TURN, 50));
             assert_eq!(descriptor.hit_chance, None, "{action:?}");
         }
+    }
+
+    // --- sub-label (#124: hit chance alongside the cost line) ---
+
+    #[test]
+    fn strike_sublabels_show_the_hit_chance_alongside_the_cost() {
+        let descriptors = generate_action_descriptors(&ctx(PLAYER_TURN, 50));
+        let quick = descriptors
+            .iter()
+            .find(|d| d.intent == CombatAction::QuickStrike)
+            .expect("quick strike descriptor exists");
+        let expected_quick = quick.hit_chance.expect("quick strike carries a hit chance");
+        assert_eq!(quick.sublabel(), format!("{expected_quick}% · -5 stamina"));
+
+        let heavy = descriptors
+            .iter()
+            .find(|d| d.intent == CombatAction::HeavyStrike)
+            .expect("heavy strike descriptor exists");
+        let expected_heavy = heavy.hit_chance.expect("heavy strike carries a hit chance");
+        assert_eq!(heavy.sublabel(), format!("{expected_heavy}% · -15 stamina"));
+    }
+
+    #[test]
+    fn non_strike_sublabels_show_no_percent_sign() {
+        for action in [
+            CombatAction::Block,
+            CombatAction::Rest,
+            CombatAction::StepForward,
+            CombatAction::StepBack,
+            CombatAction::LeapForward,
+        ] {
+            let descriptor = descriptor_for(action, &ctx(PLAYER_TURN, 50));
+            assert!(
+                !descriptor.sublabel().contains('%'),
+                "{action:?} sub-label {:?} must not show a percent",
+                descriptor.sublabel()
+            );
+        }
+        // Non-strike sub-labels are exactly the cost line, unchanged.
+        assert_eq!(
+            descriptor_for(CombatAction::Block, &ctx(PLAYER_TURN, 50)).sublabel(),
+            "-3 stamina"
+        );
+        assert_eq!(
+            descriptor_for(CombatAction::Rest, &ctx(PLAYER_TURN, 50)).sublabel(),
+            "+20 stamina"
+        );
     }
 
     #[test]
