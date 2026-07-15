@@ -168,6 +168,11 @@ impl Plugin for CreationPlugin {
                 PostUpdate,
                 update_preview_transform
                     .after(UiSystems::Layout)
+                    // So this frame's placement is reflected in
+                    // `GlobalTransform` (and thus rendered) this same frame,
+                    // rather than merely being ordered after layout with no
+                    // guarantee relative to transform propagation.
+                    .before(bevy::transform::TransformSystems::Propagate)
                     .run_if(in_state(GameState::CharacterCreation)),
             )
             .add_systems(
