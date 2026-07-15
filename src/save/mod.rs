@@ -1,237 +1,48 @@
-//! Save/load of a run (#21): a versioned [`SaveGame`] JSON snapshot of every
-//! run-scoped resource, persisted to `localStorage` (key [`STORAGE_KEY`]) on
-//! wasm and to `dirs::data_dir()/romanian-folk-fight/save.json` on native.
+//! Save/load of a run (#21): a versioned run snapshot ([`snapshot::SaveGame`])
+//! JSON snapshot of every run-scoped resource, persisted to `localStorage`
+//! (key [`STORAGE_KEY`]) on wasm and to
+//! `dirs::data_dir()/romanian-folk-fight/save.json` on native.
+//!
+//! #193 split this module in two: [`snapshot`] owns the schema, version
+//! envelope, migration, and run-field capture/restore/reset contract; this
+//! module owns *where the JSON physically lives* — the [`SaveBackend`]
+//! trait, its native/web/in-memory implementations, and the autosave/delete
+//! wiring below. Neither knows the other's concerns: this module never
+//! inspects a payload's fields, and `snapshot` never touches a filesystem or
+//! `localStorage`.
 //!
 //! Autosave points write a [`SaveRequested`] message (after the victory
 //! payout, after a level-up allocation confirm, after every shop purchase or
 //! equip); [`persist_on_request`] turns it into a stored snapshot. A run is
 //! one life: game over deletes the save. The main menu's **Continuă** button
 //! loads the snapshot back into the resources and jumps straight into
-//! [`GameState::Fight`]. Corrupt or version-mismatched saves are discarded
-//! (never a panic) and the store is cleared.
+//! [`GameState::Fight`]. Corrupt or unsupported-version saves are discarded
+//! (never a panic, see [`snapshot::SaveGame::from_json`]) and the store is
+//! cleared.
+
+pub mod snapshot;
+
+pub use snapshot::{CURRENT_VERSION, ResumeDestination, SaveGame};
 
 use bevy::prelude::*;
-use serde::{Deserialize, Serialize};
 
-use crate::character::{Attributes, PlayerAppearance};
 use crate::core::GameState;
 use crate::creation::PlayerCharacter;
-use crate::items::{Equipment, ItemId, Slot};
-use crate::progression::{Level, Wallet};
+use crate::progression::{Level, LifetimeEarnings, Wallet};
 use crate::roster::LadderProgress;
 use crate::shop::{OwnedItems, PlayerEquipment};
 
-/// The version written into every save; loads of any other version are
-/// discarded. Additive fields can still default safely inside a version.
-pub const SAVE_VERSION: u32 = 1;
-
-/// The `localStorage` key of the wasm backend.
+/// The `localStorage` key of the wasm backend. The `_v1` names the storage
+/// bucket, not the schema version — the schema version lives inside the
+/// payload's `"version"` field (see [`snapshot::CURRENT_VERSION`]), which is
+/// what lets [`snapshot::SaveGame::from_json`] migrate in place without ever
+/// needing a new storage location.
 pub const STORAGE_KEY: &str = "rff_save_v1";
 
 /// Fired by the autosave hooks (victory payout, level-up confirm, shop
 /// purchase/equip); [`persist_on_request`] snapshots the run in response.
 #[derive(Message, Debug, Clone, Copy, Default)]
 pub struct SaveRequested;
-
-/// Serde mirror of [`Attributes`]; the character model stays serde-free.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SavedAttributes {
-    pub putere: u32,
-    pub agilitate: u32,
-    pub vitalitate: u32,
-    pub noroc: u32,
-}
-
-impl From<Attributes> for SavedAttributes {
-    fn from(attrs: Attributes) -> Self {
-        Self {
-            putere: attrs.putere,
-            agilitate: attrs.agilitate,
-            vitalitate: attrs.vitalitate,
-            noroc: attrs.noroc,
-        }
-    }
-}
-
-impl From<SavedAttributes> for Attributes {
-    fn from(attrs: SavedAttributes) -> Self {
-        Self {
-            putere: attrs.putere,
-            agilitate: attrs.agilitate,
-            vitalitate: attrs.vitalitate,
-            noroc: attrs.noroc,
-        }
-    }
-}
-
-/// The stable save name of a catalog item (its `ItemId` variant name).
-fn item_name(id: ItemId) -> String {
-    format!("{id:?}")
-}
-
-/// Resolves a save name back to its catalog id; `None` for unknown names
-/// (which invalidate the whole save — see [`SaveGame::from_json`]).
-fn parse_item(name: &str) -> Option<ItemId> {
-    ItemId::ALL.into_iter().find(|id| item_name(*id) == name)
-}
-
-/// One full run snapshot, mirroring every run-scoped resource: the confirmed
-/// character, the experience state, the wallet, the shop purchases and
-/// loadout, and the ladder position.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct SaveGame {
-    /// Always [`SAVE_VERSION`]; any other value discards the save on load.
-    pub version: u32,
-    /// [`PlayerCharacter::name`].
-    pub name: String,
-    /// [`PlayerCharacter::attributes`].
-    pub attrs: SavedAttributes,
-    /// [`PlayerCharacter::appearance`]. Missing on older v1 saves, where it
-    /// defaults to the current project baseline.
-    #[serde(default)]
-    pub appearance: PlayerAppearance,
-    /// [`Level::level`].
-    pub level: u32,
-    /// [`Level::xp`].
-    pub xp: u32,
-    /// [`Level::unspent_points`].
-    pub unspent_points: u32,
-    /// [`Wallet`] balance in galbeni.
-    pub wallet: u32,
-    /// [`OwnedItems`] as sorted item names, for deterministic JSON.
-    pub owned_items: Vec<String>,
-    /// [`PlayerEquipment`] as item names in [`Slot::ALL`] order.
-    pub equipped: Vec<String>,
-    /// [`LadderProgress`]: the 0-based index of the next opponent.
-    pub ladder_progress: usize,
-    /// The 1-based ladder lap; derived from `ladder_progress`, stored for
-    /// human-readable saves.
-    pub lap: u32,
-}
-
-impl SaveGame {
-    /// Snapshots the current run from its resources.
-    pub fn capture(
-        player: &PlayerCharacter,
-        level: &Level,
-        wallet: &Wallet,
-        owned: &OwnedItems,
-        equipment: &PlayerEquipment,
-        ladder: &LadderProgress,
-    ) -> Self {
-        let mut owned_items: Vec<String> = owned.0.iter().map(|id| item_name(*id)).collect();
-        owned_items.sort();
-        let equipped = Slot::ALL
-            .into_iter()
-            .filter_map(|slot| equipment.0.equipped(slot))
-            .map(item_name)
-            .collect();
-        Self {
-            version: SAVE_VERSION,
-            name: player.name.clone(),
-            attrs: player.attributes.into(),
-            appearance: player.appearance,
-            level: level.level,
-            xp: level.xp,
-            unspent_points: level.unspent_points,
-            wallet: wallet.0,
-            owned_items,
-            equipped,
-            ladder_progress: ladder.0,
-            lap: ladder.lap(),
-        }
-    }
-
-    /// The snapshot as JSON; `None` only if serialization itself fails
-    /// (which plain data like this never does — handled instead of unwrapped
-    /// to keep runtime code panic-free).
-    pub fn to_json(&self) -> Option<String> {
-        serde_json::to_string(self).ok()
-    }
-
-    /// Parses and validates a snapshot: corrupt JSON, a version other than
-    /// [`SAVE_VERSION`], or an item name missing from the catalog all yield
-    /// `None` — never a panic.
-    pub fn from_json(json: &str) -> Option<Self> {
-        let save: Self = serde_json::from_str(json).ok()?;
-        if save.version != SAVE_VERSION {
-            warn!(
-                "save version {} does not match {}; discarding",
-                save.version, SAVE_VERSION
-            );
-            return None;
-        }
-        if let Some(unknown) = save
-            .owned_items
-            .iter()
-            .chain(&save.equipped)
-            .find(|name| parse_item(name).is_none())
-        {
-            warn!("save references unknown item {unknown:?}; discarding");
-            return None;
-        }
-        Some(save)
-    }
-
-    /// The saved [`PlayerCharacter`].
-    pub fn player_character(&self) -> PlayerCharacter {
-        PlayerCharacter {
-            name: self.name.clone(),
-            attributes: self.attrs.into(),
-            appearance: self.appearance,
-        }
-    }
-
-    /// The saved [`Level`].
-    pub fn level(&self) -> Level {
-        Level {
-            level: self.level,
-            xp: self.xp,
-            unspent_points: self.unspent_points,
-        }
-    }
-
-    /// The saved [`Wallet`].
-    pub fn wallet(&self) -> Wallet {
-        Wallet(self.wallet)
-    }
-
-    /// The saved [`OwnedItems`]. Unknown names can't reach here (validated
-    /// by [`Self::from_json`]); they are skipped defensively regardless.
-    pub fn owned_items(&self) -> OwnedItems {
-        OwnedItems(
-            self.owned_items
-                .iter()
-                .filter_map(|name| parse_item(name))
-                .collect(),
-        )
-    }
-
-    /// The saved [`PlayerEquipment`].
-    pub fn player_equipment(&self) -> PlayerEquipment {
-        let mut equipment = Equipment::default();
-        for id in self.equipped.iter().filter_map(|name| parse_item(name)) {
-            equipment.equip(id);
-        }
-        PlayerEquipment(equipment)
-    }
-
-    /// The saved [`LadderProgress`].
-    pub fn ladder_progress(&self) -> LadderProgress {
-        LadderProgress(self.ladder_progress)
-    }
-
-    /// Restores every run resource from the snapshot; with the resources in
-    /// place, entering [`GameState::Fight`] resumes the run exactly.
-    pub fn restore(&self, commands: &mut Commands) {
-        commands.insert_resource(self.player_character());
-        commands.insert_resource(self.level());
-        commands.insert_resource(self.wallet());
-        commands.insert_resource(self.owned_items());
-        commands.insert_resource(self.player_equipment());
-        commands.insert_resource(self.ladder_progress());
-    }
-}
 
 /// Where save JSON physically lives; one implementation per platform plus an
 /// in-memory one for tests.
@@ -295,8 +106,8 @@ pub fn platform_backend(_file_name: &'static str, storage_key: &'static str) -> 
 }
 
 /// Loads and validates the stored save. A snapshot that fails validation
-/// (corrupt JSON, version mismatch, unknown items) is cleared from the store
-/// so the menu never re-reads a known-bad save.
+/// (corrupt JSON, unsupported version, unknown items) is cleared from the
+/// store so the menu never re-reads a known-bad save.
 pub fn load_save(store: &SaveStore) -> Option<SaveGame> {
     let json = store.load()?;
     let save = SaveGame::from_json(&json);
@@ -463,8 +274,9 @@ impl Plugin for SavePlugin {
 /// Turns pending [`SaveRequested`] messages into one stored snapshot of the
 /// run. Skips (with a warning) if any run resource is missing — autosaves
 /// only fire mid-run, where all of them exist.
-// A Bevy system: each parameter is a distinct ECS handle for one of the six
-// run-scoped resources being snapshotted.
+// A Bevy system: each parameter is a distinct ECS handle for one of the
+// seven run-scoped resources being snapshotted (see `snapshot`'s ownership
+// contract).
 #[allow(clippy::too_many_arguments)]
 fn persist_on_request(
     mut requests: MessageReader<SaveRequested>,
@@ -472,6 +284,7 @@ fn persist_on_request(
     player: Option<Res<PlayerCharacter>>,
     level: Option<Res<Level>>,
     wallet: Option<Res<Wallet>>,
+    lifetime_earnings: Option<Res<LifetimeEarnings>>,
     owned: Option<Res<OwnedItems>>,
     equipment: Option<Res<PlayerEquipment>>,
     ladder: Option<Res<LadderProgress>>,
@@ -480,13 +293,36 @@ fn persist_on_request(
         return;
     }
     requests.clear();
-    let (Some(player), Some(level), Some(wallet), Some(owned), Some(equipment), Some(ladder)) =
-        (player, level, wallet, owned, equipment, ladder)
+    let (
+        Some(player),
+        Some(level),
+        Some(wallet),
+        Some(lifetime_earnings),
+        Some(owned),
+        Some(equipment),
+        Some(ladder),
+    ) = (
+        player,
+        level,
+        wallet,
+        lifetime_earnings,
+        owned,
+        equipment,
+        ladder,
+    )
     else {
         warn!("autosave requested without a full run in place; nothing saved");
         return;
     };
-    let save = SaveGame::capture(&player, &level, &wallet, &owned, &equipment, &ladder);
+    let save = SaveGame::capture(
+        &player,
+        &level,
+        &wallet,
+        &lifetime_earnings,
+        &owned,
+        &equipment,
+        &ladder,
+    );
     match save.to_json() {
         Some(json) => store.store(&json),
         None => warn!("could not serialize the save; nothing saved"),
@@ -501,195 +337,23 @@ fn delete_save(store: Res<SaveStore>) {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
 
     use bevy::state::app::StatesPlugin;
 
     use super::*;
+    use crate::character::{Attributes, PlayerAppearance};
     use crate::combat::{CombatLogEvent, CombatSide};
     use crate::core::CorePlugin;
     use crate::flow::FlowPlugin;
+    use crate::items::ItemId;
     use crate::progression::{
         FightOutcome, ProgressionPlugin, STARTING_GALBENI,
         result_ui::{AllocateAction, GameOverAction},
     };
     use crate::roster::RosterPlugin;
+    use crate::save::snapshot::tests::sample_save;
     use crate::shop::{ShopAction, ShopPlugin};
-
-    /// A mid-run set of resources: a leveled character with gear, gold, and
-    /// ladder progress into the second lap.
-    fn sample_run() -> (
-        PlayerCharacter,
-        Level,
-        Wallet,
-        OwnedItems,
-        PlayerEquipment,
-        LadderProgress,
-    ) {
-        let player = PlayerCharacter {
-            name: "Făt-Frumos".to_string(),
-            attributes: Attributes {
-                putere: 5,
-                agilitate: 3,
-                vitalitate: 7,
-                noroc: 2,
-            },
-            appearance: PlayerAppearance {
-                skin_tone: crate::character::SkinTone::Olive,
-                build: crate::character::BodyBuild::Sturdy,
-                hair: crate::character::HairStyle::Tied,
-                accent: crate::character::AccentColor::Gold,
-            },
-        };
-        let level = Level {
-            level: 4,
-            xp: 120,
-            unspent_points: 3,
-        };
-        let wallet = Wallet(365);
-        let owned = OwnedItems(HashSet::from([
-            ItemId::Palos,
-            ItemId::BataCiobaneasca,
-            ItemId::ScutDeLemn,
-        ]));
-        let mut equipment = Equipment::default();
-        equipment.equip(ItemId::Palos);
-        equipment.equip(ItemId::ScutDeLemn);
-        let ladder = LadderProgress(12);
-        (
-            player,
-            level,
-            wallet,
-            owned,
-            PlayerEquipment(equipment),
-            ladder,
-        )
-    }
-
-    fn sample_save() -> SaveGame {
-        let (player, level, wallet, owned, equipment, ladder) = sample_run();
-        SaveGame::capture(&player, &level, &wallet, &owned, &equipment, &ladder)
-    }
-
-    #[test]
-    fn capture_mirrors_every_resource_field() {
-        let save = sample_save();
-        assert_eq!(save.version, SAVE_VERSION);
-        assert_eq!(save.name, "Făt-Frumos");
-        assert_eq!(
-            save.attrs,
-            SavedAttributes {
-                putere: 5,
-                agilitate: 3,
-                vitalitate: 7,
-                noroc: 2,
-            }
-        );
-        assert_eq!(
-            save.appearance,
-            PlayerAppearance {
-                skin_tone: crate::character::SkinTone::Olive,
-                build: crate::character::BodyBuild::Sturdy,
-                hair: crate::character::HairStyle::Tied,
-                accent: crate::character::AccentColor::Gold,
-            }
-        );
-        assert_eq!(save.level, 4);
-        assert_eq!(save.xp, 120);
-        assert_eq!(save.unspent_points, 3);
-        assert_eq!(save.wallet, 365);
-        assert_eq!(
-            save.owned_items,
-            vec!["BataCiobaneasca", "Palos", "ScutDeLemn"],
-            "owned items are sorted for deterministic JSON"
-        );
-        assert_eq!(
-            save.equipped,
-            vec!["Palos", "ScutDeLemn"],
-            "equipped items in slot order"
-        );
-        assert_eq!(save.ladder_progress, 12);
-        assert_eq!(save.lap, 2, "index 12 sits on the second lap");
-    }
-
-    #[test]
-    fn json_roundtrip_preserves_every_field() {
-        let save = sample_save();
-        let json = save.to_json().expect("plain data serializes");
-        let restored = SaveGame::from_json(&json).expect("own JSON loads");
-        assert_eq!(restored, save);
-    }
-
-    #[test]
-    fn resources_survive_the_full_reconstruction_exactly() {
-        let (player, level, wallet, owned, equipment, ladder) = sample_run();
-        let json = SaveGame::capture(&player, &level, &wallet, &owned, &equipment, &ladder)
-            .to_json()
-            .expect("plain data serializes");
-        let save = SaveGame::from_json(&json).expect("own JSON loads");
-        assert_eq!(save.player_character(), player);
-        assert_eq!(save.level(), level);
-        assert_eq!(save.wallet(), wallet);
-        assert_eq!(save.owned_items(), owned);
-        assert_eq!(save.player_equipment(), equipment);
-        assert_eq!(save.ladder_progress(), ladder);
-    }
-
-    #[test]
-    fn corrupt_json_is_rejected_without_panicking() {
-        for corrupt in [
-            "",
-            "not json at all",
-            "{",
-            "42",
-            r#"{"version":1}"#,
-            r#"{"version":1,"name":"x","attrs":{"putere":-1,"agilitate":1,"vitalitate":1,"noroc":1},"level":1,"xp":0,"unspent_points":0,"wallet":0,"owned_items":[],"equipped":[],"ladder_progress":0,"lap":1}"#,
-        ] {
-            assert!(
-                SaveGame::from_json(corrupt).is_none(),
-                "{corrupt:?} must be rejected"
-            );
-        }
-    }
-
-    #[test]
-    fn a_version_mismatch_discards_the_save() {
-        let mut save = sample_save();
-        save.version = SAVE_VERSION + 1;
-        let json = save.to_json().expect("plain data serializes");
-        assert!(SaveGame::from_json(&json).is_none());
-    }
-
-    #[test]
-    fn a_v1_save_without_appearance_defaults_cleanly() {
-        let json = r#"{"version":1,"name":"Făt-Frumos","attrs":{"putere":5,"agilitate":3,"vitalitate":7,"noroc":2},"level":4,"xp":120,"unspent_points":3,"wallet":365,"owned_items":["BataCiobaneasca","Palos","ScutDeLemn"],"equipped":["Palos","ScutDeLemn"],"ladder_progress":12,"lap":2}"#;
-        let save = SaveGame::from_json(json).expect("old v1 save still loads");
-        assert_eq!(save.appearance, PlayerAppearance::default());
-        assert_eq!(
-            save.player_character().appearance,
-            PlayerAppearance::default()
-        );
-    }
-
-    #[test]
-    fn an_unknown_item_name_discards_the_save() {
-        let mut save = sample_save();
-        save.owned_items.push("SabiaLuiStefan".to_string());
-        let json = save.to_json().expect("plain data serializes");
-        assert!(
-            SaveGame::from_json(&json).is_none(),
-            "unknown owned item invalidates the save"
-        );
-
-        let mut save = sample_save();
-        save.equipped = vec!["NuExista".to_string()];
-        let json = save.to_json().expect("plain data serializes");
-        assert!(
-            SaveGame::from_json(&json).is_none(),
-            "unknown equipped item invalidates the save"
-        );
-    }
 
     #[test]
     fn load_save_clears_an_invalid_store() {
