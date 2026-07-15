@@ -321,7 +321,55 @@ pub fn launch(width: u32, height: u32, dpr: f64, profile_dir: &Path) -> Result<C
     })
     .map_err(|e| format!("failed to install console/error instrumentation: {e}"))?;
 
+    apply_cpu_throttle(&tab)?;
+
     Ok(Checkpoint { browser, tab })
+}
+
+/// Env var read by [`apply_cpu_throttle`]. Unset/unparseable/`<= 1` disables
+/// throttling entirely (the default) so normal local runs and CI are
+/// unaffected -- this exists purely as a *local repro* tool for the class of
+/// slow-CI timing race documented on `ui_widgets::focus::PendingFocusNav`:
+/// headless CI (real browser, `SwiftShader` software rendering, a shared
+/// runner) is measurably slower per-frame than a dev laptop, which is
+/// invisible locally unless the tab is deliberately slowed down to match.
+/// Kept as a permanent, off-by-default harness feature (rather than reverted
+/// after #268) because this class of "app assumes its target entity exists
+/// the frame it runs" bug has recurred more than once across this scenario's
+/// screens -- see #268's PR history -- and a fast dev machine alone cannot
+/// reproduce it.
+///
+/// Example: `XTASK_WEB_SMOKE_CPU_THROTTLE=20 cargo xtask web-smoke --scenario
+/// keyboard-accessibility` emulates a CPU roughly 20x slower than this
+/// machine's for the whole session (every checkpoint launched via [`launch`]
+/// picks up its own tab-local override).
+const CPU_THROTTLE_ENV_VAR: &str = "XTASK_WEB_SMOKE_CPU_THROTTLE";
+
+/// Applies [`CPU_THROTTLE_ENV_VAR`] (if set to a valid rate `> 1`) to `tab`
+/// via CDP `Emulation.setCPUThrottlingRate` -- see that constant's doc
+/// comment for why this exists and defaults off. `rate` is Chrome's own
+/// slowdown factor (`1` = no throttle, `20` = roughly 20x slower), applied
+/// once per launched tab, before the caller ever navigates -- so it's in
+/// effect from the very first frame of the cold boot this harness's
+/// readiness loop (`cold_menu`'s doc comment) waits out, the same window the
+/// documented timing races live in.
+fn apply_cpu_throttle(tab: &Tab) -> Result<(), String> {
+    let Ok(raw) = std::env::var(CPU_THROTTLE_ENV_VAR) else {
+        return Ok(());
+    };
+    let Ok(rate) = raw.parse::<f64>() else {
+        eprintln!(
+            "    {CPU_THROTTLE_ENV_VAR}={raw:?} is not a valid number; ignoring (no throttle applied)"
+        );
+        return Ok(());
+    };
+    if rate <= 1.0 {
+        return Ok(());
+    }
+    tab.call_method(Emulation::SetCPUThrottlingRate { rate })
+        .map_err(|e| format!("failed to set CPU throttling rate to {rate}x: {e}"))?;
+    println!("    CPU throttling: {rate}x slower ({CPU_THROTTLE_ENV_VAR})");
+    Ok(())
 }
 
 impl Checkpoint {
