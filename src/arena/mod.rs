@@ -17,7 +17,7 @@ use crate::core::{GameState, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::cutout::{
     CutoutPartMarker, CutoutRig, CutoutRigTemplate, CutoutTemplate, GearVisualLayer, boss_template,
-    enemy_template, human_template, human_template_for, spawn_cutout_rig,
+    cutout_rig_owner, enemy_template, human_template, human_template_for, spawn_cutout_rig,
     spawn_gear_attachment_layers,
 };
 use crate::items::{Equipment, GearMotion};
@@ -268,6 +268,12 @@ type FighterAnimationSources<'w, 's> = Query<
 /// The shop copies [`crate::shop::PlayerEquipment`] onto the player fighter
 /// after spawn, and roster opponents also carry [`Equipment`]. This system
 /// reacts to both.
+///
+/// Weapons/shields/boots attach to hands, forearms, and feet, which are now
+/// nested several joints deep under their own parent part rather than being
+/// direct children of the fighter root (#117); ownership is resolved by
+/// climbing the chain via [`cutout_rig_owner`] instead of assuming a single
+/// `ChildOf` hop from the part to the fighter.
 fn spawn_equipped_gear_layers(
     mut commands: Commands,
     asset_server: Option<Res<AssetServer>>,
@@ -275,13 +281,15 @@ fn spawn_equipped_gear_layers(
     parts: Query<(Entity, &CutoutPartMarker, &ChildOf)>,
     existing_layers: Query<(Entity, &ChildOf), With<GearVisualLayer>>,
 ) {
+    let parent_of = |entity: Entity| {
+        parts
+            .get(entity)
+            .ok()
+            .map(|(_, _, child_of)| child_of.parent())
+    };
     for (fighter, equipment) in &fighters {
         for (layer, child_of) in &existing_layers {
-            if parts
-                .get(child_of.parent())
-                .map(|(_, _, part_parent)| part_parent.parent() == fighter)
-                .unwrap_or(false)
-            {
+            if cutout_rig_owner(child_of.parent(), parent_of) == fighter {
                 commands.entity(layer).despawn();
             }
         }
@@ -293,8 +301,8 @@ fn spawn_equipped_gear_layers(
             |wanted| {
                 parts
                     .iter()
-                    .find(|(_, marker, part_parent)| {
-                        part_parent.parent() == fighter && marker.kind == wanted
+                    .find(|(part, marker, _)| {
+                        marker.kind == wanted && cutout_rig_owner(*part, parent_of) == fighter
                     })
                     .map(|(part, _, _)| part)
             },
@@ -309,6 +317,12 @@ fn spawn_equipped_gear_layers(
 /// Copies the owning fighter's current animation state into every gear layer
 /// and applies a small local transform so static overlay art feels attached
 /// to hands, shield arm, head, torso, or feet during each clip.
+///
+/// Weapons/shields/boots attach to hands, forearms, and feet, which are now
+/// nested several joints deep under their own parent part rather than being
+/// direct children of the fighter root (#117); ownership is resolved by
+/// climbing the chain via [`cutout_rig_owner`] instead of assuming a single
+/// `ChildOf` hop from the part to the fighter.
 fn sync_gear_visual_layers(
     fighters: FighterAnimationSources,
     parts: Query<&ChildOf, With<CutoutPartMarker>>,
@@ -320,11 +334,10 @@ fn sync_gear_visual_layers(
         &mut Sprite,
     )>,
 ) {
+    let parent_of = |entity: Entity| parts.get(entity).ok().map(|child_of| child_of.parent());
     for (layer, child_of, mut state, mut transform, mut gear_sprite) in &mut layers {
-        let Ok(part_parent) = parts.get(child_of.parent()) else {
-            continue;
-        };
-        let Ok((clip, anim, sprite, rig)) = fighters.get(part_parent.parent()) else {
+        let root = cutout_rig_owner(child_of.parent(), parent_of);
+        let Ok((clip, anim, sprite, rig)) = fighters.get(root) else {
             continue;
         };
         let frame = sprite
@@ -604,16 +617,40 @@ mod tests {
         assert!(player.x < 0.0 && enemy.x > 0.0, "opposite sides");
     }
 
+    /// Recursively counts every `CutoutPartMarker` entity under `root`, at
+    /// any depth. Forearms/hands/shins/feet are nested several joints deep
+    /// rather than being direct children of the fighter root (#117), so
+    /// this walks the whole subtree instead of only `root`'s immediate
+    /// `Children`.
     fn cutout_child_count(app: &mut App, root: Entity) -> usize {
-        let children = app
-            .world()
-            .get::<Children>(root)
-            .expect("fighter has cutout children")
-            .to_vec();
-        children
-            .into_iter()
-            .filter(|child| app.world().get::<CutoutPartMarker>(*child).is_some())
-            .count()
+        let world = app.world();
+        let mut count = 0;
+        let mut stack = vec![root];
+        while let Some(entity) = stack.pop() {
+            let Some(children) = world.get::<Children>(entity) else {
+                continue;
+            };
+            for child in children.iter() {
+                if world.get::<CutoutPartMarker>(child).is_some() {
+                    count += 1;
+                }
+                stack.push(child);
+            }
+        }
+        count
+    }
+
+    /// Maps every `CutoutPartMarker` entity to its immediate `ChildOf`
+    /// parent, so [`cutout_rig_owner`] can climb from any body part (or the
+    /// part a gear layer is parented under) up to the owning fighter --
+    /// parts several joints deep (forearms, hands, shins, feet) are no
+    /// longer direct children of the fighter root (#117).
+    fn cutout_part_parents(app: &mut App) -> std::collections::HashMap<Entity, Entity> {
+        app.world_mut()
+            .query::<(Entity, &CutoutPartMarker, &ChildOf)>()
+            .iter(app.world())
+            .map(|(part, _, child_of)| (part, child_of.parent()))
+            .collect()
     }
 
     fn template_part_count(template: CutoutTemplate) -> usize {
@@ -677,24 +714,20 @@ mod tests {
             .single(app.world())
             .expect("enemy fighter exists");
 
-        let part_owners: Vec<(Entity, Entity)> = app
-            .world_mut()
-            .query::<(Entity, &CutoutPartMarker, &ChildOf)>()
-            .iter(app.world())
-            .map(|(part, _, child_of)| (part, child_of.parent()))
-            .collect();
+        let part_parents = cutout_part_parents(&mut app);
 
         let mut player_parts = 0;
         let mut enemy_parts = 0;
         let mut query = app.world_mut().query::<(Entity, &Sprite)>();
         for (entity, sprite) in query.iter(app.world()) {
-            let Some((_, owner)) = part_owners.iter().find(|(part, _)| *part == entity) else {
+            if !part_parents.contains_key(&entity) {
                 continue;
-            };
-            if *owner == player {
+            }
+            let owner = cutout_rig_owner(entity, |e| part_parents.get(&e).copied());
+            if owner == player {
                 player_parts += 1;
                 assert!(!sprite.flip_x, "player body part sprites stay unflipped");
-            } else if *owner == enemy {
+            } else if owner == enemy {
                 enemy_parts += 1;
                 assert!(sprite.flip_x, "enemy body part sprites mirror the artwork");
             }
@@ -845,21 +878,13 @@ mod tests {
             .query_filtered::<Entity, With<EnemyFighter>>()
             .single(app.world())
             .expect("enemy fighter exists");
-        let part_owners: Vec<(Entity, Entity)> = app
-            .world_mut()
-            .query::<(Entity, &CutoutPartMarker, &ChildOf)>()
-            .iter(app.world())
-            .map(|(part, _, child_of)| (part, child_of.parent()))
-            .collect();
+        let part_parents = cutout_part_parents(&mut app);
         let mut layers: Vec<(ItemId, Slot, GearMotion, Entity)> = app
             .world_mut()
             .query::<(&GearVisualLayer, &ChildOf)>()
             .iter(app.world())
             .filter_map(|(layer, child_of)| {
-                let owner = part_owners
-                    .iter()
-                    .find(|(part, _)| *part == child_of.parent())?
-                    .1;
+                let owner = cutout_rig_owner(child_of.parent(), |e| part_parents.get(&e).copied());
                 (owner == enemy).then_some((layer.item, layer.slot, layer.motion, owner))
             })
             .collect();
@@ -889,25 +914,15 @@ mod tests {
             .query_filtered::<Entity, With<EnemyFighter>>()
             .single(app.world())
             .expect("enemy fighter exists");
-        let part_owners: Vec<(Entity, Entity)> = app
-            .world_mut()
-            .query::<(Entity, &CutoutPartMarker, &ChildOf)>()
-            .iter(app.world())
-            .map(|(part, _, child_of)| (part, child_of.parent()))
-            .collect();
+        let part_parents = cutout_part_parents(&mut app);
 
         let mut checked = 0;
         let mut query = app
             .world_mut()
             .query::<(&GearVisualLayer, &ChildOf, &Sprite)>();
         for (_, child_of, sprite) in query.iter(app.world()) {
-            let Some((_, owner)) = part_owners
-                .iter()
-                .find(|(part, _)| *part == child_of.parent())
-            else {
-                continue;
-            };
-            if *owner == enemy {
+            let owner = cutout_rig_owner(child_of.parent(), |e| part_parents.get(&e).copied());
+            if owner == enemy {
                 checked += 1;
                 assert!(sprite.flip_x, "enemy gear layers mirror with the rig");
             }
@@ -1027,21 +1042,13 @@ mod tests {
             .query_filtered::<Entity, With<PlayerFighter>>()
             .single(app.world())
             .expect("player fighter exists");
-        let part_owners: Vec<(Entity, Entity)> = app
-            .world_mut()
-            .query::<(Entity, &CutoutPartMarker, &ChildOf)>()
-            .iter(app.world())
-            .map(|(part, _, child_of)| (part, child_of.parent()))
-            .collect();
+        let part_parents = cutout_part_parents(&mut app);
         let mut layers: Vec<(ItemId, Slot, Entity)> = app
             .world_mut()
             .query::<(&GearVisualLayer, &ChildOf)>()
             .iter(app.world())
             .filter_map(|(layer, child_of)| {
-                let owner = part_owners
-                    .iter()
-                    .find(|(part, _)| *part == child_of.parent())?
-                    .1;
+                let owner = cutout_rig_owner(child_of.parent(), |e| part_parents.get(&e).copied());
                 (owner == player).then_some((layer.item, layer.slot, owner))
             })
             .collect();

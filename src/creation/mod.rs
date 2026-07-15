@@ -857,7 +857,9 @@ mod tests {
     use super::*;
     use crate::character::{AccentColor, BodyBuild, HairStyle, SkinTone};
     use crate::core::CorePlugin;
-    use crate::cutout::{CutoutPartKind, CutoutPartMarker, GearVisualLayer, human_template};
+    use crate::cutout::{
+        CutoutPartKind, CutoutPartMarker, GearVisualLayer, cutout_rig_owner, human_template,
+    };
     use crate::items::ItemId;
     use crate::save::{SaveGame, SavePlugin, SaveStore};
     use bevy::state::app::StatesPlugin;
@@ -1062,6 +1064,29 @@ mod tests {
         assert_eq!(transform.translation.x, 0.0);
     }
 
+    /// Recursively counts every `CutoutPartMarker` entity under `root`, at
+    /// any depth. Forearms/hands/shins/feet are nested several joints deep
+    /// rather than being direct children of the rig root (#117), so this
+    /// walks the whole subtree instead of only `root`'s immediate
+    /// `Children`.
+    fn cutout_descendant_count(app: &mut App, root: Entity) -> usize {
+        let world = app.world();
+        let mut count = 0;
+        let mut stack = vec![root];
+        while let Some(entity) = stack.pop() {
+            let Some(children) = world.get::<Children>(entity) else {
+                continue;
+            };
+            for child in children.iter() {
+                if world.get::<CutoutPartMarker>(child).is_some() {
+                    count += 1;
+                }
+                stack.push(child);
+            }
+        }
+        count
+    }
+
     #[test]
     fn entering_creation_spawns_a_cutout_preview() {
         let mut app = test_app();
@@ -1070,16 +1095,10 @@ mod tests {
             .query_filtered::<Entity, (With<CreationPreview>, With<CutoutRig>)>()
             .single(app.world())
             .expect("one cutout preview root exists");
-        let children = app
-            .world()
-            .get::<Children>(preview)
-            .expect("preview has rig children")
-            .to_vec();
-        let parts = children
-            .into_iter()
-            .filter(|child| app.world().get::<CutoutPartMarker>(*child).is_some())
-            .count();
-        assert_eq!(parts, human_template().parts.len());
+        assert_eq!(
+            cutout_descendant_count(&mut app, preview),
+            human_template().parts.len()
+        );
     }
 
     #[test]
@@ -1095,21 +1114,27 @@ mod tests {
             .query_filtered::<Entity, (With<CreationPreview>, With<CutoutRig>)>()
             .single(app.world())
             .expect("one cutout preview root exists");
-        let part_info: Vec<(Entity, Entity, CutoutPartKind)> = app
+        let part_parents: std::collections::HashMap<Entity, Entity> = app
             .world_mut()
             .query::<(Entity, &CutoutPartMarker, &ChildOf)>()
             .iter(app.world())
-            .map(|(part, marker, child_of)| (part, child_of.parent(), marker.kind))
+            .map(|(part, _, child_of)| (part, child_of.parent()))
+            .collect();
+        let part_kinds: std::collections::HashMap<Entity, CutoutPartKind> = app
+            .world_mut()
+            .query::<(Entity, &CutoutPartMarker)>()
+            .iter(app.world())
+            .map(|(part, marker)| (part, marker.kind))
             .collect();
         let mut layers: Vec<(ItemId, CutoutPartKind)> = app
             .world_mut()
             .query::<(&GearVisualLayer, &ChildOf)>()
             .iter(app.world())
             .filter_map(|(layer, child_of)| {
-                let (_, owner, kind) = part_info
-                    .iter()
-                    .find(|(part, _, _)| *part == child_of.parent())?;
-                (*owner == preview).then_some((layer.item, *kind))
+                let part = child_of.parent();
+                let kind = *part_kinds.get(&part)?;
+                let owner = cutout_rig_owner(part, |e| part_parents.get(&e).copied());
+                (owner == preview).then_some((layer.item, kind))
             })
             .collect();
         layers.sort_by_key(|(item, _)| *item as usize);

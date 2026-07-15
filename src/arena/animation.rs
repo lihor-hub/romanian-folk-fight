@@ -11,7 +11,9 @@ use bevy::prelude::*;
 
 use crate::character::{EnemyFighter, PlayerFighter};
 use crate::combat::{CombatAction, CombatEvent, CombatLogEvent, CombatSide};
-use crate::cutout::{CutoutPartMarker, CutoutPartRestPose, CutoutPose, CutoutRig};
+use crate::cutout::{
+    CutoutPartMarker, CutoutPartRestPose, CutoutPose, CutoutRig, cutout_rig_owner,
+};
 use crate::roster::LADDER;
 use crate::settings::AccessibilityPreferences;
 
@@ -590,8 +592,14 @@ fn return_to_idle(mut query: Query<(&mut FighterClip, &mut SpriteAnimation, Opti
 /// Applies the current jointed pose to every body-part child, rebuilding from
 /// the part's neutral transform so gear parented beneath hands/arms/shields
 /// inherits the same motion without independent drift.
+///
+/// Forearms, hands, shins, and feet are nested several joints deep under
+/// their own parent part rather than being direct children of the fighter
+/// root (#117), so the owning fighter is found by climbing the chain via
+/// [`cutout_rig_owner`] instead of assuming a single `ChildOf` hop.
 fn apply_cutout_poses(
     fighters: Query<(&CutoutPose, Option<&CutoutRig>)>,
+    ancestry: Query<&ChildOf, With<CutoutPartMarker>>,
     mut parts: Query<(
         &CutoutPartMarker,
         &ChildOf,
@@ -600,7 +608,10 @@ fn apply_cutout_poses(
     )>,
 ) {
     for (marker, child_of, rest, mut transform) in &mut parts {
-        let Ok((pose, rig)) = fighters.get(child_of.parent()) else {
+        let root = cutout_rig_owner(child_of.parent(), |entity| {
+            ancestry.get(entity).ok().map(|child_of| child_of.parent())
+        });
+        let Ok((pose, rig)) = fighters.get(root) else {
             continue;
         };
         let flip_x = rig.map(|rig| rig.flip_x).unwrap_or(false);
@@ -994,17 +1005,28 @@ mod tests {
             .expect("fighter has a cutout pose")
     }
 
+    /// Finds the [`Transform`] of the body part of `kind` owned by the
+    /// fighter tagged `M`. Forearms/hands/shins/feet are nested several
+    /// joints deep under their own parent part rather than being direct
+    /// children of the fighter root (#117), so ownership is resolved by
+    /// climbing the chain via [`cutout_rig_owner`] instead of assuming a
+    /// single `ChildOf` hop from the part to the fighter.
     fn part_transform<M: Component>(app: &mut App, kind: CutoutPartKind) -> Transform {
         let world = app.world_mut();
-        let mut query = world.query_filtered::<(&CutoutPartMarker, &ChildOf, &Transform), ()>();
+        let parent_of: std::collections::HashMap<Entity, Entity> = world
+            .query_filtered::<(Entity, &ChildOf), With<CutoutPartMarker>>()
+            .iter(world)
+            .map(|(entity, child_of)| (entity, child_of.parent()))
+            .collect();
+        let mut query = world.query::<(Entity, &CutoutPartMarker, &Transform)>();
         query
             .iter(world)
-            .find_map(|(marker, child_of, transform)| {
-                let parent = child_of.parent();
-                world
-                    .get::<M>(parent)
-                    .filter(|_| marker.kind == kind)
-                    .map(|_| *transform)
+            .find_map(|(entity, marker, transform)| {
+                if marker.kind != kind {
+                    return None;
+                }
+                let root = cutout_rig_owner(entity, |e| parent_of.get(&e).copied());
+                world.get::<M>(root).map(|_| *transform)
             })
             .expect("part exists")
     }

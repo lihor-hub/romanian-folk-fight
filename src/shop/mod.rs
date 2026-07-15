@@ -964,7 +964,7 @@ mod tests {
     use crate::arena::ArenaPlugin;
     use crate::combat::CombatLogEvent;
     use crate::core::CorePlugin;
-    use crate::cutout::{CutoutPartKind, CutoutPartMarker, GearVisualLayer};
+    use crate::cutout::{CutoutPartKind, CutoutPartMarker, GearVisualLayer, cutout_rig_owner};
     use crate::flow::FlowPlugin;
     use crate::progression::{ProgressionPlugin, STARTING_GALBENI, result_ui::GameOverAction};
     use bevy::state::app::StatesPlugin;
@@ -1113,22 +1113,34 @@ mod tests {
         app.world().resource::<PlayerEquipment>().0.equipped(slot)
     }
 
+    /// Resolves which fighter/preview root owns each gear layer. Weapons,
+    /// shields, and boots attach to hands, forearms, and feet, which are now
+    /// nested several joints deep under their own parent part rather than
+    /// being direct children of the rig root (#117), so ownership is
+    /// resolved by climbing the chain via [`cutout_rig_owner`] instead of
+    /// assuming a single `ChildOf` hop from the part to the root.
     fn gear_layers_for_owner(app: &mut App, owner: Entity) -> Vec<(ItemId, Slot, CutoutPartKind)> {
-        let part_info: Vec<(Entity, Entity, CutoutPartKind)> = app
+        let part_parents: std::collections::HashMap<Entity, Entity> = app
             .world_mut()
             .query::<(Entity, &CutoutPartMarker, &ChildOf)>()
             .iter(app.world())
-            .map(|(part, marker, child_of)| (part, child_of.parent(), marker.kind))
+            .map(|(part, _, child_of)| (part, child_of.parent()))
+            .collect();
+        let part_kinds: std::collections::HashMap<Entity, CutoutPartKind> = app
+            .world_mut()
+            .query::<(Entity, &CutoutPartMarker)>()
+            .iter(app.world())
+            .map(|(part, marker)| (part, marker.kind))
             .collect();
         let mut layers: Vec<(ItemId, Slot, CutoutPartKind)> = app
             .world_mut()
             .query::<(&GearVisualLayer, &ChildOf)>()
             .iter(app.world())
             .filter_map(|(layer, child_of)| {
-                let (_, part_owner, kind) = part_info
-                    .iter()
-                    .find(|(part, _, _)| *part == child_of.parent())?;
-                (*part_owner == owner).then_some((layer.item, layer.slot, *kind))
+                let part = child_of.parent();
+                let kind = *part_kinds.get(&part)?;
+                let part_owner = cutout_rig_owner(part, |e| part_parents.get(&e).copied());
+                (part_owner == owner).then_some((layer.item, layer.slot, kind))
             })
             .collect();
         layers.sort_by_key(|(item, _, _)| *item as usize);

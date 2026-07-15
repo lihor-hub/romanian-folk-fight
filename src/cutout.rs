@@ -3,6 +3,8 @@
 //! the first production-intent pixel-art body parts and starter gear into the
 //! runtime while keeping the ECS surface compact.
 
+use std::collections::HashMap;
+
 use bevy::prelude::*;
 
 use crate::character::{AccentColor, BodyBuild, HairStyle, PlayerAppearance, SkinTone};
@@ -50,12 +52,97 @@ pub enum CutoutPartKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CutoutPart {
     pub kind: CutoutPartKind,
+    /// Local translation. For a chained part (a forearm, hand, shin, or
+    /// foot -- see [`parent_kind`]) this is relative to its parent PART's
+    /// own origin, not the rig root, and becomes that part's local
+    /// [`Transform`] translation once nested under it. Root-level parts
+    /// (torso, head, hair, upper arms, thighs) stay root-relative, as
+    /// before.
     pub offset: Vec2,
+    /// This part's own attachment point for the next link in its joint
+    /// chain (e.g. the elbow on an upper arm, the wrist on a forearm, the
+    /// knee on a thigh, the ankle on a shin), expressed as an offset from
+    /// this part's own `offset` in the same (unrotated, parent-relative)
+    /// space `offset` uses. `Vec2::ZERO` for parts with no rig child
+    /// (hands, feet, torso, head, hair). Documents the pivot/attachment
+    /// point `docs/art-direction.md` requires, and is what makes a nested
+    /// child's `offset` follow its parent's rotation through Bevy's
+    /// transform propagation instead of drifting into a gap (#117).
+    pub pivot: Vec2,
     pub size: Vec2,
+    /// Local rotation. For a chained part this composes with the parent
+    /// part's own rotation through Bevy's transform propagation, so it is
+    /// relative to the parent's rotation rather than an absolute angle (see
+    /// `offset`).
     pub rotation: f32,
     pub z_offset: f32,
     pub color: Color,
     pub asset_path: Option<&'static str>,
+}
+
+impl CutoutPart {
+    /// Sets this part's [`pivot`](CutoutPart::pivot) attachment point.
+    fn with_pivot(mut self, x: f32, y: f32) -> Self {
+        self.pivot = Vec2::new(x, y);
+        self
+    }
+}
+
+/// Which body part `kind` is rigged to, if any. Forearms hang from upper
+/// arms, hands from forearms, shins from thighs, and feet from shins;
+/// Bevy's transform hierarchy propagates the parent's rotation to the child
+/// automatically, which is what keeps a joint from opening a gap when the
+/// limb rotates (#117). Every other part (torso, head, hair, upper arms,
+/// thighs) is parented directly to the rig root, as before.
+fn parent_kind(kind: CutoutPartKind) -> Option<CutoutPartKind> {
+    use CutoutPartKind::*;
+    match kind {
+        ForearmBack => Some(UpperArmBack),
+        ForearmFront => Some(UpperArmFront),
+        HandBack => Some(ForearmBack),
+        HandFront => Some(ForearmFront),
+        ShinBack => Some(ThighBack),
+        ShinFront => Some(ThighFront),
+        FootBack => Some(ShinBack),
+        FootFront => Some(ShinFront),
+        Hair | Torso | Head | UpperArmBack | UpperArmFront | ThighBack | ThighFront => None,
+    }
+}
+
+/// Direct rig children of `kind`, if any -- the inverse of [`parent_kind`].
+fn child_kinds(kind: CutoutPartKind) -> &'static [CutoutPartKind] {
+    use CutoutPartKind::*;
+    match kind {
+        UpperArmBack => &[ForearmBack],
+        UpperArmFront => &[ForearmFront],
+        ForearmBack => &[HandBack],
+        ForearmFront => &[HandFront],
+        ThighBack => &[ShinBack],
+        ThighFront => &[ShinFront],
+        ShinBack => &[FootBack],
+        ShinFront => &[FootFront],
+        _ => &[],
+    }
+}
+
+/// Walks up the cutout-rig hierarchy from `entity`, following `parent_of`
+/// until it returns `None`. Chained limb parts (forearms, hands, shins,
+/// feet) are nested several joints deep rather than being direct children
+/// of the rig root, so any system that needs "which fighter owns this part"
+/// (gear attachment/sync, pose application) must climb the chain instead of
+/// assuming a single hop. `parent_of` should return `Some(parent)` while
+/// `entity` is itself a rigged body part, and `None` once it reaches the
+/// owning root (or anything else that isn't part of the chain).
+pub fn cutout_rig_owner(entity: Entity, parent_of: impl Fn(Entity) -> Option<Entity>) -> Entity {
+    const MAX_DEPTH: usize = 8;
+    let mut current = entity;
+    for _ in 0..MAX_DEPTH {
+        match parent_of(current) {
+            Some(parent) => current = parent,
+            None => return current,
+        }
+    }
+    current
 }
 
 /// A complete neutral-pose rig template.
@@ -156,25 +243,7 @@ pub fn spawn_cutout_rig(
     asset_server: Option<&AssetServer>,
     flip_x: bool,
 ) {
-    commands.entity(root).insert(CutoutRig {
-        template: template.template,
-        flip_x,
-    });
-    commands.entity(root).insert(CutoutPose::Idle);
-    commands.entity(root).with_children(|body| {
-        for part in template.parts {
-            let transform = part_transform(&part, flip_x);
-            body.spawn((
-                CutoutPartMarker { kind: part.kind },
-                CutoutPartRestPose {
-                    transform,
-                    size: part.size,
-                },
-                part_sprite(&part, asset_server, flip_x),
-                transform,
-            ));
-        }
-    });
+    spawn_cutout_rig_impl(commands, root, template, asset_server, flip_x, None);
 }
 
 /// Attaches a cutout rig and its currently equipped gear to `root`.
@@ -186,34 +255,100 @@ pub fn spawn_cutout_rig_with_gear(
     flip_x: bool,
     equipment: &Equipment,
 ) {
+    spawn_cutout_rig_impl(
+        commands,
+        root,
+        template,
+        asset_server,
+        flip_x,
+        Some(equipment),
+    );
+}
+
+fn spawn_cutout_rig_impl(
+    commands: &mut Commands,
+    root: Entity,
+    template: CutoutRigTemplate,
+    asset_server: Option<&AssetServer>,
+    flip_x: bool,
+    equipment: Option<&Equipment>,
+) {
     commands.entity(root).insert(CutoutRig {
         template: template.template,
         flip_x,
     });
     commands.entity(root).insert(CutoutPose::Idle);
+
+    // Root-level spawn order follows the template's authored (draw) order,
+    // skipping chained parts (forearms, hands, shins, feet): those are
+    // spawned recursively as children of their own parent part below, so
+    // Bevy's transform hierarchy carries the parent's rotation to them
+    // instead of leaving them as independently-offset siblings (#117).
+    let root_order: Vec<CutoutPartKind> = template
+        .parts
+        .iter()
+        .map(|part| part.kind)
+        .filter(|kind| parent_kind(*kind).is_none())
+        .collect();
+    let parts_by_kind: HashMap<CutoutPartKind, CutoutPart> = template
+        .parts
+        .into_iter()
+        .map(|part| (part.kind, part))
+        .collect();
+
     commands.entity(root).with_children(|body| {
-        for part in template.parts {
-            let transform = part_transform(&part, flip_x);
-            body.spawn((
-                CutoutPartMarker { kind: part.kind },
-                CutoutPartRestPose {
-                    transform,
-                    size: part.size,
-                },
-                part_sprite(&part, asset_server, flip_x),
+        for kind in root_order {
+            spawn_part_and_children(body, &parts_by_kind, kind, flip_x, asset_server, equipment);
+        }
+    });
+}
+
+/// Spawns `kind`'s body-part entity and, recursively, every part rigged
+/// beneath it (see [`child_kinds`]) as its Bevy children -- and, if
+/// `equipment` is given, any gear layers attached to each of those parts.
+fn spawn_part_and_children(
+    parent: &mut ChildSpawnerCommands,
+    parts_by_kind: &HashMap<CutoutPartKind, CutoutPart>,
+    kind: CutoutPartKind,
+    flip_x: bool,
+    asset_server: Option<&AssetServer>,
+    equipment: Option<&Equipment>,
+) {
+    let Some(part) = parts_by_kind.get(&kind) else {
+        return;
+    };
+    let transform = part_transform(part, flip_x);
+    parent
+        .spawn((
+            CutoutPartMarker { kind },
+            CutoutPartRestPose {
                 transform,
-            ))
-            .with_children(|part_children| {
+                size: part.size,
+            },
+            part_sprite(part, asset_server, flip_x),
+            transform,
+        ))
+        .with_children(|part_children| {
+            if let Some(equipment) = equipment {
                 spawn_gear_children_for_part(
                     part_children,
-                    part.kind,
+                    kind,
                     equipment,
                     asset_server,
                     &mut |_| (),
                 );
-            });
-        }
-    });
+            }
+            for &child_kind in child_kinds(kind) {
+                spawn_part_and_children(
+                    part_children,
+                    parts_by_kind,
+                    child_kind,
+                    flip_x,
+                    asset_server,
+                    equipment,
+                );
+            }
+        });
 }
 
 /// Spawns equipped gear under already-existing cutout body part entities.
@@ -338,128 +473,203 @@ fn part_transform(part: &CutoutPart, flip_x: bool) -> Transform {
         .with_rotation(Quat::from_rotation_z(rotation))
 }
 
+/// Builds the neutral-pose rig. Chained parts (forearms, hands, shins,
+/// feet -- see [`parent_kind`]) are authored here against their parent
+/// part's [`CutoutPart::pivot`], so `offset`/`rotation`/`z_offset` end up
+/// relative to that parent rather than to the rig root: the rest pose stays
+/// pixel-identical to the original flat (root-relative) layout, but once
+/// [`spawn_part_and_children`] nests them under their parent entity, Bevy's
+/// transform propagation carries the parent's rotation to them too, closing
+/// the elbow/wrist/knee/ankle gap a bare rotation used to open (#117).
+///
+/// The `_ROT` constants below are the original absolute (root-relative)
+/// rest rotations this rig was authored with; each chained part's relative
+/// rotation is `own absolute - parent's absolute`, which telescopes back to
+/// the original absolute value once composed through the parent chain. The
+/// same trick is used for `z_offset` (draw-depth) so sprite layering is
+/// unchanged too.
 fn human_parts(scale: f32) -> Vec<CutoutPart> {
+    const UPPER_ARM_BACK_ROT: f32 = -0.18;
+    const FOREARM_BACK_ROT: f32 = -0.28;
+    const HAND_BACK_ROT: f32 = -0.1;
+    const THIGH_BACK_ROT: f32 = 0.08;
+    const SHIN_BACK_ROT: f32 = -0.05;
+    const FOOT_BACK_ROT: f32 = 0.0;
+    const UPPER_ARM_FRONT_ROT: f32 = -0.12;
+    const FOREARM_FRONT_ROT: f32 = -0.18;
+    const HAND_FRONT_ROT: f32 = -0.04;
+    const THIGH_FRONT_ROT: f32 = -0.07;
+    const SHIN_FRONT_ROT: f32 = 0.04;
+    const FOOT_FRONT_ROT: f32 = 0.0;
+
+    let upper_arm_back = part(
+        CutoutPartKind::UpperArmBack,
+        -20.0,
+        26.0,
+        15.0,
+        44.0,
+        UPPER_ARM_BACK_ROT,
+        -0.08,
+    )
+    .with_pivot(-8.0, -28.0);
+    let forearm_back = part(
+        CutoutPartKind::ForearmBack,
+        upper_arm_back.pivot.x,
+        upper_arm_back.pivot.y,
+        13.0,
+        38.0,
+        FOREARM_BACK_ROT - UPPER_ARM_BACK_ROT,
+        -0.07 - (-0.08),
+    )
+    .with_pivot(-4.0, -24.0);
+    let hand_back = part(
+        CutoutPartKind::HandBack,
+        forearm_back.pivot.x,
+        forearm_back.pivot.y,
+        13.0,
+        13.0,
+        HAND_BACK_ROT - FOREARM_BACK_ROT,
+        -0.06 - (-0.07),
+    );
+    let thigh_back = part(
+        CutoutPartKind::ThighBack,
+        -13.0,
+        -42.0,
+        17.0,
+        42.0,
+        THIGH_BACK_ROT,
+        -0.05,
+    )
+    .with_pivot(-2.0, -34.0);
+    let shin_back = part(
+        CutoutPartKind::ShinBack,
+        thigh_back.pivot.x,
+        thigh_back.pivot.y,
+        14.0,
+        38.0,
+        SHIN_BACK_ROT - THIGH_BACK_ROT,
+        -0.04 - (-0.05),
+    )
+    .with_pivot(7.0, -26.0);
+    let foot_back = part(
+        CutoutPartKind::FootBack,
+        shin_back.pivot.x,
+        shin_back.pivot.y,
+        28.0,
+        12.0,
+        FOOT_BACK_ROT - SHIN_BACK_ROT,
+        -0.03 - (-0.04),
+    );
+    let torso = part(CutoutPartKind::Torso, 0.0, 6.0, 44.0, 74.0, 0.0, 0.0);
+    let hair = part(CutoutPartKind::Hair, 1.0, 71.0, 32.0, 20.0, 0.02, 0.02);
+    let head = part(CutoutPartKind::Head, 4.0, 60.0, 38.0, 42.0, 0.04, 0.03);
+    let upper_arm_front = part(
+        CutoutPartKind::UpperArmFront,
+        21.0,
+        25.0,
+        15.0,
+        45.0,
+        UPPER_ARM_FRONT_ROT,
+        0.04,
+    )
+    .with_pivot(8.0, -28.0);
+    let forearm_front = part(
+        CutoutPartKind::ForearmFront,
+        upper_arm_front.pivot.x,
+        upper_arm_front.pivot.y,
+        13.0,
+        39.0,
+        FOREARM_FRONT_ROT - UPPER_ARM_FRONT_ROT,
+        0.05 - 0.04,
+    )
+    .with_pivot(4.0, -25.0);
+    let hand_front = part(
+        CutoutPartKind::HandFront,
+        forearm_front.pivot.x,
+        forearm_front.pivot.y,
+        13.0,
+        13.0,
+        HAND_FRONT_ROT - FOREARM_FRONT_ROT,
+        0.06 - 0.05,
+    );
+    let thigh_front = part(
+        CutoutPartKind::ThighFront,
+        13.0,
+        -42.0,
+        17.0,
+        42.0,
+        THIGH_FRONT_ROT,
+        0.07,
+    )
+    .with_pivot(2.0, -34.0);
+    let shin_front = part(
+        CutoutPartKind::ShinFront,
+        thigh_front.pivot.x,
+        thigh_front.pivot.y,
+        14.0,
+        38.0,
+        SHIN_FRONT_ROT - THIGH_FRONT_ROT,
+        0.08 - 0.07,
+    )
+    .with_pivot(8.0, -26.0);
+    let foot_front = part(
+        CutoutPartKind::FootFront,
+        shin_front.pivot.x,
+        shin_front.pivot.y,
+        28.0,
+        12.0,
+        FOOT_FRONT_ROT - SHIN_FRONT_ROT,
+        0.09 - 0.08,
+    );
+
     vec![
-        part(
-            CutoutPartKind::UpperArmBack,
-            -20.0,
-            26.0,
-            15.0,
-            44.0,
-            -0.18,
-            -0.08,
-        ),
-        part(
-            CutoutPartKind::ForearmBack,
-            -28.0,
-            -2.0,
-            13.0,
-            38.0,
-            -0.28,
-            -0.07,
-        ),
-        part(
-            CutoutPartKind::HandBack,
-            -32.0,
-            -26.0,
-            13.0,
-            13.0,
-            -0.1,
-            -0.06,
-        ),
-        part(
-            CutoutPartKind::ThighBack,
-            -13.0,
-            -42.0,
-            17.0,
-            42.0,
-            0.08,
-            -0.05,
-        ),
-        part(
-            CutoutPartKind::ShinBack,
-            -15.0,
-            -76.0,
-            14.0,
-            38.0,
-            -0.05,
-            -0.04,
-        ),
-        part(
-            CutoutPartKind::FootBack,
-            -8.0,
-            -102.0,
-            28.0,
-            12.0,
-            0.0,
-            -0.03,
-        ),
-        part(CutoutPartKind::Torso, 0.0, 6.0, 44.0, 74.0, 0.0, 0.0),
-        part(CutoutPartKind::Hair, 1.0, 71.0, 32.0, 20.0, 0.02, 0.02),
-        part(CutoutPartKind::Head, 4.0, 60.0, 38.0, 42.0, 0.04, 0.03),
-        part(
-            CutoutPartKind::UpperArmFront,
-            21.0,
-            25.0,
-            15.0,
-            45.0,
-            -0.12,
-            0.04,
-        ),
-        part(
-            CutoutPartKind::ForearmFront,
-            29.0,
-            -3.0,
-            13.0,
-            39.0,
-            -0.18,
-            0.05,
-        ),
-        part(
-            CutoutPartKind::HandFront,
-            33.0,
-            -28.0,
-            13.0,
-            13.0,
-            -0.04,
-            0.06,
-        ),
-        part(
-            CutoutPartKind::ThighFront,
-            13.0,
-            -42.0,
-            17.0,
-            42.0,
-            -0.07,
-            0.07,
-        ),
-        part(
-            CutoutPartKind::ShinFront,
-            15.0,
-            -76.0,
-            14.0,
-            38.0,
-            0.04,
-            0.08,
-        ),
-        part(
-            CutoutPartKind::FootFront,
-            23.0,
-            -102.0,
-            28.0,
-            12.0,
-            0.0,
-            0.09,
-        ),
+        upper_arm_back,
+        forearm_back,
+        hand_back,
+        thigh_back,
+        shin_back,
+        foot_back,
+        torso,
+        hair,
+        head,
+        upper_arm_front,
+        forearm_front,
+        hand_front,
+        thigh_front,
+        shin_front,
+        foot_front,
     ]
     .into_iter()
     .map(|mut part| {
         part.offset *= scale;
+        part.pivot *= scale;
         part.size *= scale;
         part.asset_path = human_asset_path(part.kind);
         part
     })
     .collect()
+}
+
+/// Resolves `kind`'s effective (composed) `z_offset` by walking up through
+/// [`parent_kind`] and summing every ancestor's local `z_offset`, mirroring
+/// what Bevy's transform propagation actually renders for a chained part.
+/// Used by tests to check draw-order the same way the fix's authors did:
+/// [`human_parts`] stores chained `z_offset`s relative to their parent so
+/// the *composed* depth reconstructs the original absolute authoring, not
+/// the raw per-part field.
+#[cfg(test)]
+fn effective_z_offset(parts: &[CutoutPart], kind: CutoutPartKind) -> f32 {
+    let mut total = 0.0;
+    let mut current = Some(kind);
+    while let Some(k) = current {
+        total += parts
+            .iter()
+            .find(|part| part.kind == k)
+            .map(|part| part.z_offset)
+            .unwrap_or(0.0);
+        current = parent_kind(k);
+    }
+    total
 }
 
 fn strigoi_part(mut part: CutoutPart) -> CutoutPart {
@@ -599,6 +809,7 @@ fn part(
     CutoutPart {
         kind,
         offset: Vec2::new(x, y),
+        pivot: Vec2::ZERO,
         size: Vec2::new(width, height),
         rotation,
         z_offset,
@@ -871,15 +1082,41 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    /// Recursively collects every `CutoutPartMarker` entity under `root`, at
+    /// any depth. Forearms/hands/shins/feet are nested several joints deep
+    /// rather than being direct children of the root (#117), so callers
+    /// that need "every body part this rig spawned" must walk the whole
+    /// subtree instead of only `root`'s immediate `Children`.
+    fn collect_rig_parts(world: &World, root: Entity) -> Vec<(CutoutPartKind, Entity)> {
+        let mut found = Vec::new();
+        let mut stack = vec![root];
+        while let Some(entity) = stack.pop() {
+            let Some(children) = world.get::<Children>(entity) else {
+                continue;
+            };
+            for child in children.iter() {
+                if let Some(marker) = world.get::<CutoutPartMarker>(child) {
+                    found.push((marker.kind, child));
+                }
+                stack.push(child);
+            }
+        }
+        found
+    }
+
     fn count_children_with_parts(world: &mut World, root: Entity) -> usize {
-        let children = world
-            .get::<Children>(root)
-            .expect("rig root has body-part children")
-            .to_vec();
-        children
-            .into_iter()
-            .filter(|child| world.get::<CutoutPartMarker>(*child).is_some())
-            .count()
+        collect_rig_parts(world, root).len()
+    }
+
+    /// Finds `kind` among `root`'s direct [`Children`], regardless of
+    /// whether that child in turn has body-part children of its own.
+    fn direct_part_child(world: &World, root: Entity, kind: CutoutPartKind) -> Option<Entity> {
+        world.get::<Children>(root)?.iter().find_map(|child| {
+            world
+                .get::<CutoutPartMarker>(child)
+                .filter(|marker| marker.kind == kind)
+                .map(|_| child)
+        })
     }
 
     #[test]
@@ -906,12 +1143,34 @@ mod tests {
                 "{kind:?} exists"
             );
         }
+        // Chained parts (forearms, hands, shins, feet) now store `z_offset`
+        // relative to their parent part rather than the rig root (#117), so
+        // the flat per-part field is no longer globally ascending -- check
+        // the *composed* depth Bevy actually renders instead, via the same
+        // parent-walk `effective_z_offset` uses.
+        let draw_order = [
+            CutoutPartKind::UpperArmBack,
+            CutoutPartKind::ForearmBack,
+            CutoutPartKind::HandBack,
+            CutoutPartKind::ThighBack,
+            CutoutPartKind::ShinBack,
+            CutoutPartKind::FootBack,
+            CutoutPartKind::Torso,
+            CutoutPartKind::Hair,
+            CutoutPartKind::Head,
+            CutoutPartKind::UpperArmFront,
+            CutoutPartKind::ForearmFront,
+            CutoutPartKind::HandFront,
+            CutoutPartKind::ThighFront,
+            CutoutPartKind::ShinFront,
+            CutoutPartKind::FootFront,
+        ];
         assert!(
-            template
-                .parts
+            draw_order
                 .windows(2)
-                .all(|pair| pair[0].z_offset <= pair[1].z_offset),
-            "parts are authored in draw order"
+                .all(|pair| effective_z_offset(&template.parts, pair[0])
+                    <= effective_z_offset(&template.parts, pair[1])),
+            "parts render in the authored draw order once composed through the rig"
         );
     }
 
@@ -991,6 +1250,142 @@ mod tests {
     }
 
     #[test]
+    fn forearms_and_hands_nest_under_their_own_joint_not_the_rig_root() {
+        // #117: forearms/hands/shins/feet used to be spawned as independent
+        // children of the rig root with absolute body-space offsets, so a
+        // forearm's offset never followed its upper arm's rotation and any
+        // non-zero rotation opened a gap at the joint. Reparenting through
+        // Bevy's transform hierarchy (which already propagates rotation to
+        // children) is the fix -- assert the hierarchy actually nests that
+        // way, for both the "back" and "front" arm/leg pairs.
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        world.commands().queue(move |world: &mut World| {
+            let mut commands = world.commands();
+            spawn_cutout_rig(&mut commands, root, human_template(), None, false);
+        });
+        world.flush();
+
+        for (upper_arm_kind, forearm_kind, hand_kind) in [
+            (
+                CutoutPartKind::UpperArmBack,
+                CutoutPartKind::ForearmBack,
+                CutoutPartKind::HandBack,
+            ),
+            (
+                CutoutPartKind::UpperArmFront,
+                CutoutPartKind::ForearmFront,
+                CutoutPartKind::HandFront,
+            ),
+        ] {
+            let upper_arm = direct_part_child(&world, root, upper_arm_kind)
+                .unwrap_or_else(|| panic!("{upper_arm_kind:?} is a direct child of the rig root"));
+            assert!(
+                direct_part_child(&world, root, forearm_kind).is_none(),
+                "{forearm_kind:?} must not be a direct child of the rig root"
+            );
+            let forearm = direct_part_child(&world, upper_arm, forearm_kind).unwrap_or_else(|| {
+                panic!("{forearm_kind:?} is a direct child of its {upper_arm_kind:?}")
+            });
+            assert!(
+                direct_part_child(&world, root, hand_kind).is_none(),
+                "{hand_kind:?} must not be a direct child of the rig root"
+            );
+            let _hand = direct_part_child(&world, forearm, hand_kind).unwrap_or_else(|| {
+                panic!("{hand_kind:?} is a direct child of its {forearm_kind:?}")
+            });
+        }
+
+        for (thigh_kind, shin_kind, foot_kind) in [
+            (
+                CutoutPartKind::ThighBack,
+                CutoutPartKind::ShinBack,
+                CutoutPartKind::FootBack,
+            ),
+            (
+                CutoutPartKind::ThighFront,
+                CutoutPartKind::ShinFront,
+                CutoutPartKind::FootFront,
+            ),
+        ] {
+            let thigh = direct_part_child(&world, root, thigh_kind)
+                .unwrap_or_else(|| panic!("{thigh_kind:?} is a direct child of the rig root"));
+            assert!(
+                direct_part_child(&world, root, shin_kind).is_none(),
+                "{shin_kind:?} must not be a direct child of the rig root"
+            );
+            let shin = direct_part_child(&world, thigh, shin_kind)
+                .unwrap_or_else(|| panic!("{shin_kind:?} is a direct child of its {thigh_kind:?}"));
+            assert!(
+                direct_part_child(&world, root, foot_kind).is_none(),
+                "{foot_kind:?} must not be a direct child of the rig root"
+            );
+            let _foot = direct_part_child(&world, shin, foot_kind)
+                .unwrap_or_else(|| panic!("{foot_kind:?} is a direct child of its {shin_kind:?}"));
+        }
+    }
+
+    #[test]
+    fn rotating_the_upper_arm_keeps_the_forearm_at_its_elbow_attachment_point() {
+        // #117: previously the forearm's position was independent of the
+        // upper arm's rotation (both were unlinked siblings of the root),
+        // so any non-zero rotation opened a gap. With the forearm nested as
+        // the upper arm's Bevy child, composing the two transforms should
+        // always land the forearm exactly at the upper arm's documented
+        // elbow `pivot`, however the upper arm is rotated (e.g. mid-punch).
+        let template = human_template();
+        let upper_arm_part = template
+            .parts
+            .iter()
+            .find(|part| part.kind == CutoutPartKind::UpperArmFront)
+            .expect("upper arm front exists");
+        let elbow_pivot = upper_arm_part.pivot;
+        assert_ne!(
+            elbow_pivot,
+            Vec2::ZERO,
+            "the upper arm documents an elbow pivot"
+        );
+
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        world.commands().queue(move |world: &mut World| {
+            let mut commands = world.commands();
+            spawn_cutout_rig(&mut commands, root, human_template(), None, false);
+        });
+        world.flush();
+
+        let upper_arm = direct_part_child(&world, root, CutoutPartKind::UpperArmFront)
+            .expect("upper arm front is a direct child of the root");
+        let forearm = direct_part_child(&world, upper_arm, CutoutPartKind::ForearmFront)
+            .expect("forearm front is a direct child of the upper arm");
+
+        // Simulate an arbitrary combat pose rotating the upper arm in place
+        // (this is exactly what `arena::animation::apply_cutout_poses` does
+        // for Attack/Block/Dodge/etc every frame).
+        world
+            .get_mut::<Transform>(upper_arm)
+            .expect("upper arm has a transform")
+            .rotate_z(0.6);
+
+        let upper_arm_transform = *world.get::<Transform>(upper_arm).unwrap();
+        let forearm_transform = *world.get::<Transform>(forearm).unwrap();
+        let upper_arm_global = GlobalTransform::from(upper_arm_transform);
+
+        let expected_elbow = upper_arm_global.transform_point(elbow_pivot.extend(0.0));
+        let forearm_global = upper_arm_global.mul_transform(forearm_transform);
+
+        let epsilon = 1e-3;
+        assert!(
+            (forearm_global.translation().truncate() - expected_elbow.truncate()).length()
+                < epsilon,
+            "forearm should stay glued to the rotated elbow attachment point: \
+             forearm at {:?}, expected near {:?}",
+            forearm_global.translation(),
+            expected_elbow
+        );
+    }
+
+    #[test]
     fn mirrored_rigs_invert_part_x_offsets() {
         let mut world = World::new();
         let normal = world.spawn_empty().id();
@@ -1002,14 +1397,30 @@ mod tests {
         });
         world.flush();
 
-        let normal_children = world.get::<Children>(normal).unwrap().to_vec();
-        let mirrored_children = world.get::<Children>(mirrored).unwrap().to_vec();
-        for (left, right) in normal_children.iter().zip(mirrored_children.iter()) {
-            let left_transform = world.get::<Transform>(*left).unwrap();
+        let normal_parts = collect_rig_parts(&world, normal);
+        let mirrored_parts = collect_rig_parts(&world, mirrored);
+        assert_eq!(normal_parts.len(), human_template().parts.len());
+        assert_eq!(mirrored_parts.len(), human_template().parts.len());
+
+        for (kind, left) in normal_parts {
+            let (_, right) = mirrored_parts
+                .iter()
+                .find(|(mirrored_kind, _)| *mirrored_kind == kind)
+                .unwrap_or_else(|| panic!("mirrored rig also has a {kind:?}"));
+            let left_transform = world.get::<Transform>(left).unwrap();
             let right_transform = world.get::<Transform>(*right).unwrap();
-            assert_eq!(left_transform.translation.x, -right_transform.translation.x);
-            assert_eq!(left_transform.translation.y, right_transform.translation.y);
-            assert_eq!(left_transform.translation.z, right_transform.translation.z);
+            assert_eq!(
+                left_transform.translation.x, -right_transform.translation.x,
+                "{kind:?} x offset mirrors"
+            );
+            assert_eq!(
+                left_transform.translation.y, right_transform.translation.y,
+                "{kind:?} y offset is unchanged by mirroring"
+            );
+            assert_eq!(
+                left_transform.translation.z, right_transform.translation.z,
+                "{kind:?} z offset is unchanged by mirroring"
+            );
         }
     }
 
@@ -1025,9 +1436,9 @@ mod tests {
         });
         world.flush();
 
-        let player_children = world.get::<Children>(player).unwrap().to_vec();
-        assert!(!player_children.is_empty(), "player rig has body parts");
-        for child in player_children {
+        let player_parts = collect_rig_parts(&world, player);
+        assert!(!player_parts.is_empty(), "player rig has body parts");
+        for (_, child) in player_parts {
             let sprite = world.get::<Sprite>(child).expect("body part has a sprite");
             assert!(
                 !sprite.flip_x,
@@ -1035,9 +1446,9 @@ mod tests {
             );
         }
 
-        let enemy_children = world.get::<Children>(enemy).unwrap().to_vec();
-        assert!(!enemy_children.is_empty(), "enemy rig has body parts");
-        for child in enemy_children {
+        let enemy_parts = collect_rig_parts(&world, enemy);
+        assert!(!enemy_parts.is_empty(), "enemy rig has body parts");
+        for (_, child) in enemy_parts {
             let sprite = world.get::<Sprite>(child).expect("body part has a sprite");
             assert!(
                 sprite.flip_x,
