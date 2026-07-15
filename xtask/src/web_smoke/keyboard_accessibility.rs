@@ -649,48 +649,58 @@ fn exercise_settings_overlay(
 }
 
 /// Presses `Enter` on the focused **Înapoi** button and waits for the
-/// settings overlay to actually finish closing, before any caller races
-/// ahead with further key presses.
+/// settings overlay to actually finish closing -- specifically, for focus to
+/// leave the **Înapoi** control it was on -- before any caller races ahead
+/// with further key presses.
 ///
 /// This is deliberately *not* `read_screen(checkpoint)? == Some(parent_screen)`
 /// polled in a loop, which is what this function replaced: opening the
 /// settings overlay never changes the `GameState` (see this function's
 /// caller, which asserts exactly that right after opening), so that
-/// condition is already true on the very first iteration -- one single
-/// `wait_for_frame` after dispatching the `Enter` keypress, then an
-/// immediate return, regardless of whether the browser had actually gotten
-/// around to processing that keypress yet. On slow CI, a real CDP keypress
-/// is not guaranteed to be reflected in the very next rendered frame (the
-/// same asynchronous-dispatch race `press_key_and_wait_for_change`'s own doc
-/// comment describes) -- racing ahead into more `ArrowRight` presses before
-/// `Înapoi`'s own click has actually despawned the overlay risks those
-/// presses landing *inside* the still-open settings modal instead (moving
-/// its own focus around, or activating whatever it lands on), so the
-/// overlay may never actually close at all within the caller's own press
-/// budget. This waits for the accessibility snapshot to actually change from
-/// its pre-press value instead -- proof the close (and whatever refocus
-/// follows it: back into a still-open parent modal, or a clear to `None` if
-/// there is none, see `settings::despawn_overlay`'s doc comment) has already
-/// been applied -- before returning control to the caller.
+/// condition is already true on the very first iteration -- so the old loop
+/// did a single `wait_for_frame` after dispatching the `Enter` keypress and
+/// then returned immediately, regardless of whether the game had actually
+/// processed that keypress yet. That is the concrete shape of `keyboard-
+/// accessibility`'s CI failure at the `press_arrow_until_label("Continuă
+/// lupta")` call right after this one: on a slow runner, returning before
+/// **Înapoi**'s activation has despawned the overlay means the caller's very
+/// next `ArrowRight` is dispatched while focus is *still inside the settings
+/// modal*. If that `ArrowRight` and the still-pending `Enter` land in the
+/// same slow game frame, the focus systems (which run before the settings
+/// button handler in `Update`) move focus off **Înapoi** first, so `Enter`
+/// then activates whatever control focus moved onto -- a volume stepper, say
+/// -- instead of **Înapoi**. The overlay never closes, focus stays trapped
+/// cycling the settings modal's own controls, and `press_arrow_until_label`
+/// exhausts all 64 of its presses without ever reaching the pause overlay's
+/// «Continuă lupta» underneath -- exactly the observed CI error.
 ///
-/// Deliberately does *not* also require `focused_entity.is_some()` the way
-/// [`press_key_and_wait_for_change`] does for `ArrowRight`: closing the
-/// overlay legitimately clears focus to `None` when there is no parent modal
-/// to return to (opened from `MainMenu`, see
-/// `settings::tests::closing_the_overlay_clears_focus`), which is a correct
-/// settled outcome here, not a race still in progress.
+/// Waiting for `focused_entity` to change away from the **Înapoi** control it
+/// started on is the precise, race-free signal that the close has been
+/// processed: over the paused fight, closing refocuses the pause overlay's
+/// own first control; over the main menu, it clears focus to `None` (see
+/// `settings::despawn_overlay`'s doc comment). Both leave `focused_entity`
+/// different from the **Înapoi** entity -- and both are correct settled
+/// outcomes here, so, unlike [`press_key_and_wait_for_change`], this does not
+/// also require `focused_entity.is_some()`. Comparing the whole snapshot (or
+/// merely "any field differs") would instead risk returning on an incidental
+/// `targets`-rect shift while focus is still on **Înapoi** -- the same false-
+/// positive class #268 is about -- so the comparison is specifically on
+/// `focused_entity`.
 fn press_enter_and_wait_for_overlay_close(checkpoint: &Checkpoint) -> Result<(), String> {
     let before = read_accessibility(checkpoint)?;
+    let before_focus = before.as_ref().and_then(|s| s.focused_entity.clone());
     checkpoint.press_key("Enter")?;
     for _ in 0..SETTLE_MAX_FRAMES {
         checkpoint.wait_for_frame()?;
-        if read_accessibility(checkpoint)? != before {
+        if let Some(snapshot) = read_accessibility(checkpoint)?
+            && snapshot.focused_entity != before_focus
+        {
             return Ok(());
         }
     }
     Err(format!(
-        "closing the settings overlay (Enter on «Înapoi») produced no observable \
-         accessibility change within {SETTLE_MAX_FRAMES} frames (started from {before:?})"
+        "closing the settings overlay (Enter on «Înapoi») never moved focus off the \
+         back button within {SETTLE_MAX_FRAMES} frames (focus still {before_focus:?})"
     ))
 }
 
