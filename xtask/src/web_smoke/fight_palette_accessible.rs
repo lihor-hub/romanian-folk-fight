@@ -555,6 +555,13 @@ fn exercise_desktop_focus(
     dir: &std::path::Path,
     notes: &mut Vec<String>,
 ) -> Result<(), String> {
+    // #216: the HUD's ⏸ button is its own `TabGroup::new(-1)`, ordered
+    // before the palette's group, so the very first ArrowRight press lands
+    // there -- a control the palette snapshot's `focus` field deliberately
+    // doesn't describe (it is neither an action nor a category button), so
+    // a fixed settle (not wait-for-change) hops over it.
+    press_key_and_settle(checkpoint, "ArrowRight", ENTER_SETTLE_FRAMES)?;
+
     let mut seen = Vec::new();
     for _ in 0..EXPECTED_DESKTOP_TAB_ORDER.len() {
         let snapshot = press_key_and_wait_for_change(checkpoint, "ArrowRight")?;
@@ -575,14 +582,17 @@ fn exercise_desktop_focus(
     }
     notes.push(format!("desktop tab order: {seen:?}"));
 
-    // One more ArrowRight press wraps back to the first button.
+    // Two more ArrowRight presses wrap back to the first button: the wrap
+    // passes through the HUD's ⏸ stop first (#216, see above).
+    press_key_and_settle(checkpoint, "ArrowRight", ENTER_SETTLE_FRAMES)?;
     let wrapped = press_key_and_wait_for_change(checkpoint, "ArrowRight")?;
     let wrapped_focus = wrapped.focus.ok_or_else(|| {
         "pressed ArrowRight but the palette snapshot carried no focus facts".to_string()
     })?;
     if wrapped_focus.focused_id != EXPECTED_DESKTOP_TAB_ORDER[0] {
         return Err(format!(
-            "a further ArrowRight press should wrap back to {:?}, focus is now on {:?}",
+            "a further ArrowRight press should wrap back to {:?} (via the ⏸ stop), focus is \
+             now on {:?}",
             EXPECTED_DESKTOP_TAB_ORDER[0], wrapped_focus.focused_id
         ));
     }
@@ -629,6 +639,10 @@ fn exercise_phone_focus(
     dir: &std::path::Path,
     notes: &mut Vec<String>,
 ) -> Result<(), String> {
+    // #216: hop over the HUD's ⏸ stop first -- see
+    // `exercise_desktop_focus`'s note on the same press.
+    press_key_and_settle(checkpoint, "ArrowRight", ENTER_SETTLE_FRAMES)?;
+
     let mut seen = Vec::new();
     for _ in 0..EXPECTED_PHONE_CATEGORY_ORDER.len() {
         let snapshot = press_key_and_wait_for_change(checkpoint, "ArrowRight")?;
@@ -677,9 +691,10 @@ fn exercise_phone_focus(
         ));
     }
 
-    // One more ArrowRight press wraps from Utility (last overall) to the newly-open
-    // action row's first button, `step-forward` -- disabled at the fight's
-    // starting distance.
+    // Wrapping from Utility (last of the palette's group) passes through the
+    // HUD's ⏸ stop (#216) before reaching the newly-open action row's first
+    // button, `step-forward` -- disabled at the fight's starting distance.
+    press_key_and_settle(checkpoint, "ArrowRight", ENTER_SETTLE_FRAMES)?;
     let disabled_snapshot = press_key_and_wait_for_change(checkpoint, "ArrowRight")?;
     let disabled_focus = disabled_snapshot.focus.ok_or_else(|| {
         "pressed ArrowRight but the palette snapshot carried no focus facts".to_string()

@@ -312,19 +312,29 @@ fn walk_full_lap(
     // The first press both establishes a definite anchor (whether focus
     // started unset -- the pointer-first default -- or already sitting on
     // some entity from an earlier step) and is itself the lap's first
-    // tab-stop.
+    // tab-stop. The cycle is detected by the stable `focused_entity` id,
+    // never by whole-snapshot equality: the shared widget's
+    // scroll-into-view (#216) legitimately shifts every published target
+    // rect as the walk scrolls a screen, so the snapshot that wraps back
+    // to the starting *control* need not be byte-identical to the starting
+    // *snapshot*.
     let start = press_key_and_wait_for_change(checkpoint, "ArrowRight")?;
-    let mut lap = vec![start.clone()];
+    let start_entity = start
+        .focused_entity
+        .clone()
+        .ok_or_else(|| "the first ArrowRight press left nothing focused".to_string())?;
+    let mut lap = vec![start];
     for _ in 0..max_presses {
         let snapshot = press_key_and_wait_for_change(checkpoint, "ArrowRight")?;
-        if snapshot == start {
+        if snapshot.focused_entity.as_deref() == Some(start_entity.as_str()) {
             return Ok(lap);
         }
         lap.push(snapshot);
     }
     Err(format!(
         "tab order never wrapped back to the starting control within {max_presses} \
-         ArrowRight presses (still tabbing through: {lap:?})"
+         ArrowRight presses (still tabbing through: {:?})",
+        lap.iter().map(|s| &s.focused_label).collect::<Vec<_>>()
     ))
 }
 
