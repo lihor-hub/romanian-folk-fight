@@ -8,11 +8,16 @@
 pub mod draft;
 
 use bevy::prelude::*;
+use bevy::ui::UiSystems;
 
 pub use draft::{AttributeKind, CharacterDraft, FOLK_NAMES, FREE_POINTS, HeroChoice, HeroPreset};
 
 use crate::character::{Attributes, PlayerAppearance, stats};
-use crate::core::{GameState, UiFont, ViewportInfo, despawn_screen};
+#[cfg(test)]
+use crate::core::ViewportInfo;
+use crate::core::{
+    GameState, LOGICAL_HEIGHT, LOGICAL_WIDTH, LetterboxRect, UiFont, despawn_screen,
+};
 use crate::cutout::{CutoutRig, human_template_for, spawn_cutout_rig_with_gear};
 use crate::flow::FlowIntent;
 use crate::items::Equipment;
@@ -162,7 +167,7 @@ impl Plugin for CreationPlugin {
             .add_systems(
                 PostUpdate,
                 update_preview_transform
-                    .run_if(resource_changed::<ViewportInfo>)
+                    .after(UiSystems::Layout)
                     .run_if(in_state(GameState::CharacterCreation)),
             )
             .add_systems(
@@ -177,7 +182,6 @@ fn spawn_creation_screen(
     draft: Res<CharacterDraft>,
     ui_font: Res<UiFont>,
     panel_texture: Res<PanelTexture>,
-    viewport: Res<ViewportInfo>,
     asset_server: Option<Res<AssetServer>>,
 ) {
     commands.spawn((
@@ -228,16 +232,22 @@ fn spawn_creation_screen(
                     ..default()
                 })
                 .with_children(|body| {
-                    spawn_preview_stage(body, &draft, &ui_font, &panel_texture);
+                    spawn_preview_stage(body, &draft, &ui_font);
                     spawn_control_deck(body, &draft, &ui_font, &panel_texture);
                 });
         });
 
+    // Placeholder until `update_preview_transform` places it for real:
+    // `PreviewStage`'s `ComputedNode`/`UiGlobalTransform` don't exist until
+    // Bevy's own UI layout pass runs, which only happens later this same
+    // frame (`PostUpdate`, after `OnEnter` has been applied) -- see that
+    // system's doc comment (#123).
     let preview = commands
         .spawn((
             CreationScreen,
             CreationPreview,
-            creation_preview_transform_for_width(viewport.width),
+            Transform::from_xyz(0.0, CREATION_PREVIEW_Y, PREVIEW_Z)
+                .with_scale(Vec3::splat(CREATION_PREVIEW_SCALE)),
         ))
         .id();
     let equipment = equipment_from_items(draft.starter_items());
@@ -251,27 +261,37 @@ fn spawn_creation_screen(
     );
 }
 
+/// Spawns the preview stage's own layout container plus its three rows
+/// (name, cutout frame, stat strip). Unlike every other panel on this
+/// screen, this one deliberately does **not** use [`panel_bundle`]: the
+/// world-space cutout rig it frames (spawned separately by
+/// [`spawn_creation_screen`], positioned by [`update_preview_transform`])
+/// is rendered by the *world* camera, composited underneath the *UI*
+/// camera's output -- so any opaque UI background covering the frame's rect
+/// would hide the rig completely, no matter how the rig itself is
+/// positioned or scaled (#123). `panel_bundle`'s 9-slice image always fills
+/// its *entire* node, so giving the frame row itself (or an ancestor
+/// spanning it) that treatment would paint right over the rig. Instead:
+/// the outer stage is a plain transparent layout container, the frame row
+/// stays borderless-fill (just its existing `BorderColor` outline) so the
+/// rig shows through untinted, and only the name/stat rows -- which never
+/// overlap the frame -- keep a `PANEL_LINEN` backing for legibility.
 fn spawn_preview_stage(
     parent: &mut ChildSpawnerCommands,
     draft: &CharacterDraft,
     ui_font: &UiFont,
-    panel_texture: &PanelTexture,
 ) {
     parent
         .spawn((
-            panel_bundle(
-                panel_texture,
-                Node {
-                    width: Val::Px(CREATION_PREVIEW_STAGE_WIDTH),
-                    max_width: Val::Percent(100.0),
-                    min_height: Val::Px(CREATION_PANEL_HEIGHT),
-                    flex_direction: FlexDirection::Column,
-                    justify_content: JustifyContent::SpaceBetween,
-                    padding: UiRect::all(Val::Px(18.0)),
-                    ..default()
-                },
-            ),
-            BackgroundColor(PANEL_LINEN),
+            Node {
+                width: Val::Px(CREATION_PREVIEW_STAGE_WIDTH),
+                max_width: Val::Percent(100.0),
+                min_height: Val::Px(CREATION_PANEL_HEIGHT),
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::SpaceBetween,
+                padding: UiRect::all(Val::Px(18.0)),
+                ..default()
+            },
             CreationLayoutRole::PreviewStage,
         ))
         .with_children(|stage| {
@@ -279,8 +299,14 @@ fn spawn_preview_stage(
                 Text::new(draft.name()),
                 ui_font.text_font_bold(30.0),
                 TextColor(CREAM),
+                BackgroundColor(PANEL_LINEN),
                 CreationLabel::Name,
             ));
+            // The cutout "window": no fill of its own, so the world-space
+            // rig underneath (positioned to land here, see
+            // `update_preview_transform`) renders unobscured. Only the
+            // gold outline remains, framing the rig without a PNG asset
+            // that would need a genuinely transparent center (#123).
             stage.spawn((
                 Node {
                     width: Val::Percent(100.0),
@@ -288,7 +314,6 @@ fn spawn_preview_stage(
                     border: UiRect::all(Val::Px(2.0)),
                     ..default()
                 },
-                BackgroundColor(WALNUT),
                 BorderColor::all(GOLD),
             ));
             stage
@@ -298,8 +323,10 @@ fn spawn_preview_stage(
                         justify_content: JustifyContent::SpaceBetween,
                         align_items: AlignItems::Center,
                         column_gap: Val::Px(6.0),
+                        padding: UiRect::all(Val::Px(4.0)),
                         ..default()
                     },
+                    BackgroundColor(PANEL_LINEN),
                     CreationLayoutRole::StatStrip,
                 ))
                 .with_children(|strip| {
@@ -607,30 +634,6 @@ fn equipment_from_items(items: &[crate::items::ItemId]) -> Equipment {
     equipment
 }
 
-fn creation_preview_stage_center_x() -> f32 {
-    -CREATION_BODY_WIDTH / 2.0 + CREATION_PREVIEW_STAGE_WIDTH / 2.0
-}
-
-fn creation_preview_x_for_width(viewport_width: f32) -> f32 {
-    let usable_width = viewport_width - CREATION_ROOT_PADDING * 2.0;
-    let desktop_width =
-        CREATION_PREVIEW_STAGE_WIDTH + CREATION_BODY_GAP + CREATION_CONTROL_DECK_WIDTH;
-    if usable_width >= desktop_width {
-        creation_preview_stage_center_x()
-    } else {
-        0.0
-    }
-}
-
-fn creation_preview_transform_for_width(viewport_width: f32) -> Transform {
-    Transform::from_xyz(
-        creation_preview_x_for_width(viewport_width),
-        CREATION_PREVIEW_Y,
-        PREVIEW_Z,
-    )
-    .with_scale(Vec3::splat(CREATION_PREVIEW_SCALE))
-}
-
 #[cfg(test)]
 fn creation_preview_allocation_fits_width(viewport_width: f32) -> bool {
     let usable_width = viewport_width - CREATION_ROOT_PADDING * 2.0;
@@ -644,12 +647,102 @@ fn creation_preview_allocation_fits_width(viewport_width: f32) -> bool {
         && control_width <= usable_width
 }
 
+/// A UI node's resolved on-screen rect, in the same logical-pixel space
+/// (top-left origin, y-down) [`LetterboxRect`] is expressed in --
+/// `ComputedNode::size` is in physical pixels and `UiGlobalTransform`'s
+/// translation places the node's center in physical-pixel space, so both are
+/// scaled back to logical pixels by the node's own `inverse_scale_factor`.
+/// Identical formula to `review::logical_node_rect` / the inline version in
+/// `ui_widgets::focus::scroll_focused_into_view` -- duplicated per this
+/// module's own layout-math needs, matching that existing precedent rather
+/// than threading a cross-module helper through.
+fn logical_node_rect(transform: &UiGlobalTransform, node: &ComputedNode) -> Rect {
+    let scale = node.inverse_scale_factor();
+    Rect::from_center_size(transform.translation * scale, node.size() * scale)
+}
+
+/// How many logical screen pixels one world unit currently occupies:
+/// [`LetterboxRect::size`] is the on-screen rect (in the same logical pixels
+/// [`ComputedNode`] resolves to) the letterboxed world camera's `Fixed`
+/// projection stretches its fixed [`LOGICAL_WIDTH`] x [`LOGICAL_HEIGHT`]
+/// world area across, so this ratio is exactly 1.0 at the design resolution
+/// (no bars), bigger on a wide desktop window (more screen room for the same
+/// fixed world area), smaller on a narrow phone width. Falls back to `1.0` on
+/// a not-yet-computed (zero-size) rect rather than dividing by zero.
+fn preview_zoom(letterbox: LetterboxRect) -> f32 {
+    if letterbox.size.x <= 0.0 {
+        1.0
+    } else {
+        letterbox.size.x / LOGICAL_WIDTH
+    }
+}
+
+/// Inverse-projects a point in full-window logical screen space (top-left
+/// origin, y-down -- [`ComputedNode`]/[`LetterboxRect`]'s shared convention)
+/// into the world-space point the letterboxed world camera renders there.
+/// This is the fix for #123: the old `creation_preview_x_for_width` derived
+/// the rig's position from `ViewportInfo::width` alone, implicitly assuming
+/// world space and UI screen space were the same 1:1 coordinate system --
+/// only true when the window happened to be exactly [`LOGICAL_WIDTH`] x
+/// [`LOGICAL_HEIGHT`] (no letterbox bars). This derives it from the
+/// `PreviewStage` node's *actual* resolved screen rect instead.
+fn world_point_for_screen_point(screen: Vec2, letterbox: LetterboxRect) -> Vec2 {
+    let zoom = preview_zoom(letterbox);
+    let local = screen - letterbox.position;
+    Vec2::new(
+        local.x / zoom - LOGICAL_WIDTH / 2.0,
+        LOGICAL_HEIGHT / 2.0 - local.y / zoom,
+    )
+}
+
+/// The forward projection -- world space back to full-window logical screen
+/// space -- exact inverse of [`world_point_for_screen_point`]. Production
+/// code never needs this (the rig is only ever placed screen -> world);
+/// tests use it to verify the rig's resulting `Transform` actually lands
+/// back inside the `PreviewStage` rect it was derived from (#123).
+#[cfg(test)]
+fn screen_point_for_world_point(world: Vec2, letterbox: LetterboxRect) -> Vec2 {
+    let zoom = preview_zoom(letterbox);
+    letterbox.position
+        + Vec2::new(
+            (world.x + LOGICAL_WIDTH / 2.0) * zoom,
+            (LOGICAL_HEIGHT / 2.0 - world.y) * zoom,
+        )
+}
+
+/// Reads the `PreviewStage` node's resolved screen rect and repositions
+/// every [`CreationPreview`] root so its projected screen position lands at
+/// that rect's center, scaling it so its *apparent* on-screen size stays
+/// constant regardless of the letterbox zoom (matching the UI panel's own
+/// fixed `Val::Px` size, which does not itself grow/shrink with the world
+/// camera's zoom) -- see [`world_point_for_screen_point`]'s doc comment for
+/// why this replaces the old `viewport.width`-only placement (#123).
+///
+/// Runs unconditionally (not gated on a resource-changed check): a
+/// `CreationPreview` spawned this same frame (`OnEnter`) only gets a real
+/// `PreviewStage` `ComputedNode`/`UiGlobalTransform` partway through this
+/// very `PostUpdate`, once Bevy's own UI layout pass has run for it -- so
+/// the first correct placement has to land on an ordinary frame, not a
+/// change-detected one. Ordered `.after(UiSystems::Layout)` so it always
+/// reads this frame's freshly resolved layout, never a stale one.
 fn update_preview_transform(
-    viewport: Res<ViewportInfo>,
+    letterbox: Res<LetterboxRect>,
+    stage_nodes: Query<(&ComputedNode, &UiGlobalTransform, &CreationLayoutRole)>,
     mut previews: Query<&mut Transform, With<CreationPreview>>,
 ) {
-    for mut transform in &mut previews {
-        transform.translation.x = creation_preview_x_for_width(viewport.width);
+    let Some((node, transform)) = stage_nodes.iter().find_map(|(node, transform, role)| {
+        (*role == CreationLayoutRole::PreviewStage).then_some((node, transform))
+    }) else {
+        return;
+    };
+    let stage_rect = logical_node_rect(transform, node);
+    let target = world_point_for_screen_point(stage_rect.center(), *letterbox);
+    let zoom = preview_zoom(*letterbox);
+    for mut preview_transform in &mut previews {
+        preview_transform.translation.x = target.x;
+        preview_transform.translation.y = target.y + CREATION_PREVIEW_Y;
+        preview_transform.translation.z = PREVIEW_Z;
+        preview_transform.scale = Vec3::splat(CREATION_PREVIEW_SCALE / zoom);
     }
 }
 
@@ -862,7 +955,9 @@ mod tests {
     };
     use crate::items::ItemId;
     use crate::save::{SaveGame, SavePlugin, SaveStore};
+    use bevy::math::Affine2;
     use bevy::state::app::StatesPlugin;
+    use bevy::window::PrimaryWindow;
 
     fn test_app_with_viewport(viewport: ViewportInfo) -> App {
         let mut app = App::new();
@@ -1018,27 +1113,6 @@ mod tests {
             assert!(CREATION_PREVIEW_STAGE_WIDTH > CREATION_CONTROL_DECK_WIDTH);
         }
         assert!(creation_preview_allocation_fits_width(375.0));
-    }
-
-    #[test]
-    fn creation_preview_rig_is_centered_from_stage_constants() {
-        let mut app = test_app();
-        let transform = app
-            .world_mut()
-            .query_filtered::<&Transform, With<CreationPreview>>()
-            .single(app.world())
-            .expect("creation preview transform exists");
-        let expected = creation_preview_transform_for_width(CREATION_TARGET_WIDTH);
-        assert_eq!(transform.translation, expected.translation);
-        assert_eq!(transform.scale, expected.scale);
-        assert!((transform.translation.x - creation_preview_stage_center_x()).abs() < f32::EPSILON);
-        assert_eq!(
-            creation_preview_x_for_width(375.0),
-            0.0,
-            "wrapped creator preview stage is centered on its own row"
-        );
-        assert!(transform.translation.x.abs() <= CREATION_PREVIEW_STAGE_WIDTH / 2.0);
-        assert!(transform.translation.y.abs() <= CREATION_PREVIEW_FRAME_HEIGHT / 2.0);
         assert_eq!(
             app.world_mut()
                 .query_filtered::<(), (With<CreationScreen>, With<crate::ui_widgets::Scrollable>)>()
@@ -1049,19 +1123,211 @@ mod tests {
         );
     }
 
-    #[test]
-    fn creation_preview_starts_centered_when_entering_narrow_viewport() {
-        let mut app = test_app_with_viewport(ViewportInfo {
-            width: 375.0,
-            height: 812.0,
-            is_mobile: true,
-        });
-        let transform = app
-            .world_mut()
+    /// Spawns a `Window`/[`PrimaryWindow`] of the given logical size (scale
+    /// factor 1.0) so [`crate::core::letterbox_camera`] -- already wired by
+    /// `CorePlugin` -- computes a real, non-default [`LetterboxRect`] for it,
+    /// exactly like the running game. Headless test apps otherwise have no
+    /// window at all, so `letterbox_camera` skips (see its `windows.single()`
+    /// guard) and `LetterboxRect` stays at its unlettered default.
+    fn spawn_primary_window(app: &mut App, width: f32, height: f32) {
+        let mut window = Window::default();
+        window.resolution = bevy::window::WindowResolution::new(width as u32, height as u32);
+        app.world_mut().spawn((window, PrimaryWindow));
+    }
+
+    /// A full app on the creation screen with a real primary window of the
+    /// given logical size, so [`LetterboxRect`] reflects genuine letterboxing
+    /// (bars, zoom) instead of staying at its unlettered default -- the
+    /// production code path #123 fixes only matters once there's an actual
+    /// letterbox to project through.
+    fn test_app_with_window(width: f32, height: f32) -> App {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            crate::flow::FlowPlugin,
+            CreationPlugin,
+        ));
+        app.update();
+        spawn_primary_window(&mut app, width, height);
+        app.world_mut()
+            .resource_mut::<ViewportInfo>()
+            .set_if_neq(ViewportInfo {
+                width,
+                height,
+                is_mobile: crate::theme::is_mobile_width(width),
+            });
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::CharacterCreation);
+        app.update();
+        app.update();
+        app
+    }
+
+    fn preview_stage_entity(app: &mut App) -> Entity {
+        app.world_mut()
+            .query::<(Entity, &CreationLayoutRole)>()
+            .iter(app.world())
+            .find(|(_, role)| **role == CreationLayoutRole::PreviewStage)
+            .map(|(e, _)| e)
+            .expect("preview stage exists")
+    }
+
+    /// Hand-supplies the `PreviewStage` node's resolved `ComputedNode`/
+    /// `UiGlobalTransform` -- headless test apps never run Bevy's real
+    /// `ui_layout_system` (no `RenderPlugin`/window-backed camera target), so
+    /// this module's tests simulate "already laid out" the same way
+    /// `ui_widgets::focus`'s tests do, rather than relying on a live layout
+    /// pass that doesn't happen here.
+    fn set_preview_stage_rect(app: &mut App, rect: Rect) {
+        let stage = preview_stage_entity(app);
+        app.world_mut().entity_mut(stage).insert((
+            ComputedNode {
+                size: rect.size(),
+                inverse_scale_factor: 1.0,
+                ..Default::default()
+            },
+            UiGlobalTransform::from(Affine2::from_translation(rect.center())),
+        ));
+    }
+
+    /// A plausible `PreviewStage` on-screen rect for a given viewport width:
+    /// centered in the desktop two-column body once it fits side by side
+    /// with the control deck, or centered on its own wrapped row once it no
+    /// longer does -- the same shape the real flexbox layout produces, but
+    /// computed by hand for a test that (per [`set_preview_stage_rect`]'s
+    /// doc comment) never runs the real layout system.
+    fn sample_stage_rect(viewport_width: f32) -> Rect {
+        let desktop_width =
+            CREATION_PREVIEW_STAGE_WIDTH + CREATION_BODY_GAP + CREATION_CONTROL_DECK_WIDTH;
+        let usable_width = viewport_width - CREATION_ROOT_PADDING * 2.0;
+        let center_x = if usable_width >= desktop_width {
+            viewport_width / 2.0 - (CREATION_CONTROL_DECK_WIDTH + CREATION_BODY_GAP) / 2.0
+        } else {
+            viewport_width / 2.0
+        };
+        Rect::from_center_size(
+            Vec2::new(center_x, 300.0),
+            Vec2::new(CREATION_PREVIEW_STAGE_WIDTH, CREATION_PANEL_HEIGHT),
+        )
+    }
+
+    fn creation_preview_transform(app: &mut App) -> Transform {
+        *app.world_mut()
             .query_filtered::<&Transform, With<CreationPreview>>()
             .single(app.world())
-            .expect("creation preview transform exists");
-        assert_eq!(transform.translation.x, 0.0);
+            .expect("creation preview transform exists")
+    }
+
+    /// #123 red-first/green: the preview rig's `Transform`, once projected
+    /// back to screen space through the same letterboxed camera math it was
+    /// placed with, must land inside the `PreviewStage` node's *actual*
+    /// resolved rect -- at desktop (1280x800), at the exact design
+    /// resolution (800x600, no letterbox bars), and at a narrow mobile width
+    /// (375x812) -- instead of the old `viewport.width`-only placement,
+    /// which only ever happened to be correct at the exact design
+    /// resolution (#123).
+    #[test]
+    fn preview_rig_projects_inside_the_preview_stage_rect_at_several_widths() {
+        for (width, height) in [
+            (1280.0_f32, 800.0_f32),
+            (CREATION_TARGET_WIDTH, 600.0),
+            (375.0, 812.0),
+        ] {
+            let mut app = test_app_with_window(width, height);
+            let stage_rect = sample_stage_rect(width);
+            set_preview_stage_rect(&mut app, stage_rect);
+            app.update();
+
+            let letterbox = *app.world().resource::<LetterboxRect>();
+            assert!(
+                letterbox.size.x > 0.0,
+                "at {width}x{height}: letterbox_camera must have computed a real rect"
+            );
+            let transform = creation_preview_transform(&mut app);
+            let projected =
+                screen_point_for_world_point(transform.translation.truncate(), letterbox);
+            assert!(
+                stage_rect.contains(projected),
+                "at {width}x{height}: projected preview position {projected:?} must land \
+                 inside the preview stage rect {stage_rect:?}"
+            );
+        }
+    }
+
+    /// The rig's apparent on-screen size must stay roughly constant
+    /// regardless of the letterbox zoom, matching the UI panel's own fixed
+    /// `Val::Px` size -- otherwise a wide desktop window (more zoom) would
+    /// render the same character enormous next to an unchanged-size frame,
+    /// and a narrow phone width would shrink it to a speck.
+    #[test]
+    fn preview_rig_scale_compensates_for_letterbox_zoom() {
+        let mut wide = test_app_with_window(1280.0, 800.0);
+        set_preview_stage_rect(&mut wide, sample_stage_rect(1280.0));
+        wide.update();
+        let mut narrow = test_app_with_window(375.0, 812.0);
+        set_preview_stage_rect(&mut narrow, sample_stage_rect(375.0));
+        narrow.update();
+
+        let wide_zoom = preview_zoom(*wide.world().resource::<LetterboxRect>());
+        let narrow_zoom = preview_zoom(*narrow.world().resource::<LetterboxRect>());
+        assert!(wide_zoom > narrow_zoom, "sanity: wide window zooms in more");
+
+        let wide_scale = creation_preview_transform(&mut wide).scale.x;
+        let narrow_scale = creation_preview_transform(&mut narrow).scale.x;
+        // Apparent size = world scale * zoom; must match within float noise.
+        assert!(
+            (wide_scale * wide_zoom - narrow_scale * narrow_zoom).abs() < 1e-4,
+            "wide apparent size {} must match narrow apparent size {}",
+            wide_scale * wide_zoom,
+            narrow_scale * narrow_zoom
+        );
+    }
+
+    /// #123's actual root cause, proven directly: the rig must derive its
+    /// position from the `PreviewStage` node's *real* resolved rect, not
+    /// recompute an independent guess from `ViewportInfo::width` alone (the
+    /// old `creation_preview_x_for_width`, which never looked at the node's
+    /// `ComputedNode`/`UiGlobalTransform` at all). Two different, quite
+    /// deliberately odd stage rects at the *same* viewport width must
+    /// produce two different projected positions, each landing inside its
+    /// own rect -- a width-keyed formula would produce the identical result
+    /// both times and fail this.
+    #[test]
+    fn preview_rig_tracks_the_stage_rects_actual_position_not_a_width_keyed_guess() {
+        let mut app = test_app_with_window(1280.0, 800.0);
+
+        let odd_rect_one = Rect::from_center_size(Vec2::new(900.0, 120.0), Vec2::new(392.0, 482.0));
+        set_preview_stage_rect(&mut app, odd_rect_one);
+        app.update();
+        let letterbox = *app.world().resource::<LetterboxRect>();
+        let projected_one = screen_point_for_world_point(
+            creation_preview_transform(&mut app).translation.truncate(),
+            letterbox,
+        );
+        assert!(
+            odd_rect_one.contains(projected_one),
+            "must land inside the first rect {odd_rect_one:?}, got {projected_one:?}"
+        );
+
+        let odd_rect_two = Rect::from_center_size(Vec2::new(200.0, 600.0), Vec2::new(392.0, 482.0));
+        set_preview_stage_rect(&mut app, odd_rect_two);
+        app.update();
+        let projected_two = screen_point_for_world_point(
+            creation_preview_transform(&mut app).translation.truncate(),
+            letterbox,
+        );
+        assert!(
+            odd_rect_two.contains(projected_two),
+            "must land inside the second rect {odd_rect_two:?}, got {projected_two:?}"
+        );
+        assert!(
+            projected_one.distance(projected_two) > 100.0,
+            "moving the stage rect must move the projected preview position, proving it's \
+             derived from the node's actual resolved layout rather than a fixed/width-keyed guess"
+        );
     }
 
     /// Recursively counts every `CutoutPartMarker` entity under `root`, at
@@ -1098,6 +1364,62 @@ mod tests {
         assert_eq!(
             cutout_descendant_count(&mut app, preview),
             human_template().parts.len()
+        );
+    }
+
+    /// The same subtree walk as [`cutout_descendant_count`], but collecting
+    /// entity ids instead of just a count -- so a test can prove a set of
+    /// parts was genuinely despawned and replaced by a fresh set (not just
+    /// left with the same count coincidentally).
+    fn cutout_descendant_entities(
+        app: &mut App,
+        root: Entity,
+    ) -> std::collections::HashSet<Entity> {
+        let world = app.world();
+        let mut found = std::collections::HashSet::new();
+        let mut stack = vec![root];
+        while let Some(entity) = stack.pop() {
+            let Some(children) = world.get::<Children>(entity) else {
+                continue;
+            };
+            for child in children.iter() {
+                if world.get::<CutoutPartMarker>(child).is_some() {
+                    found.insert(child);
+                }
+                stack.push(child);
+            }
+        }
+        found
+    }
+
+    /// #123 test-expectation: `refresh_preview_rig` must actually despawn
+    /// the old cutout parts and spawn fresh ones on every `CharacterDraft`
+    /// change, not mutate something in place -- proven by the part entity
+    /// ids being completely disjoint before/after, rather than just
+    /// re-checking a label or count that could coincidentally match.
+    #[test]
+    fn refresh_preview_rig_respawns_parts_when_the_draft_mutates() {
+        let mut app = test_app();
+        let preview = app
+            .world_mut()
+            .query_filtered::<Entity, (With<CreationPreview>, With<CutoutRig>)>()
+            .single(app.world())
+            .expect("one cutout preview root exists");
+        let before = cutout_descendant_entities(&mut app, preview);
+        assert!(!before.is_empty());
+
+        press(
+            &mut app,
+            CreationAction::NextAppearance(AppearanceField::Hair),
+        );
+
+        let after = cutout_descendant_entities(&mut app, preview);
+        assert!(!after.is_empty());
+        assert_eq!(after.len(), before.len());
+        assert!(
+            before.is_disjoint(&after),
+            "refresh_preview_rig must despawn the old parts and spawn fresh \
+             ones on every CharacterDraft change, not mutate in place"
         );
     }
 
