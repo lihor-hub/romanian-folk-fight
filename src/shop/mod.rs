@@ -9,9 +9,14 @@ use std::collections::HashSet;
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use bevy::ui::UiSystems;
 
 use crate::character::{Attributes, PlayerAppearance, PlayerFighter, stats};
-use crate::core::{GameState, UiFont, ViewportInfo, despawn_screen};
+#[cfg(test)]
+use crate::core::ViewportInfo;
+use crate::core::{
+    GameState, LOGICAL_HEIGHT, LOGICAL_WIDTH, LetterboxRect, UiFont, despawn_screen,
+};
 use crate::creation::PlayerCharacter;
 use crate::cutout::{CutoutRig, human_template_for, spawn_cutout_rig_with_gear};
 use crate::flow::FlowIntent;
@@ -21,7 +26,7 @@ use crate::progression::Wallet;
 use crate::save::{ResumeDestination, SaveRequested};
 use crate::theme::{
     ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD,
-    MIN_TOUCH_TARGET, PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
+    MIN_TOUCH_TARGET, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
 };
 use crate::ui_widgets::focus::{
     FocusNavigationPlugin, FocusNavigationSet, Focusable, TabGroup, TabIndex,
@@ -29,8 +34,6 @@ use crate::ui_widgets::focus::{
 use crate::ui_widgets::wide_button;
 
 const SHOP_ROOT_PADDING: f32 = 12.0;
-#[cfg(test)]
-const SHOP_TARGET_WIDTH: f32 = 800.0;
 const SHOP_BODY_WIDTH: f32 = 760.0;
 const SHOP_BODY_GAP: f32 = 12.0;
 const SHOP_CATALOG_WIDTH: f32 = 430.0;
@@ -38,6 +41,9 @@ const SHOP_PREVIEW_STAGE_WIDTH: f32 = 318.0;
 const SHOP_PANEL_HEIGHT: f32 = 450.0;
 const SHOP_PREVIEW_FRAME_HEIGHT: f32 = 216.0;
 const SHOP_PREVIEW_SCALE: f32 = 0.68;
+/// World-space upward offset from the `PreviewStage` rect's projected
+/// center, nudging the rig toward the cutout frame at the panel's top
+/// (the loadout rows and stat strip fill the panel's lower half).
 const SHOP_PREVIEW_Y: f32 = 70.0;
 const SHOP_PREVIEW_Z: f32 = 25.0;
 
@@ -256,7 +262,12 @@ impl Plugin for ShopPlugin {
             .add_systems(
                 PostUpdate,
                 update_shop_preview_transform
-                    .run_if(resource_changed::<ViewportInfo>)
+                    .after(UiSystems::Layout)
+                    // So this frame's placement is reflected in
+                    // `GlobalTransform` (and thus rendered) this same frame,
+                    // rather than merely being ordered after layout with no
+                    // guarantee relative to transform propagation.
+                    .before(bevy::transform::TransformSystems::Propagate)
                     .run_if(in_state(GameState::Shop)),
             )
             .add_systems(OnExit(GameState::Shop), despawn_screen::<ShopScreen>)
@@ -387,7 +398,6 @@ fn spawn_shop_screen(
     owned: Res<OwnedItems>,
     equipment: Res<PlayerEquipment>,
     player: Option<Res<PlayerCharacter>>,
-    viewport: Res<ViewportInfo>,
     assets: ShopScreenAssets,
 ) {
     let ui_font = &*assets.ui_font;
@@ -488,23 +498,36 @@ fn spawn_shop_screen(
                         }
                     });
 
+                    // Unlike every other panel on this screen, the preview
+                    // stage deliberately does **not** use `panel_bundle` or a
+                    // `BackgroundColor` fill: the world-space cutout rig it
+                    // frames (spawned separately by [`spawn_shop_preview`],
+                    // positioned by [`update_shop_preview_transform`]) is
+                    // rendered by the *world* camera, composited underneath
+                    // the *UI* camera's output -- so any opaque UI fill over
+                    // the frame's rect would hide the rig completely, no
+                    // matter how the rig itself is positioned or scaled
+                    // (#273, the same root cause #123 fixed for the creation
+                    // screen). The loadout rows and stat chips below the
+                    // frame keep their own WALNUT backing for legibility;
+                    // they never overlap the frame.
                     body.spawn((
-                        panel_bundle(
-                            panel_texture,
-                            Node {
-                                width: Val::Px(SHOP_PREVIEW_STAGE_WIDTH),
-                                max_width: Val::Percent(100.0),
-                                min_height: Val::Px(SHOP_PANEL_HEIGHT),
-                                flex_direction: FlexDirection::Column,
-                                row_gap: Val::Px(8.0),
-                                padding: UiRect::all(Val::Px(14.0)),
-                                ..default()
-                            },
-                        ),
-                        BackgroundColor(PANEL_LINEN),
+                        Node {
+                            width: Val::Px(SHOP_PREVIEW_STAGE_WIDTH),
+                            max_width: Val::Percent(100.0),
+                            min_height: Val::Px(SHOP_PANEL_HEIGHT),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(8.0),
+                            padding: UiRect::all(Val::Px(14.0)),
+                            ..default()
+                        },
                         ShopLayoutRole::PreviewStage,
                     ))
                     .with_children(|preview_panel| {
+                        // The cutout "window": no fill of its own, so the
+                        // world-space rig underneath (positioned to land
+                        // here, see `update_shop_preview_transform`) renders
+                        // unobscured. Only the gold outline remains (#273).
                         preview_panel.spawn((
                             Node {
                                 width: Val::Percent(100.0),
@@ -512,7 +535,6 @@ fn spawn_shop_screen(
                                 border: UiRect::all(Val::Px(2.0)),
                                 ..default()
                             },
-                            BackgroundColor(WALNUT),
                             BorderColor::all(GOLD),
                         ));
                         spawn_loadout_preview(preview_panel, &equipment, ui_font, icons);
@@ -528,7 +550,6 @@ fn spawn_shop_screen(
         &mut commands,
         &equipment.0,
         appearance,
-        viewport.width,
         assets.asset_server.as_deref(),
     );
 }
@@ -537,14 +558,19 @@ fn spawn_shop_preview(
     commands: &mut Commands,
     equipment: &Equipment,
     appearance: PlayerAppearance,
-    viewport_width: f32,
     asset_server: Option<&AssetServer>,
 ) {
+    // Placeholder until `update_shop_preview_transform` places it for real:
+    // `PreviewStage`'s `ComputedNode`/`UiGlobalTransform` don't exist until
+    // Bevy's own UI layout pass runs, which only happens later this same
+    // frame (`PostUpdate`, after `OnEnter` has been applied) -- see that
+    // system's doc comment (#273).
     let preview = commands
         .spawn((
             ShopScreen,
             ShopPreview,
-            shop_preview_transform_for_width(viewport_width),
+            Transform::from_xyz(0.0, SHOP_PREVIEW_Y, SHOP_PREVIEW_Z)
+                .with_scale(Vec3::splat(SHOP_PREVIEW_SCALE)),
         ))
         .id();
     spawn_cutout_rig_with_gear(
@@ -557,29 +583,6 @@ fn spawn_shop_preview(
     );
 }
 
-fn shop_preview_stage_center_x() -> f32 {
-    -SHOP_BODY_WIDTH / 2.0 + SHOP_CATALOG_WIDTH + SHOP_BODY_GAP + SHOP_PREVIEW_STAGE_WIDTH / 2.0
-}
-
-fn shop_preview_x_for_width(viewport_width: f32) -> f32 {
-    let usable_width = viewport_width - SHOP_ROOT_PADDING * 2.0;
-    let desktop_width = SHOP_CATALOG_WIDTH + SHOP_BODY_GAP + SHOP_PREVIEW_STAGE_WIDTH;
-    if usable_width >= desktop_width {
-        shop_preview_stage_center_x()
-    } else {
-        0.0
-    }
-}
-
-fn shop_preview_transform_for_width(viewport_width: f32) -> Transform {
-    Transform::from_xyz(
-        shop_preview_x_for_width(viewport_width),
-        SHOP_PREVIEW_Y,
-        SHOP_PREVIEW_Z,
-    )
-    .with_scale(Vec3::splat(SHOP_PREVIEW_SCALE))
-}
-
 #[cfg(test)]
 fn shop_layout_fits_width(viewport_width: f32) -> bool {
     let usable_width = viewport_width - SHOP_ROOT_PADDING * 2.0;
@@ -589,12 +592,105 @@ fn shop_layout_fits_width(viewport_width: f32) -> bool {
         && SHOP_PREVIEW_STAGE_WIDTH.min(usable_width) <= usable_width
 }
 
+/// A UI node's resolved on-screen rect, in the same logical-pixel space
+/// (top-left origin, y-down) [`LetterboxRect`] is expressed in --
+/// `ComputedNode::size` is in physical pixels and `UiGlobalTransform`'s
+/// translation places the node's center in physical-pixel space, so both are
+/// scaled back to logical pixels by the node's own `inverse_scale_factor`.
+/// Identical formula to `creation::logical_node_rect` /
+/// `review::logical_node_rect` -- duplicated per this module's own
+/// layout-math needs, matching that existing precedent rather than threading
+/// a cross-module helper through.
+fn logical_node_rect(transform: &UiGlobalTransform, node: &ComputedNode) -> Rect {
+    let scale = node.inverse_scale_factor();
+    Rect::from_center_size(transform.translation * scale, node.size() * scale)
+}
+
+/// How many logical screen pixels one world unit currently occupies:
+/// [`LetterboxRect::size`] is the on-screen rect (in the same logical pixels
+/// [`ComputedNode`] resolves to) the letterboxed world camera's `Fixed`
+/// projection stretches its fixed [`LOGICAL_WIDTH`] x [`LOGICAL_HEIGHT`]
+/// world area across, so this ratio is exactly 1.0 at the design resolution
+/// (no bars), bigger on a wide desktop window (more screen room for the same
+/// fixed world area), smaller on a narrow phone width. Falls back to `1.0` on
+/// a not-yet-computed (zero-size) rect rather than dividing by zero.
+fn preview_zoom(letterbox: LetterboxRect) -> f32 {
+    if letterbox.size.x <= 0.0 {
+        1.0
+    } else {
+        letterbox.size.x / LOGICAL_WIDTH
+    }
+}
+
+/// Inverse-projects a point in full-window logical screen space (top-left
+/// origin, y-down -- [`ComputedNode`]/[`LetterboxRect`]'s shared convention)
+/// into the world-space point the letterboxed world camera renders there.
+/// This is the same fix #123 applied to the creation screen (#273): the old
+/// `shop_preview_x_for_width` derived the rig's position from
+/// `ViewportInfo::width` alone, implicitly assuming world space and UI
+/// screen space were the same 1:1 coordinate system -- only true when the
+/// window happened to be exactly [`LOGICAL_WIDTH`] x [`LOGICAL_HEIGHT`] (no
+/// letterbox bars). This derives it from the `PreviewStage` node's *actual*
+/// resolved screen rect instead.
+fn world_point_for_screen_point(screen: Vec2, letterbox: LetterboxRect) -> Vec2 {
+    let zoom = preview_zoom(letterbox);
+    let local = screen - letterbox.position;
+    Vec2::new(
+        local.x / zoom - LOGICAL_WIDTH / 2.0,
+        LOGICAL_HEIGHT / 2.0 - local.y / zoom,
+    )
+}
+
+/// The forward projection -- world space back to full-window logical screen
+/// space -- exact inverse of [`world_point_for_screen_point`]. Production
+/// code never needs this (the rig is only ever placed screen -> world);
+/// tests use it to verify the rig's resulting `Transform` actually lands
+/// back inside the `PreviewStage` rect it was derived from (#273).
+#[cfg(test)]
+fn screen_point_for_world_point(world: Vec2, letterbox: LetterboxRect) -> Vec2 {
+    let zoom = preview_zoom(letterbox);
+    letterbox.position
+        + Vec2::new(
+            (world.x + LOGICAL_WIDTH / 2.0) * zoom,
+            (LOGICAL_HEIGHT / 2.0 - world.y) * zoom,
+        )
+}
+
+/// Reads the `PreviewStage` node's resolved screen rect and repositions
+/// every [`ShopPreview`] root so its projected screen position lands at
+/// that rect's center (offset up by [`SHOP_PREVIEW_Y`] world units, toward
+/// the cutout frame at the panel's top), scaling it so its *apparent*
+/// on-screen size stays constant regardless of the letterbox zoom (matching
+/// the UI panel's own fixed `Val::Px` size, which does not itself
+/// grow/shrink with the world camera's zoom) -- see
+/// [`world_point_for_screen_point`]'s doc comment for why this replaces the
+/// old `viewport.width`-only placement (#273).
+///
+/// Runs unconditionally (not gated on a resource-changed check): a
+/// `ShopPreview` spawned this same frame (`OnEnter`) only gets a real
+/// `PreviewStage` `ComputedNode`/`UiGlobalTransform` partway through this
+/// very `PostUpdate`, once Bevy's own UI layout pass has run for it -- so
+/// the first correct placement has to land on an ordinary frame, not a
+/// change-detected one. Ordered `.after(UiSystems::Layout)` so it always
+/// reads this frame's freshly resolved layout, never a stale one.
 fn update_shop_preview_transform(
-    viewport: Res<ViewportInfo>,
+    letterbox: Res<LetterboxRect>,
+    stage_nodes: Query<(&ComputedNode, &UiGlobalTransform, &ShopLayoutRole)>,
     mut previews: Query<&mut Transform, With<ShopPreview>>,
 ) {
-    for mut transform in &mut previews {
-        transform.translation.x = shop_preview_x_for_width(viewport.width);
+    let Some((node, transform)) = stage_nodes.iter().find_map(|(node, transform, role)| {
+        (*role == ShopLayoutRole::PreviewStage).then_some((node, transform))
+    }) else {
+        return;
+    };
+    let stage_rect = logical_node_rect(transform, node);
+    let target = world_point_for_screen_point(stage_rect.center(), *letterbox);
+    let zoom = preview_zoom(*letterbox);
+    for mut preview_transform in &mut previews {
+        preview_transform.translation.x = target.x;
+        preview_transform.translation.y = target.y + SHOP_PREVIEW_Y;
+        preview_transform.translation.z = SHOP_PREVIEW_Z;
+        preview_transform.scale = Vec3::splat(SHOP_PREVIEW_SCALE / zoom);
     }
 }
 
@@ -982,7 +1078,9 @@ mod tests {
     use crate::cutout::{CutoutPartKind, CutoutPartMarker, GearVisualLayer, cutout_rig_owner};
     use crate::flow::FlowPlugin;
     use crate::progression::{ProgressionPlugin, STARTING_GALBENI, result_ui::GameOverAction};
+    use bevy::math::Affine2;
     use bevy::state::app::StatesPlugin;
+    use bevy::window::PrimaryWindow;
 
     #[test]
     fn buying_without_funds_is_rejected_and_debits_nothing() {
@@ -1330,47 +1428,265 @@ mod tests {
         }
     }
 
-    #[test]
-    fn shop_preview_rig_is_centered_from_stage_constants() {
-        let mut app = test_app();
-        set_state(&mut app, GameState::Shop);
-
-        let transform = app
-            .world_mut()
-            .query_filtered::<&Transform, With<ShopPreview>>()
-            .single(app.world())
-            .expect("shop preview transform exists");
-        let expected = shop_preview_transform_for_width(SHOP_TARGET_WIDTH);
-        assert_eq!(transform.translation, expected.translation);
-        assert_eq!(transform.scale, expected.scale);
-        assert!((transform.translation.x - shop_preview_stage_center_x()).abs() < f32::EPSILON);
-        assert_eq!(
-            shop_preview_x_for_width(375.0),
-            0.0,
-            "wrapped shop preview stage is centered on its own row"
-        );
-        assert!(transform.translation.x.abs() <= SHOP_BODY_WIDTH / 2.0);
-        assert!(transform.translation.y.abs() <= SHOP_PANEL_HEIGHT / 2.0);
+    /// Spawns a `Window`/[`PrimaryWindow`] of the given logical size (scale
+    /// factor 1.0) so [`crate::core::letterbox_camera`] -- already wired by
+    /// `CorePlugin` -- computes a real, non-default [`LetterboxRect`] for it,
+    /// exactly like the running game. Headless test apps otherwise have no
+    /// window at all, so `letterbox_camera` skips (see its `windows.single()`
+    /// guard) and `LetterboxRect` stays at its unlettered default.
+    fn spawn_primary_window(app: &mut App, width: f32, height: f32) {
+        let mut window = Window::default();
+        window.resolution = bevy::window::WindowResolution::new(width as u32, height as u32);
+        app.world_mut().spawn((window, PrimaryWindow));
     }
 
-    #[test]
-    fn shop_preview_starts_centered_when_entering_narrow_viewport() {
-        let mut app = test_app();
+    /// A full app on the shop screen with a real primary window of the given
+    /// logical size, so [`LetterboxRect`] reflects genuine letterboxing
+    /// (bars, zoom) instead of staying at its unlettered default -- the
+    /// production code path #273 fixes only matters once there's an actual
+    /// letterbox to project through.
+    fn test_app_with_window(width: f32, height: f32) -> App {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            FlowPlugin,
+            ShopPlugin,
+        ));
+        app.insert_resource(player_character());
+        app.update();
+        spawn_primary_window(&mut app, width, height);
         app.world_mut()
             .resource_mut::<ViewportInfo>()
             .set_if_neq(ViewportInfo {
-                width: 375.0,
-                height: 812.0,
-                is_mobile: true,
+                width,
+                height,
+                is_mobile: crate::theme::is_mobile_width(width),
             });
-        set_state(&mut app, GameState::Shop);
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Shop);
+        app.update();
+        app.update();
+        app
+    }
 
-        let transform = app
-            .world_mut()
+    fn preview_stage_entity(app: &mut App) -> Entity {
+        app.world_mut()
+            .query::<(Entity, &ShopLayoutRole)>()
+            .iter(app.world())
+            .find(|(_, role)| **role == ShopLayoutRole::PreviewStage)
+            .map(|(e, _)| e)
+            .expect("preview stage exists")
+    }
+
+    /// Hand-supplies the `PreviewStage` node's resolved `ComputedNode`/
+    /// `UiGlobalTransform` -- headless test apps never run Bevy's real
+    /// `ui_layout_system` (no `RenderPlugin`/window-backed camera target), so
+    /// this module's tests simulate "already laid out" the same way
+    /// `creation`'s and `ui_widgets::focus`'s tests do, rather than relying
+    /// on a live layout pass that doesn't happen here.
+    fn set_preview_stage_rect(app: &mut App, rect: Rect) {
+        let stage = preview_stage_entity(app);
+        app.world_mut().entity_mut(stage).insert((
+            ComputedNode {
+                size: rect.size(),
+                inverse_scale_factor: 1.0,
+                ..Default::default()
+            },
+            UiGlobalTransform::from(Affine2::from_translation(rect.center())),
+        ));
+    }
+
+    /// A plausible `PreviewStage` on-screen rect for a given viewport width:
+    /// right of the catalog in the centered desktop body once both fit side
+    /// by side, or centered on its own wrapped row once they no longer do --
+    /// the same shape the real flexbox layout produces, but computed by hand
+    /// for a test that (per [`set_preview_stage_rect`]'s doc comment) never
+    /// runs the real layout system.
+    fn sample_stage_rect(viewport_width: f32) -> Rect {
+        let desktop_width = SHOP_CATALOG_WIDTH + SHOP_BODY_GAP + SHOP_PREVIEW_STAGE_WIDTH;
+        let usable_width = viewport_width - SHOP_ROOT_PADDING * 2.0;
+        let center_x = if usable_width >= desktop_width {
+            viewport_width / 2.0 - SHOP_BODY_WIDTH / 2.0
+                + SHOP_CATALOG_WIDTH
+                + SHOP_BODY_GAP
+                + SHOP_PREVIEW_STAGE_WIDTH / 2.0
+        } else {
+            viewport_width / 2.0
+        };
+        Rect::from_center_size(
+            Vec2::new(center_x, 300.0),
+            Vec2::new(SHOP_PREVIEW_STAGE_WIDTH, SHOP_PANEL_HEIGHT),
+        )
+    }
+
+    fn shop_preview_transform(app: &mut App) -> Transform {
+        *app.world_mut()
             .query_filtered::<&Transform, With<ShopPreview>>()
             .single(app.world())
-            .expect("shop preview transform exists");
-        assert_eq!(transform.translation.x, 0.0);
+            .expect("shop preview transform exists")
+    }
+
+    /// #273 red-first/green: the preview rig's `Transform`, once projected
+    /// back to screen space through the same letterboxed camera math it was
+    /// placed with, must land inside the `PreviewStage` node's *actual*
+    /// resolved rect -- at desktop (1280x800), at the exact design
+    /// resolution (800x600, no letterbox bars), and at a narrow mobile width
+    /// (375x812) -- instead of the old `viewport.width`-only placement,
+    /// which only ever happened to be correct at the exact design
+    /// resolution.
+    #[test]
+    fn preview_rig_projects_inside_the_preview_stage_rect_at_several_widths() {
+        for (width, height) in [
+            (1280.0_f32, 800.0_f32),
+            (LOGICAL_WIDTH, LOGICAL_HEIGHT),
+            (375.0, 812.0),
+        ] {
+            let mut app = test_app_with_window(width, height);
+            let stage_rect = sample_stage_rect(width);
+            set_preview_stage_rect(&mut app, stage_rect);
+            app.update();
+
+            let letterbox = *app.world().resource::<LetterboxRect>();
+            assert!(
+                letterbox.size.x > 0.0,
+                "at {width}x{height}: letterbox_camera must have computed a real rect"
+            );
+            let transform = shop_preview_transform(&mut app);
+            let projected =
+                screen_point_for_world_point(transform.translation.truncate(), letterbox);
+            assert!(
+                stage_rect.contains(projected),
+                "at {width}x{height}: projected preview position {projected:?} must land \
+                 inside the preview stage rect {stage_rect:?}"
+            );
+        }
+    }
+
+    /// The rig's apparent on-screen size must stay roughly constant
+    /// regardless of the letterbox zoom, matching the UI panel's own fixed
+    /// `Val::Px` size -- otherwise a wide desktop window (more zoom) would
+    /// render the same loadout enormous next to an unchanged-size frame,
+    /// and a narrow phone width would shrink it to a speck.
+    #[test]
+    fn preview_rig_scale_compensates_for_letterbox_zoom() {
+        let mut wide = test_app_with_window(1280.0, 800.0);
+        set_preview_stage_rect(&mut wide, sample_stage_rect(1280.0));
+        wide.update();
+        let mut narrow = test_app_with_window(375.0, 812.0);
+        set_preview_stage_rect(&mut narrow, sample_stage_rect(375.0));
+        narrow.update();
+
+        let wide_zoom = preview_zoom(*wide.world().resource::<LetterboxRect>());
+        let narrow_zoom = preview_zoom(*narrow.world().resource::<LetterboxRect>());
+        assert!(wide_zoom > narrow_zoom, "sanity: wide window zooms in more");
+
+        let wide_scale = shop_preview_transform(&mut wide).scale.x;
+        let narrow_scale = shop_preview_transform(&mut narrow).scale.x;
+        // Apparent size = world scale * zoom; must match within float noise.
+        assert!(
+            (wide_scale * wide_zoom - narrow_scale * narrow_zoom).abs() < 1e-4,
+            "wide apparent size {} must match narrow apparent size {}",
+            wide_scale * wide_zoom,
+            narrow_scale * narrow_zoom
+        );
+    }
+
+    /// #273's first root-cause half, proven directly: the rig must derive
+    /// its position from the `PreviewStage` node's *real* resolved rect, not
+    /// recompute an independent guess from `ViewportInfo::width` alone (the
+    /// old `shop_preview_x_for_width`, which never looked at the node's
+    /// `ComputedNode`/`UiGlobalTransform` at all). Two different, quite
+    /// deliberately odd stage rects at the *same* viewport width must
+    /// produce two different projected positions, each landing inside its
+    /// own rect -- a width-keyed formula would produce the identical result
+    /// both times and fail this.
+    #[test]
+    fn preview_rig_tracks_the_stage_rects_actual_position_not_a_width_keyed_guess() {
+        let mut app = test_app_with_window(1280.0, 800.0);
+
+        let odd_rect_one = Rect::from_center_size(Vec2::new(900.0, 120.0), Vec2::new(318.0, 450.0));
+        set_preview_stage_rect(&mut app, odd_rect_one);
+        app.update();
+        let letterbox = *app.world().resource::<LetterboxRect>();
+        let projected_one = screen_point_for_world_point(
+            shop_preview_transform(&mut app).translation.truncate(),
+            letterbox,
+        );
+        assert!(
+            odd_rect_one.contains(projected_one),
+            "must land inside the first rect {odd_rect_one:?}, got {projected_one:?}"
+        );
+
+        let odd_rect_two = Rect::from_center_size(Vec2::new(200.0, 600.0), Vec2::new(318.0, 450.0));
+        set_preview_stage_rect(&mut app, odd_rect_two);
+        app.update();
+        let projected_two = screen_point_for_world_point(
+            shop_preview_transform(&mut app).translation.truncate(),
+            letterbox,
+        );
+        assert!(
+            odd_rect_two.contains(projected_two),
+            "must land inside the second rect {odd_rect_two:?}, got {projected_two:?}"
+        );
+        assert!(
+            projected_one.distance(projected_two) > 100.0,
+            "moving the stage rect must move the projected preview position, proving it's \
+             derived from the node's actual resolved layout rather than a fixed/width-keyed guess"
+        );
+    }
+
+    /// #273's second root-cause half: the world camera draws the rig *under*
+    /// the UI camera's output, so any opaque UI fill spanning the preview
+    /// frame's rect hides the rig no matter where it's positioned. The
+    /// `PreviewStage` panel must not carry `panel_bundle`'s 9-slice
+    /// `ImageNode` or a `BackgroundColor` fill, and the frame row (the node
+    /// with the gold border) must keep only its border outline.
+    #[test]
+    fn preview_stage_keeps_no_opaque_fill_over_the_rig_frame() {
+        let mut app = test_app();
+        set_state(&mut app, GameState::Shop);
+
+        // `Node` requires a `BackgroundColor` (default fully transparent),
+        // so "no fill" means alpha 0, not component absence.
+        let background_alpha = |app: &App, entity: Entity| {
+            app.world()
+                .get::<BackgroundColor>(entity)
+                .map_or(0.0, |background| background.0.alpha())
+        };
+        let stage = preview_stage_entity(&mut app);
+        assert_eq!(
+            background_alpha(&app, stage),
+            0.0,
+            "the preview stage must not paint over the world-rendered rig"
+        );
+        assert!(
+            app.world().get::<ImageNode>(stage).is_none(),
+            "the preview stage must not carry panel_bundle's opaque 9-slice image"
+        );
+
+        let children: Vec<Entity> = app
+            .world()
+            .get::<Children>(stage)
+            .expect("stage has children")
+            .iter()
+            .collect();
+        let frame = children
+            .iter()
+            .copied()
+            .find(|&child| {
+                app.world()
+                    .get::<BorderColor>(child)
+                    .is_some_and(|border| *border == BorderColor::all(GOLD))
+            })
+            .expect("the gold-bordered frame row exists");
+        assert_eq!(
+            background_alpha(&app, frame),
+            0.0,
+            "the cutout frame must keep only its border outline, not an opaque fill"
+        );
     }
 
     #[test]
