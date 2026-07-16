@@ -24,12 +24,12 @@
 //! (`--use-angle=swiftshader`; `--enable-unsafe-swiftshader` because Chrome
 //! 129+ requires it to allow software WebGL in headless mode at all)
 //! instead of trusting whatever GPU driver happens to be on the host, and
-//! forces `--force-device-scale-factor=1` at the Chrome-launch level so a
-//! Retina/HiDPI dev machine doesn't silently double the captured pixel
-//! dimensions relative to a CI runner. The *checkpoint's* requested device
-//! pixel ratio (#198: 1, 2, or 3) is then applied per-tab over CDP (see
-//! [`launch`]'s doc comment), independent of whatever the host's own display
-//! happens to be.
+//! forces `--force-device-scale-factor={dpr}` at the Chrome-launch level
+//! (#278; see [`launch`]'s doc comment) so a Retina/HiDPI dev machine and a
+//! DPR-1 CI runner both produce the exact same, checkpoint-requested backing
+//! resolution regardless of the host's own display -- still fully
+//! host-independent, just no longer pinned to a hardcoded `1` that ignored
+//! `dpr`.
 //!
 //! ## Cold cache
 //!
@@ -226,27 +226,61 @@ fn chrome_binary() -> Result<std::path::PathBuf, String> {
     ))
 }
 
+/// The fixed Chrome launch flags for one checkpoint, parameterized only by
+/// `dpr` (#278) -- a pure function (returning owned `String`s, not
+/// `&'static str`, since the scale-factor flag is now formatted) so the
+/// exact flag text is unit-testable without spinning up a real Chrome
+/// process. See [`launch`]'s doc comment for why
+/// `--force-device-scale-factor` must track `dpr` instead of staying
+/// hardcoded at `1`.
+fn chrome_launch_args(dpr: f64) -> Vec<String> {
+    vec![
+        format!("--force-device-scale-factor={dpr}"),
+        "--hide-scrollbars".to_string(),
+        "--enable-unsafe-swiftshader".to_string(),
+        "--use-angle=swiftshader".to_string(),
+    ]
+}
+
 /// Launches a fresh, isolated headless Chrome against `profile_dir` (must
 /// not exist yet or be empty -- callers create a new directory per
 /// checkpoint, see `cold_menu::run_checkpoint`) sized to exactly
 /// `width`x`height` logical (CSS) pixels at the given device pixel ratio
 /// (`dpr`).
 ///
-/// ## DPR emulation (#198)
+/// ## DPR emulation (#198, fixed by #278)
 ///
-/// The Chrome launch flag stays `--force-device-scale-factor=1` regardless
-/// of `dpr` -- that flag exists purely for *host* independence (a
-/// Retina/HiDPI dev machine shouldn't silently double every capture
-/// relative to a DPR-1 CI runner), not to pick the checkpoint's DPR. The
-/// requested `dpr` is instead applied per-tab via CDP
-/// `Emulation.setDeviceMetricsOverride`'s `device_scale_factor`, which
-/// supersedes the launch-time default and is what `checkpoint::screenshot_png`
-/// (via `Page.captureScreenshot`'s `clip`) and the page's own
-/// `window.devicePixelRatio` observe. This keeps the CSS-pixel viewport
-/// (`window.innerWidth/innerHeight`) exactly `width`x`height` at every DPR,
-/// while the captured screenshot's *physical* pixel dimensions scale to
-/// `width*dpr`x`height*dpr` -- asserted by each scenario's
+/// The Chrome launch flag is `--force-device-scale-factor={dpr}` -- pinning
+/// the *real*, host-independent rendering/compositing scale this tab uses
+/// to exactly the checkpoint's requested DPR (see [`chrome_launch_args`]).
+/// CDP's `Emulation.setDeviceMetricsOverride` is layered on top with the
+/// same `dpr` (below), which keeps the CSS-pixel viewport
+/// (`window.innerWidth/innerHeight`) exactly `width`x`height` at every DPR
+/// and is what `checkpoint::screenshot_png` (via `Page.captureScreenshot`'s
+/// `clip`) and the page's own `window.devicePixelRatio` observe -- so the
+/// captured screenshot's *physical* pixel dimensions scale to
+/// `width*dpr`x`height*dpr`, asserted by each scenario's
 /// `check_screenshot_pixels`.
+///
+/// Before #278's fix, the launch flag stayed hardcoded at
+/// `--force-device-scale-factor=1` regardless of `dpr`, on the assumption
+/// that the CDP override alone "supersedes the launch-time default" for
+/// every DPR-dependent observable. That assumption held for
+/// `window.devicePixelRatio` and screenshot scaling, but **not** for the
+/// wasm canvas's actual backing-store resolution: winit's web backend reads
+/// `scale_factor` from `window.devicePixelRatio` (CDP-overridden) but
+/// derives the physical size it reports to Bevy from a `ResizeObserver`
+/// `devicePixelContentBoxSize` measurement of the canvas, which tracks the
+/// tab's *real* compositor scale -- pinned to `1` by the old hardcoded
+/// launch flag, independent of the CDP override. At a "desktop"
+/// 1280x800 DPR-2/3 checkpoint that meant Bevy's window resolution divided
+/// a real 1280-physical-px canvas by a CDP-reported `scale_factor` of 2 or
+/// 3, landing on a ~427-640-logical-px width -- under `theme::MOBILE_BREAKPOINT`
+/// (700) -- so the whole desktop UI (fight action palette, shop layout,
+/// ...) rendered its mobile variant, oversized to fill the real 1280x800
+/// canvas. Pinning the launch-time flag itself to `dpr` keeps the real
+/// compositor scale and the CDP-reported `scale_factor` in agreement again,
+/// exactly as they always are on a real, unemulated browser.
 pub fn launch(width: u32, height: u32, dpr: f64, profile_dir: &Path) -> Result<Checkpoint, String> {
     std::fs::create_dir_all(profile_dir).map_err(|e| {
         format!(
@@ -256,12 +290,8 @@ pub fn launch(width: u32, height: u32, dpr: f64, profile_dir: &Path) -> Result<C
     })?;
     let chrome_path = chrome_binary()?;
 
-    let args: Vec<&OsStr> = vec![
-        OsStr::new("--force-device-scale-factor=1"),
-        OsStr::new("--hide-scrollbars"),
-        OsStr::new("--enable-unsafe-swiftshader"),
-        OsStr::new("--use-angle=swiftshader"),
-    ];
+    let args_owned = chrome_launch_args(dpr);
+    let args: Vec<&OsStr> = args_owned.iter().map(OsStr::new).collect();
 
     let launch_options = LaunchOptionsBuilder::default()
         .headless(true)
@@ -536,5 +566,43 @@ impl Checkpoint {
                 true,
             )
             .map_err(|e| format!("screenshot capture failed: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #278 root cause, pinned: before this fix,
+    /// `--force-device-scale-factor` stayed hardcoded at `1` regardless of
+    /// `dpr`, on the (false) assumption that CDP's
+    /// `Emulation.setDeviceMetricsOverride` alone "supersedes the
+    /// launch-time default" for every DPR-dependent observable -- see
+    /// [`launch`]'s doc comment for the full mechanism this pins. This test
+    /// fails against the pre-fix hardcoded `"1"` for every `dpr != 1.0`.
+    #[test]
+    fn launch_args_pin_the_real_device_scale_factor_to_the_requested_dpr() {
+        for dpr in [1.0, 2.0, 3.0] {
+            let args = chrome_launch_args(dpr);
+            assert!(
+                args.contains(&format!("--force-device-scale-factor={dpr}")),
+                "dpr {dpr}: expected an explicit --force-device-scale-factor matching \
+                 the checkpoint's requested DPR, got {args:?}"
+            );
+        }
+    }
+
+    /// The determinism-motivated flags (`browser`'s module docs,
+    /// "Determinism") must survive alongside the now-`dpr`-dependent scale
+    /// factor -- regressing any of these would reintroduce host-dependent,
+    /// non-reproducible screenshots.
+    #[test]
+    fn launch_args_always_force_software_rendering() {
+        for dpr in [1.0, 2.0, 3.0] {
+            let args = chrome_launch_args(dpr);
+            assert!(args.contains(&"--use-angle=swiftshader".to_string()));
+            assert!(args.contains(&"--enable-unsafe-swiftshader".to_string()));
+            assert!(args.contains(&"--hide-scrollbars".to_string()));
+        }
     }
 }
