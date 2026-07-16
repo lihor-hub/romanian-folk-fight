@@ -35,16 +35,16 @@ cargo xtask assets check        # validate every manifest.toml sidecar + runtime
 cargo xtask assets review       # generate the deterministic static asset review gallery (#197)
 cargo xtask assets review --changed [--base <ref>]  # focused gallery: only changed assets + dependent compositions (#211)
 cargo xtask web-smoke --scenario cold-menu     # build+serve the wasm game, verify the first-painted menu in a real browser (#168)
-cargo xtask web-smoke --scenario gold-journey  # menu->creation->fight->result->shop, review build, full desktop/phone x DPR 1/2/3 matrix (#187/#198)
+cargo xtask web-smoke --scenario gold-journey  # menu->creation->fight->result->shop, review build, desktop/DPR-1 by default; full desktop/phone x DPR 1/2/3 matrix opt-in (#187/#198, narrowed by #284)
 cargo xtask web-smoke --scenario accessibility-settings-reload  # click both a11y toggles, reload, verify persistence + zoom (#191)
 cargo xtask web-smoke --scenario reduced-motion-fight  # seed reduced-motion, drive menu->fight, assert motion suppression from telemetry (#200)
 cargo xtask web-smoke --scenario fight-palette-desktop  # deterministic fight screen, assert the seven-action desktop palette layout (#189)
-cargo xtask web-smoke --scenario fight-palette-phone  # phone fight screen, assert the category-driven action palette states (#199)
+cargo xtask web-smoke --scenario fight-palette-phone  # phone fight screen, assert the category-driven action palette states (#199) -- deactivated from default CI trigger by #284, still runnable directly
 cargo xtask web-smoke --scenario high-contrast  # seed high-contrast preference, verify menu+fight theming and non-color cues (#214)
 cargo xtask web-smoke --scenario fight-palette-accessible  # real-keyboard palette focus order, disabled reason, marker, category-close recovery (#213)
 cargo xtask web-smoke --scenario keyboard-accessibility  # real-keyboard-only pass over every current screen (menu, settings, creation, fight, pause, result, shop) (#216)
-cargo xtask web-smoke --scenario zoom-200      # every current screen at a 200%-desktop-zoom viewport: no scroll, no clipped control (#216)
-cargo xtask web-smoke --scenario touch-targets # every current screen at desktop+phone: no interactive target below 44x44 CSS px (#216)
+cargo xtask web-smoke --scenario zoom-200      # every current screen at a 200%-desktop-zoom viewport: no scroll, no clipped control (#216) -- deactivated from default CI trigger by #284, still runnable directly
+cargo xtask web-smoke --scenario touch-targets # every current screen at desktop+phone: no interactive target below 44x44 CSS px (#216) -- deactivated from default CI trigger by #284, still runnable directly
 cargo xtask web-smoke --scenario corrupt-save-recovery  # seed a corrupt/future-version save, verify the Romanian recovery action (#201)
 cargo xtask web-smoke --scenario save-reload   # result -> shop -> real reload -> Continuă resumes at Shop with every run value intact (#217)
 cargo xtask web-smoke --scenario abandon-forfeit  # Abandonează clears the run snapshot, returns to Main Menu, disables Continuă (#217)
@@ -374,11 +374,11 @@ only behind the `review` cargo feature (see `Cargo.toml` and
 
 #### The desktop/phone x DPR 1/2/3 matrix (#198)
 
-Every screen is captured at both base viewports, at three device pixel
+Every screen *can* be captured at both base viewports, at three device pixel
 ratios, applied per-checkpoint over CDP (`Emulation.setDeviceMetricsOverride`,
 see `xtask/src/web_smoke/browser.rs`'s doc comment) rather than the host
 machine's own display -- 6 viewport entries x 5 screens = **30 checkpoints**
-in one `--scenario gold-journey` run:
+in one full-matrix `--scenario gold-journey` run:
 
 | viewport name  | logical size | DPR | screenshot (physical) size |
 |-----------------|--------------|-----|------------------------------|
@@ -392,7 +392,50 @@ in one `--scenario gold-journey` run:
 Each of the 6 rows walks the same five screens (`menu`, `creation`, `fight`,
 `fight-result`, `shop`) in one continuous browser session (one fresh Chrome
 profile per row), exactly as #187 did per viewport -- DPR just adds three
-rows per base viewport instead of a second scenario or a second runner.
+rows per base viewport instead of a second scenario or a second runner. As
+of #284 (see the next section), only the `desktop` row runs by default; the
+other 5 rows are dormant unless explicitly reactivated.
+
+#### Desktop-only default scope (#284)
+
+Agent/CI feedback is dominated by this scenario's wall-clock cost, most of
+which comes from the phone and DPR-2/3 legs above. For current development,
+`gold-journey`'s *default* run walks only the `desktop` row (1280x800 @ DPR
+1) -- 5 checkpoints instead of 30 -- while still covering all five current
+screens (the "current-screen gold journey": menu, creation, fight,
+fight-result, shop). Nothing about the matrix is deleted: the full
+six-viewport table above is preserved byte-for-byte in
+`xtask/src/web_smoke/gold_journey.rs` (`FULL_VIEWPORTS`), and every baseline
+under `tests/visual/baselines/gold-journey/` (all 30 pre-existing
+`<viewport>-<checkpoint>.png` files) is untouched.
+
+Reactivate the full matrix by setting an env var before invoking the
+scenario -- no code change needed:
+
+```
+XTASK_WEB_SMOKE_GOLD_JOURNEY_FULL_MATRIX=1 cargo xtask web-smoke --scenario gold-journey
+```
+
+(`true`, `TRUE`, `True`, etc. also work, case-insensitively; unset, empty, or
+any other value keeps the narrowed default.) The selection logic
+(`resolve_viewports`) is unit-tested in `gold_journey.rs`'s own `tests`
+module without touching the process environment (tests run concurrently in
+the same binary, so racing `std::env::set_var` calls would be flaky -- the
+same reasoning `crate::process::resolve_budget_ms` documents).
+
+`.github/workflows/web-smoke.yml` mirrors this: the `gold-journey` job runs
+the narrowed 5-checkpoint default on every push/pull_request, and sets
+`XTASK_WEB_SMOKE_GOLD_JOURNEY_FULL_MATRIX=1` only on a manual
+`workflow_dispatch` run with its `full_matrix` input checked. That same
+`full_matrix` input also reactivates three scenarios whose entire purpose is
+covering a non-desktop-DPR-1 viewport -- `fight-palette-phone` (phone-only),
+`touch-targets` (phone touch-target sizing), and `zoom-200` (200% desktop
+zoom) -- which are otherwise deactivated (gated off, not deleted; their
+jobs, scenario implementations, and baselines are all still present and
+runnable directly via `--scenario <name>`) on the default push/pull_request
+trigger. This is a deliberately temporary scope (issue #284): every
+deactivated job/matrix row is one manual `workflow_dispatch` run (or one env
+var, locally) away from running again.
 
 **Checkpoint naming and baseline migration choice.** A checkpoint's key is
 `<viewport-name>-<screen>` (unchanged formatting from #187). DPR 1 keeps the
@@ -444,16 +487,21 @@ screenshot against the committed baseline by hand.
 
 Runs every registered scenario back to back in one process, stopping at the
 first failure like every other multi-step `xtask` command: `cold-menu` (2
-checkpoints), then `gold-journey`'s full matrix (30 checkpoints), then
+checkpoints), then `gold-journey` (5 checkpoints by default since #284's
+desktop-only narrowing, or its full matrix -- 30 checkpoints -- with
+`XTASK_WEB_SMOKE_GOLD_JOURNEY_FULL_MATRIX=1` set), then
 `accessibility-settings-reload` and `reduced-motion-fight` (assertion-only
 scenarios with no screenshot baselines -- see their module docs), then
 `fight-palette-desktop` (1 baseline checkpoint), `fight-palette-phone` (5
 baseline states), and `high-contrast` (4 baseline checkpoints).
 `--update-baselines` and `--strict-visual` both apply to every scenario run
 this way (the baseline-free scenarios accept and ignore them, printing a
-note). A later scenario module registers itself in `web_smoke::SCENARIOS`
-and is picked up by `--all` automatically -- see
-`xtask/src/web_smoke/mod.rs`'s module docs.
+note). `--all` is a local/manual command, not part of the CI default
+trigger (see "Desktop-only default scope" above) -- it deliberately still
+runs every registered scenario, including `fight-palette-phone`,
+`touch-targets`, and `zoom-200`, when explicitly invoked. A later scenario
+module registers itself in `web_smoke::SCENARIOS` and is picked up by
+`--all` automatically -- see `xtask/src/web_smoke/mod.rs`'s module docs.
 
 ```
 cargo xtask web-smoke --all                                    # every scenario, default (non-fatal) baseline-diff policy
