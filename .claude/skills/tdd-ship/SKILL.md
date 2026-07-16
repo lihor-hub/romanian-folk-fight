@@ -124,11 +124,18 @@ conflicts when you push.
 Match the repo's test conventions and run the gates locally before pushing —
 defer to the `rust-dev` skill for exact commands and patterns:
 
-- Rust / Bevy changes → follow `rust-dev` (cargo test, cargo clippy, cargo fmt must pass).
+- During implementation, run focused Rust tests.
+- For UI changes, run exactly one most-relevant browser scenario.
 
 In a fresh worktree, run `scripts/bootstrap-worktree.sh` first to verify path and setup.
 
 Push only after the relevant tests and type/lint gates pass locally.
+
+Before every push, run `cargo xtask pre-push`. Run additional browser scenarios
+only when directly affected. Do not run `cargo xtask web-smoke --all` locally
+unless shared theme/layout infrastructure changed, visual baselines across
+multiple screens changed, or the user explicitly requests the full browser
+matrix. CI owns the exhaustive browser suite.
 
 ### 4. Review and verify the diff
 
