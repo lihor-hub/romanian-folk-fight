@@ -46,6 +46,12 @@ pub struct Opponent {
     pub is_boss: bool,
     /// The announcer's intro line; only shown for bosses.
     pub intro_line: &'static str,
+    /// This opponent's one muted accent hue (#118): a `Sprite::color` tint
+    /// the arena applies to the clothing/accent parts of its cutout rig
+    /// (never skin, outline, or the player's own untinted template) so every
+    /// ladder entry reads as visually distinct on top of the shared folk
+    /// palette. See `docs/art-direction.md`.
+    pub accent_hue: Color,
 }
 
 /// Shorthand for a ladder entry; keeps the [`LADDER`] table readable.
@@ -62,6 +68,7 @@ const fn opponent(
     cutout_template: CutoutTemplate,
     is_boss: bool,
     intro_line: &'static str,
+    accent_hue: Color,
 ) -> Opponent {
     Opponent {
         name,
@@ -77,8 +84,27 @@ const fn opponent(
         cutout_template,
         is_boss,
         intro_line,
+        accent_hue,
     }
 }
+
+/// One muted accent hue per ladder entry (#118), applied as a `Sprite::color`
+/// tint on the clothing/accent parts of that opponent's cutout rig only
+/// (never skin, outline, or the player's own untinted template). Kept light
+/// enough to multiply over the shared folk-palette artwork as a wash rather
+/// than a full recolor -- see `docs/art-direction.md`'s "one muted accent
+/// hue... on top of this shared base". Consecutive ladder entries are never
+/// assigned the same hue (in fact every entry below is pairwise distinct).
+const HOT_DE_CODRU_HUE: Color = Color::srgb(0.55, 0.68, 0.50); // mossy forest green: a woodland bandit
+const STRIGOI_HUE: Color = Color::srgb(0.70, 0.68, 0.66); // pale ash gray: risen from the grave
+const VARCOLAC_HUE: Color = Color::srgb(0.55, 0.60, 0.68); // storm slate-blue: a night predator
+const CAPCAUN_HUE: Color = Color::srgb(0.72, 0.58, 0.42); // muddy ochre/clay: a hungry ogre
+const MUMA_PADURII_HUE: Color = Color::srgb(0.50, 0.56, 0.38); // deep moss/olive: the forest mother
+const IELE_HUE: Color = Color::srgb(0.68, 0.60, 0.74); // pale lavender mist: the fae dancers
+const SOLOMONAR_HUE: Color = Color::srgb(0.48, 0.56, 0.66); // storm-cloud blue: the weather wizard
+const BALAUR_HUE: Color = Color::srgb(0.42, 0.64, 0.60); // verdigris teal: the three-headed dragon
+const ZMEU_HUE: Color = Color::srgb(0.74, 0.50, 0.34); // ember copper: the dragon boss
+const ZMEUL_ZMEILOR_HUE: Color = Color::srgb(0.58, 0.42, 0.60); // muted royal plum: the dragon king
 
 /// The full ladder, in fight order. Budgets, monotonic levels, and the boss
 /// positions are pinned by the integrity tests below.
@@ -95,6 +121,7 @@ pub static LADDER: [Opponent; 10] = [
         CutoutTemplate::Human,
         false,
         "Un hoț de codru pândește punga voinicului. Păzea!",
+        HOT_DE_CODRU_HUE,
     ),
     opponent(
         "Strigoi",
@@ -108,6 +135,7 @@ pub static LADDER: [Opponent; 10] = [
         CutoutTemplate::Enemy,
         false,
         "Strigoiul s-a sculat din mormânt cu chef de harță.",
+        STRIGOI_HUE,
     ),
     opponent(
         "Vârcolac",
@@ -121,6 +149,7 @@ pub static LADDER: [Opponent; 10] = [
         CutoutTemplate::Enemy,
         false,
         "Vârcolacul a mirosit sânge proaspăt în arenă.",
+        VARCOLAC_HUE,
     ),
     opponent(
         "Căpcăun",
@@ -134,6 +163,7 @@ pub static LADDER: [Opponent; 10] = [
         CutoutTemplate::Enemy,
         false,
         "Căpcăunul n-a mai mâncat de aseară. Ghinion pentru cine-i iese în cale.",
+        CAPCAUN_HUE,
     ),
     opponent(
         "Muma Pădurii",
@@ -147,6 +177,7 @@ pub static LADDER: [Opponent; 10] = [
         CutoutTemplate::Boss,
         true,
         "Se întunecă senin: Muma Pădurii iese din desiș, iar codrul tace!",
+        MUMA_PADURII_HUE,
     ),
     opponent(
         "Iele",
@@ -160,6 +191,7 @@ pub static LADDER: [Opponent; 10] = [
         CutoutTemplate::Enemy,
         false,
         "Ielele dansează în arenă — cine le calcă hora, pățește.",
+        IELE_HUE,
     ),
     opponent(
         "Solomonar",
@@ -173,6 +205,7 @@ pub static LADDER: [Opponent; 10] = [
         CutoutTemplate::Human,
         false,
         "Solomonarul a coborât de pe nori, cu grindina în traistă.",
+        SOLOMONAR_HUE,
     ),
     opponent(
         "Balaur cu trei capete",
@@ -186,6 +219,7 @@ pub static LADDER: [Opponent; 10] = [
         CutoutTemplate::Boss,
         false,
         "Trei capete, un singur gând: balaurul vrea prânzul.",
+        BALAUR_HUE,
     ),
     opponent(
         "Zmeu",
@@ -199,6 +233,7 @@ pub static LADDER: [Opponent; 10] = [
         CutoutTemplate::Boss,
         false,
         "Zmeul a furat soarele și acum vrea și arena.",
+        ZMEU_HUE,
     ),
     opponent(
         "Zmeul Zmeilor",
@@ -212,6 +247,7 @@ pub static LADDER: [Opponent; 10] = [
         CutoutTemplate::Boss,
         true,
         "Cutremur în arenă: Zmeul Zmeilor, spaima voinicilor, intră cu buzduganul în mână!",
+        ZMEUL_ZMEILOR_HUE,
     ),
 ];
 
@@ -538,6 +574,28 @@ mod tests {
                 noroc: 1,
             }
         );
+    }
+
+    #[test]
+    fn every_opponent_declares_exactly_one_accent_hue_with_no_adjacent_duplicates() {
+        // #118: the roster has no visual identity without a per-opponent
+        // accent hue. Every entry must carry one, and consecutive ladder
+        // opponents (the ones a player sees back-to-back) must not share it.
+        for opponent in &LADDER {
+            assert_ne!(
+                opponent.accent_hue,
+                Color::WHITE,
+                "{} must declare a real accent hue, not an untinted placeholder",
+                opponent.name
+            );
+        }
+        for pair in LADDER.windows(2) {
+            assert_ne!(
+                pair[0].accent_hue, pair[1].accent_hue,
+                "{} and {} are adjacent on the ladder and must not share an accent hue",
+                pair[0].name, pair[1].name
+            );
+        }
     }
 
     #[test]
