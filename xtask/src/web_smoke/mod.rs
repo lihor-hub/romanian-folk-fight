@@ -51,16 +51,22 @@
 //! unconditionally (pass or fail) so a failure's full diagnostics are always
 //! on disk, with every path printed.
 //!
-//! ## The viewport/DPR matrix and `--all` (#198)
+//! ## The viewport/DPR matrix and `--all` (#198, narrowed by #284)
 //!
-//! `gold-journey`'s five screens each run at 1280x800 and 390x844, at
+//! `gold-journey`'s five screens can each run at 1280x800 and 390x844, at
 //! device pixel ratios 1, 2, and 3 -- 30 checkpoints, driven by DPR-per-tab
 //! CDP emulation (see `browser::launch`'s doc comment) rather than a new
-//! scenario or a second scenario runner. `cargo xtask web-smoke --all` runs
-//! every [`SCENARIOS`] entry (`cold-menu`, `gold-journey`,
+//! scenario or a second scenario runner. As of #284, the *default* run
+//! narrows that to a single viewport (`desktop`, 1280x800 @ DPR 1 -- 5
+//! checkpoints); the full 30-checkpoint matrix is preserved and stays
+//! reachable via an opt-in env var -- see `gold_journey`'s module docs'
+//! "Desktop-only default scope (#284)" section for the selection mechanism
+//! and reactivation path. `cargo xtask web-smoke --all` runs every
+//! [`SCENARIOS`] entry (`cold-menu`, `gold-journey`,
 //! `accessibility-settings-reload`, `reduced-motion-fight`,
 //! `fight-palette-desktop`) in one invocation via [`run_all`], stopping at
-//! the first failure like every other multi-step `xtask` command.
+//! the first failure like every other multi-step `xtask` command; the same
+//! narrowed `gold-journey` default applies inside `--all` too.
 //!
 //! ## Visual-diff review gating (#198)
 //!
@@ -185,8 +191,9 @@ pub fn run_scenario(
 /// order, stopping at the first failure -- the same "stop at first failure"
 /// convention every other multi-step `xtask` command uses (see
 /// `xtask/README.md`'s "Process/result conventions"). `cold-menu` (2
-/// checkpoints) plus `gold-journey`'s full DPR matrix (30 checkpoints, see
-/// that module's docs) plus `accessibility-settings-reload`'s,
+/// checkpoints) plus `gold-journey`'s checkpoints (5 by default since #284's
+/// desktop-only narrowing, or 30 with its full DPR matrix opted back in --
+/// see that module's docs) plus `accessibility-settings-reload`'s,
 /// `reduced-motion-fight`'s, and `fight-palette-desktop`'s checkpoints; a
 /// later registered scenario adds its own on top without this function
 /// changing.

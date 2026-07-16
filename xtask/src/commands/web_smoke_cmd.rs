@@ -38,10 +38,15 @@ pub const ABOUT: &str = "Browser-smoke scenarios: build+serve the WASM game and 
 /// Target wall-clock budget for one `--scenario <name>` run. `cold-menu` is
 /// a warm `trunk build --release` plus two cold-browser checkpoints
 /// (dominated by the release wasm build; the browser phase is tens of
-/// seconds). `gold-journey` (#198) now walks its full 30-checkpoint DPR
+/// seconds). `gold-journey` (#198) can walk its full 30-checkpoint DPR
 /// matrix (6 viewport journeys x 5 screens) in one invocation, which is
 /// measurably heavier -- see `xtask/README.md`'s "web-smoke --all" section
-/// for a measured transcript. Overridable per-invocation via
+/// for a measured transcript -- but #284 narrows its *default* run to the
+/// single desktop/DPR-1 viewport (5 checkpoints); this budget stays sized
+/// for the heavier full-matrix case (opt-in via
+/// `XTASK_WEB_SMOKE_GOLD_JOURNEY_FULL_MATRIX=1`, see
+/// `web_smoke::gold_journey`'s module docs) so it doesn't need re-tuning
+/// when that opt-in is used. Overridable per-invocation via
 /// `XTASK_BUDGET_MS`; see `docs/feedback-budgets.md` for the
 /// budget-warning convention (#227).
 const WEB_SMOKE_BUDGET_MS: u64 = 20 * 60 * 1000;

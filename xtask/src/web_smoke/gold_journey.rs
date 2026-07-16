@@ -115,6 +115,29 @@
 //! own single, continuous browser session that walks all five checkpoints
 //! in order, since the whole point is one player's journey through the
 //! screens, not five independent cold loads.
+//!
+//! ## Desktop-only default scope (#284)
+//!
+//! Agent/CI feedback is dominated by this scenario's wall-clock cost, most
+//! of which comes from walking the phone and DPR-2/3 legs of the matrix
+//! above. For current development, [`active_viewports`] defaults to a
+//! single entry -- [`ACTIVE_VIEWPORTS`], `desktop` at 1280x800/DPR 1 -- so
+//! an ordinary `--scenario gold-journey` run walks exactly the five
+//! [`CHECKPOINTS`] screens (menu, creation, fight, fight-result, shop) once,
+//! at the one viewport current development cares about (5 checkpoints, not
+//! 30). Nothing about the matrix itself is deleted: [`FULL_VIEWPORTS`] is
+//! the exact, unchanged six-entry table documented above, still reachable
+//! by setting `XTASK_WEB_SMOKE_GOLD_JOURNEY_FULL_MATRIX=1` (or `true`,
+//! case-insensitive) in the environment before invoking the scenario --
+//! see [`resolve_viewports`] for the selection logic (unit-tested below) and
+//! `.github/workflows/web-smoke.yml`'s `gold-journey` job / its manual
+//! `workflow_dispatch` `full_matrix` input for how CI reactivates it on
+//! demand. Every baseline this scenario reads/writes is unaffected: the
+//! narrowed default only changes which of the existing
+//! `tests/visual/baselines/gold-journey/<viewport>-<checkpoint>.png` files
+//! get exercised on a given run, never their contents or names. This is a
+//! deliberately temporary scope (see issue #284's body) -- reactivating the
+//! broader coverage is a one-line env var, not a code change.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -199,7 +222,7 @@ struct ViewportSpec {
 /// the cost of the naming convention being non-uniform (`desktop` implies
 /// DPR 1; `desktop-dpr2` is explicit). See `xtask/README.md`'s "web-smoke
 /// --all"/matrix section for the full table.
-const VIEWPORTS: &[ViewportSpec] = &[
+const FULL_VIEWPORTS: &[ViewportSpec] = &[
     ViewportSpec {
         name: "desktop",
         width: 1280,
@@ -237,6 +260,45 @@ const VIEWPORTS: &[ViewportSpec] = &[
         dpr: 3.0,
     },
 ];
+
+/// #284's narrowed default: the single `desktop` (1280x800 @ DPR 1) entry
+/// from [`FULL_VIEWPORTS`], covering the five [`CHECKPOINTS`] screens at the
+/// one viewport the active development/CI feedback loop currently exercises.
+/// See "Desktop-only default scope (#284)" in the module docs above.
+const ACTIVE_VIEWPORTS: &[ViewportSpec] = &[ViewportSpec {
+    name: "desktop",
+    width: 1280,
+    height: 800,
+    dpr: 1.0,
+}];
+
+/// Set to `1`/`true` (case-insensitive; anything else, including unset, is
+/// treated as not-enabled) to opt into the full six-viewport [`FULL_VIEWPORTS`]
+/// matrix instead of the narrowed [`ACTIVE_VIEWPORTS`] default -- the #284
+/// reactivation path. Read by [`active_viewports`].
+const FULL_MATRIX_ENV_VAR: &str = "XTASK_WEB_SMOKE_GOLD_JOURNEY_FULL_MATRIX";
+
+/// Pure selection logic behind [`active_viewports`], split out so it can be
+/// unit-tested without mutating the process-wide environment (tests run
+/// concurrently in the same process, so racing `std::env::set_var` calls
+/// would be flaky -- same reasoning as `crate::process::resolve_budget_ms`).
+fn resolve_viewports(full_matrix_env: Option<&str>) -> &'static [ViewportSpec] {
+    let full_matrix_requested = full_matrix_env
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if full_matrix_requested {
+        FULL_VIEWPORTS
+    } else {
+        ACTIVE_VIEWPORTS
+    }
+}
+
+/// The viewport set this run actually walks: [`ACTIVE_VIEWPORTS`] (desktop
+/// DPR 1 only) by default, or the full [`FULL_VIEWPORTS`] matrix when
+/// [`FULL_MATRIX_ENV_VAR`] is set to `1`/`true` (#284).
+fn active_viewports() -> &'static [ViewportSpec] {
+    resolve_viewports(std::env::var(FULL_MATRIX_ENV_VAR).ok().as_deref())
+}
 
 /// One semantic checkpoint: its name, the `GameState` it must observe
 /// (`review::publish_current_screen`'s exact `Debug` output), and any
@@ -288,16 +350,23 @@ pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError
             artifacts::scenario_dir(SCENARIO),
         )
     })?;
+    let viewports = active_viewports();
     println!(
-        "gold-journey: serving dist-gold-journey/ at {} ({} viewport(s) x {} screen(s) = {} checkpoint(s))",
+        "gold-journey: serving dist-gold-journey/ at {} ({} viewport(s) x {} screen(s) = {} checkpoint(s){})",
         server.base_url(),
-        VIEWPORTS.len(),
+        viewports.len(),
         CHECKPOINTS.len(),
-        VIEWPORTS.len() * CHECKPOINTS.len()
+        viewports.len() * CHECKPOINTS.len(),
+        if viewports.len() == FULL_VIEWPORTS.len() {
+            ""
+        } else {
+            " -- desktop-only default (#284); set \
+             XTASK_WEB_SMOKE_GOLD_JOURNEY_FULL_MATRIX=1 for the full matrix"
+        }
     );
 
     let mut missing_baseline = false;
-    for viewport in VIEWPORTS {
+    for viewport in viewports {
         run_viewport_journey(
             viewport,
             &server,
@@ -310,7 +379,7 @@ pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError
     if update_baselines {
         println!(
             "\ngold-journey: baselines updated at tests/visual/baselines/{SCENARIO}/ for {} checkpoint(s).",
-            CHECKPOINTS.len() * VIEWPORTS.len()
+            CHECKPOINTS.len() * viewports.len()
         );
     } else if missing_baseline {
         println!(
@@ -1008,5 +1077,82 @@ fn check_screenshot_pixels(
             "screenshot is >90% plain white ({white_pixels}/{total} px) -- panel artwork/text likely \
              fell back to an untextured white placeholder"
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // These tests exercise `resolve_viewports` -- the pure selection logic
+    // -- directly, never the `XTASK_WEB_SMOKE_GOLD_JOURNEY_FULL_MATRIX` env
+    // var itself, so they can't race with anything else in the test binary
+    // that touches the process environment (see `resolve_viewports`'s doc
+    // comment for why).
+
+    #[test]
+    fn default_selection_is_desktop_dpr1_only() {
+        let viewports = resolve_viewports(None);
+        assert_eq!(viewports.len(), 1, "#284: default must be desktop-only");
+        assert_eq!(viewports[0].name, "desktop");
+        assert_eq!(viewports[0].width, 1280);
+        assert_eq!(viewports[0].height, 800);
+        assert_eq!(viewports[0].dpr, 1.0);
+    }
+
+    #[test]
+    fn falsy_or_unrecognized_env_values_stay_narrowed() {
+        for value in [None, Some("0"), Some("false"), Some(""), Some("nonsense")] {
+            let viewports = resolve_viewports(value);
+            assert_eq!(
+                viewports.len(),
+                1,
+                "env value {value:?} should not activate the full matrix"
+            );
+            assert_eq!(viewports[0].name, "desktop");
+        }
+    }
+
+    #[test]
+    fn full_matrix_opt_in_restores_all_six_viewports() {
+        for value in ["1", "true", "TRUE", "True"] {
+            let viewports = resolve_viewports(Some(value));
+            assert_eq!(
+                viewports.len(),
+                6,
+                "env value {value:?} should activate the full #198 matrix"
+            );
+            let names: Vec<&str> = viewports.iter().map(|v| v.name).collect();
+            assert_eq!(
+                names,
+                vec![
+                    "desktop",
+                    "desktop-dpr2",
+                    "desktop-dpr3",
+                    "phone",
+                    "phone-dpr2",
+                    "phone-dpr3",
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn full_matrix_dprs_match_the_documented_table() {
+        let viewports = resolve_viewports(Some("1"));
+        let dprs: Vec<f64> = viewports.iter().map(|v| v.dpr).collect();
+        assert_eq!(dprs, vec![1.0, 2.0, 3.0, 1.0, 2.0, 3.0]);
+    }
+
+    /// Pins acceptance criterion "the current-screen gold journey remains
+    /// covered": narrowing the viewport matrix must never touch which
+    /// screens this scenario visits.
+    #[test]
+    fn all_five_current_screens_remain_checkpoints() {
+        let names: Vec<&str> = CHECKPOINTS.iter().map(|c| c.name).collect();
+        assert_eq!(
+            names,
+            vec!["menu", "creation", "fight", "fight-result", "shop"]
+        );
     }
 }
