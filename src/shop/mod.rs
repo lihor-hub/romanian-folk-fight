@@ -405,6 +405,17 @@ fn spawn_shop_screen(
     let icons = &*assets.icons;
     let appearance = player_appearance(player.as_deref());
     let attributes = player_attributes(player.as_deref());
+    // The brown backdrop is a world-space sprite behind the preview rig
+    // (z -40 < SHOP_PREVIEW_Z), not a `BackgroundColor` on the UI root: the
+    // UI pass composites over the world pass as one layer, so a full-screen
+    // UI fill would hide the world-rendered rig no matter what the preview
+    // stage itself does (#273) -- the same backdrop treatment the creation
+    // screen uses.
+    commands.spawn((
+        ShopScreen,
+        Sprite::from_color(ARENA_BROWN, Vec2::new(LOGICAL_WIDTH, LOGICAL_HEIGHT)),
+        Transform::from_xyz(0.0, 0.0, -40.0),
+    ));
     commands
         .spawn((
             ShopScreen,
@@ -418,7 +429,6 @@ fn spawn_shop_screen(
                 overflow: Overflow::scroll_y(),
                 ..default()
             },
-            BackgroundColor(ARENA_BROWN),
             ScrollPosition::default(),
             crate::ui_widgets::Scrollable,
             // #216: one shared focus region for the whole shop screen
@@ -1665,6 +1675,38 @@ mod tests {
         assert!(
             app.world().get::<ImageNode>(stage).is_none(),
             "the preview stage must not carry panel_bundle's opaque 9-slice image"
+        );
+
+        // The whole *ancestor chain* matters, not just the stage itself: the
+        // UI pass composites over the world pass as one layer, so a fill on
+        // the screen root (or any container above the stage) hides the rig
+        // exactly like a fill on the frame would -- the shop's original
+        // full-screen `BackgroundColor(ARENA_BROWN)` root did precisely
+        // that. The brown backdrop must come from a world-space sprite
+        // behind the rig instead (see the assertion below), the same way
+        // the creation screen's does.
+        let mut ancestor = stage;
+        while let Some(child_of) = app.world().get::<ChildOf>(ancestor) {
+            ancestor = child_of.parent();
+            assert_eq!(
+                background_alpha(&app, ancestor),
+                0.0,
+                "no ancestor of the preview stage may paint over the world-rendered rig"
+            );
+            assert!(
+                app.world().get::<ImageNode>(ancestor).is_none(),
+                "no ancestor of the preview stage may carry an opaque image fill"
+            );
+        }
+        let world_backdrop_exists = app
+            .world_mut()
+            .query_filtered::<&Sprite, With<ShopScreen>>()
+            .iter(app.world())
+            .any(|sprite| sprite.color == ARENA_BROWN);
+        assert!(
+            world_backdrop_exists,
+            "the shop's brown backdrop must be a world-space sprite behind the rig, \
+             not a UI fill over it"
         );
 
         let children: Vec<Entity> = app
