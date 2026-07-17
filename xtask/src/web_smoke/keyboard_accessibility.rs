@@ -86,7 +86,8 @@
 //!    closure polls for the *exact* fact the activation is supposed to
 //!    produce -- a named screen ([`wait_for_screen`]), a specific flipped
 //!    label ([`wait_for_label`]), an overlay's first control autofocusing
-//!    ([`wait_for_overlay_open`]), or focus moving off the entity that was
+//!    (its own dedicated funnel, [`open_overlay_from`], since #309), or
+//!    focus moving off the entity that was
 //!    just activated ([`wait_for_focus_to_move_off`]) -- never "the
 //!    snapshot changed at all" (see [`press_key_and_wait_for_change`]'s own
 //!    doc comment for why that weaker check is exactly the shape of #270's
@@ -142,6 +143,11 @@ const DRAIN_MAX_FRAMES: usize = 60;
 /// quiesced -- see that function's doc comment for why one unchanged frame
 /// is not enough.
 const DRAIN_STABLE_FRAMES_REQUIRED: usize = 3;
+/// Additional frames [`open_overlay_from`] keeps waiting for an overlay's
+/// first-control autofocus once the overlay is *provably* present
+/// ([`overlay_appeared`]) -- widened patience for a late-settling autofocus
+/// under runner load, never a blind retry (see that function's doc comment).
+const OVERLAY_AUTOFOCUS_EXTRA_FRAMES: usize = 240;
 
 pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
     if update_baselines {
@@ -656,10 +662,11 @@ fn drain_pending_input(checkpoint: &Checkpoint) -> Result<(), String> {
 /// screen, an exact focused label, focus having moved off a named entity,
 /// ...), never "the snapshot changed at all" -- seeded a bounded loop of the
 /// caller's choosing, since what counts as "done" differs per call site
-/// (some open something and must confirm a new autofocus target, others
+/// (some flip something in place and must confirm the new label, others
 /// close something and must confirm focus left; see [`wait_for_screen`],
-/// [`wait_for_label`], [`wait_for_overlay_open`], and
-/// [`wait_for_focus_to_move_off`] for this module's four such predicates).
+/// [`wait_for_label`], and [`wait_for_focus_to_move_off`] -- overlay
+/// *opens* have their own dedicated funnel with a different recovery
+/// discipline, [`open_overlay_from`], see #309).
 ///
 /// ## One bounded retry for a provably-lost press (#305's CI failures)
 ///
@@ -804,49 +811,125 @@ fn wait_for_label(checkpoint: &Checkpoint, expected: &str) -> Result<(), String>
     ))
 }
 
-/// [`navigate_and_activate`]/[`activate_focused_control`] outcome for opening
-/// a modal overlay (settings or pause): waits for the overlay's own first
-/// control to actually autofocus, identified by its exact rendered label
-/// (the settings panel's first stepper's `-` button, per
-/// `settings::spawn_overlay`'s spawn order, or the pause panel's **Continuă
-/// lupta**, per `combat::pause::spawn_overlay`'s), then confirms the
-/// underlying `GameState` did not change (opening either overlay is a
-/// `Resource` insert, never a state transition).
+/// The one hardened "open a modal overlay (settings or pause) and prove its
+/// first control autofocused" funnel, replacing the former
+/// `wait_for_overlay_open` outcome (#309's second CI failure, on PR #310's
+/// own run): settles focus on `control_label` (skipping navigation when a
+/// previous step already left focus there, e.g. the fight lap ending on the
+/// ⏸ button), drains input, presses `Enter`, then classifies what actually
+/// happened using the snapshot's focusable-target count as overlay-presence
+/// evidence ([`overlay_appeared`] -- both overlays add a whole panel of
+/// focusable controls, so a strictly grown count is proof the overlay
+/// spawned even while its autofocus is still settling):
 ///
-/// Waiting for the specific first-control label -- not a looser "some label
-/// changed" or a fixed settle -- is what actually proves the overlay's own
-/// autofocus system has run, replacing this module's previous settings-open
-/// check (`l.starts_with("Muzică") || l == "-"`, which accepted a label
-/// ("Muzică") no focused control could ever actually render, since it names
-/// the stepper row's static, non-focusable text rather than either of its
-/// buttons' own direct-child labels) and its previous pause-open check
-/// (a loop that silently fell through without erroring if **Continuă
-/// lupta** never autofocused within budget).
-fn wait_for_overlay_open(
+/// - **Autofocus observed** (`focused_label == first_control_label`): done,
+///   after confirming the `GameState` did not change (opening either overlay
+///   is a `Resource` insert, never a state transition).
+/// - **Overlay present, autofocus late**: the wait widens once, by
+///   [`OVERLAY_AUTOFOCUS_EXTRA_FRAMES`], instead of retrying -- pressing
+///   `Enter` again here would activate whatever control the late autofocus
+///   lands on. The game side lands autofocus within a frame or two of
+///   processing the press (`settings`/`combat::pause` chain spawn +
+///   autofocus with a `PendingAutofocus` retry), so this case is pure
+///   runner-load patience, per the #292 settle discipline.
+/// - **Overlay provably absent and the screen unchanged**: the opening press
+///   was lost, or a still-in-flight navigation key from before the drain
+///   window diverted it within the parent group (CI evidence on PR #310:
+///   `enter_press_left_no_trace`'s entity+label guard saw the ghost
+///   movement as a landed press and refused to retry, leaving the bare
+///   120-frame timeout). Both are safely recoverable the same way: one full
+///   re-navigate (arrows only move focus) and one fresh `Enter`.
+/// - **Screen changed**: the activation landed somewhere real (a genuinely
+///   diverted `Enter` onto a screen-changing control) -- never retried, the
+///   journey fails loudly with the observed screen.
+///
+/// Every timeout error embeds the last observed snapshot, so a CI-only
+/// recurrence diagnoses itself instead of reporting a bare frame count.
+fn open_overlay_from(
     checkpoint: &Checkpoint,
+    control_label: &str,
     first_control_label: &str,
     parent_screen: &str,
 ) -> Result<(), String> {
-    for _ in 0..SETTLE_MAX_FRAMES {
-        checkpoint.wait_for_frame()?;
-        if let Some(snapshot) = read_accessibility(checkpoint)?
-            && snapshot.focused_label.as_deref() == Some(first_control_label)
-        {
-            let screen = read_screen(checkpoint)?;
-            return if screen.as_deref() == Some(parent_screen) {
-                Ok(())
-            } else {
-                Err(format!(
-                    "opening the overlay must not change the GameState (still {parent_screen}), \
-                     observed {screen:?}"
-                ))
-            };
+    let mut first_attempt_error = String::new();
+    for attempt in 0..2 {
+        let already_focused = read_accessibility(checkpoint)?
+            .and_then(|snapshot| snapshot.focused_label)
+            .is_some_and(|label| label == control_label);
+        if !already_focused {
+            press_arrow_until_label(checkpoint, control_label)?;
         }
+        drain_pending_input(checkpoint)?;
+        let before_targets = read_accessibility(checkpoint)?.map_or(0, |s| s.targets.len());
+        checkpoint.press_key("Enter")?;
+
+        let mut budget = SETTLE_MAX_FRAMES;
+        let mut overlay_seen = false;
+        let mut last: Option<AccessibilitySnapshot> = None;
+        let mut frame = 0;
+        while frame < budget {
+            checkpoint.wait_for_frame()?;
+            frame += 1;
+            let snapshot = read_accessibility(checkpoint)?;
+            if let Some(current) = &snapshot {
+                if !overlay_seen && overlay_appeared(before_targets, current) {
+                    overlay_seen = true;
+                    budget = SETTLE_MAX_FRAMES + OVERLAY_AUTOFOCUS_EXTRA_FRAMES;
+                }
+                if current.focused_label.as_deref() == Some(first_control_label) {
+                    let screen = read_screen(checkpoint)?;
+                    return if screen.as_deref() == Some(parent_screen) {
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "opening the overlay must not change the GameState (still \
+                             {parent_screen}), observed {screen:?}"
+                        ))
+                    };
+                }
+            }
+            last = snapshot;
+        }
+
+        let screen = read_screen(checkpoint)?;
+        if screen.as_deref() != Some(parent_screen) {
+            return Err(format!(
+                "activating {control_label:?} changed the screen to {screen:?} instead of \
+                 opening the overlay over {parent_screen} -- a diverted activation this \
+                 harness must never retry (last snapshot: {last:?})"
+            ));
+        }
+        if overlay_seen {
+            return Err(format!(
+                "the overlay appeared (focusable targets grew past {before_targets}) but its \
+                 first control ({first_control_label:?}) never autofocused within {budget} \
+                 frames (last snapshot: {last:?})"
+            ));
+        }
+        let error = format!(
+            "the overlay never appeared after activating {control_label:?} (focusable targets \
+             stayed at {before_targets} for {budget} frames; last snapshot: {last:?})"
+        );
+        if attempt == 0 {
+            first_attempt_error = error;
+            continue;
+        }
+        return Err(format!(
+            "{error} (after one full re-navigate-and-activate retry; first attempt: \
+             {first_attempt_error})"
+        ));
     }
-    Err(format!(
-        "the overlay never autofocused its first control ({first_control_label:?}) within \
-         {SETTLE_MAX_FRAMES} frames"
-    ))
+    unreachable!("the attempt loop above always returns within two iterations")
+}
+
+/// Pure decision behind [`open_overlay_from`]'s presence classification: the
+/// overlay is provably on screen once the snapshot lists strictly more
+/// focusable targets than were published just before the opening press --
+/// the settings panel adds eight controls and the pause panel three, and
+/// nothing else spawns focusables while the journey sits on a settled,
+/// time-frozen screen. Equal or fewer targets prove nothing appeared.
+fn overlay_appeared(before_targets: usize, current: &AccessibilitySnapshot) -> bool {
+    current.targets.len() > before_targets
 }
 
 /// The mute toggle's label after flipping, given its current rendered label
@@ -898,13 +981,10 @@ fn exercise_settings_overlay(
     // Opening the overlay is not a `GameState` change; the overlay's own
     // autofocus must land on its first control (the Muzică stepper's `-`
     // button, see `settings::spawn_overlay`'s spawn order) before this
-    // function is willing to walk its controls -- see `navigate_and_activate`
-    // and `wait_for_overlay_open`'s doc comments for why this replaced a
-    // looser "some label starting with Muzică or -" check plus a separate,
-    // unretried `GameState` read.
-    navigate_and_activate(checkpoint, "Setări", |checkpoint, _before| {
-        wait_for_overlay_open(checkpoint, "-", parent_screen)
-    })?;
+    // function is willing to walk its controls -- see `open_overlay_from`'s
+    // doc comment for the presence-classified wait and the one safe
+    // re-navigate retry behind this (#309).
+    open_overlay_from(checkpoint, "Setări", "-", parent_screen)?;
 
     let lap = walk_full_lap(checkpoint, MAX_LAP_PRESSES)?;
     assert_full_coverage("Settings", &lap)?;
@@ -979,12 +1059,11 @@ fn exercise_fight(checkpoint: &Checkpoint, notes: &mut Vec<String>) -> Result<()
     ));
 
     // `walk_full_lap` leaves live focus back on `lap[0]` (the ⏸ button) once
-    // it returns -- open the pause overlay for real from there. No
-    // navigation needed (focus is already on the ⏸ button), so this uses
-    // `activate_focused_control` directly rather than `navigate_and_activate`.
-    activate_focused_control(checkpoint, |checkpoint, _before| {
-        wait_for_overlay_open(checkpoint, "Continuă lupta", "Fight")
-    })?;
+    // it returns -- open the pause overlay for real from there.
+    // `open_overlay_from` sees focus already sitting on "||" and skips its
+    // navigation step, so this stays a plain "Enter on the ⏸ button" with
+    // the same presence-classified wait the settings opens get (#309).
+    open_overlay_from(checkpoint, "||", "Continuă lupta", "Fight")?;
 
     let pause_lap = walk_full_lap(checkpoint, MAX_LAP_PRESSES)?;
     assert_full_coverage("Pause", &pause_lap)?;
@@ -1113,6 +1192,51 @@ mod tests {
         assert!(!enter_press_left_no_trace(&None, &some));
         assert!(!enter_press_left_no_trace(&some, &None));
         assert!(!enter_press_left_no_trace(&None, &None));
+    }
+
+    // `overlay_appeared` -- the pure presence classification behind
+    // `open_overlay_from` (#309's second CI failure): the overlay is only
+    // provably on screen once strictly more focusable targets are published
+    // than before the opening press.
+
+    fn snapshot_with_targets(count: usize) -> AccessibilitySnapshot {
+        AccessibilitySnapshot {
+            focused_entity: Some("9v0".to_string()),
+            focused_label: Some("Abandonează".to_string()),
+            focus_marker_visible: true,
+            targets: vec![
+                TargetRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 48.0,
+                    height: 48.0,
+                };
+                count
+            ],
+            min_target_size: 44.0,
+        }
+    }
+
+    #[test]
+    fn strictly_more_targets_prove_the_overlay_appeared() {
+        // Pause panel (3) -> settings overlay adds its 8 controls.
+        assert!(overlay_appeared(3, &snapshot_with_targets(11)));
+        // Even a partially spawned overlay (one extra control so far) is
+        // presence evidence -- from there on, patience, never a retry.
+        assert!(overlay_appeared(3, &snapshot_with_targets(4)));
+    }
+
+    #[test]
+    fn an_unchanged_target_count_proves_nothing_appeared() {
+        // Focus may have drifted (a ghost in-flight arrow key), but with the
+        // same three pause-panel controls published, no overlay exists --
+        // this is the exact CI shape that must re-navigate and retry.
+        assert!(!overlay_appeared(3, &snapshot_with_targets(3)));
+    }
+
+    #[test]
+    fn fewer_targets_prove_nothing_appeared_either() {
+        assert!(!overlay_appeared(3, &snapshot_with_targets(2)));
     }
 
     // `advance_stable_streak` -- the pure decision behind `drain_pending_input`
