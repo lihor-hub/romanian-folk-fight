@@ -57,8 +57,26 @@ jobs:
     - name: Run cargo clippy
       run: cargo clippy --all-targets -- -D warnings
 
+    # #294: `src/review/mod.rs` (the review-feature browser-harness seam,
+    # #187) is `#![cfg(feature = "review")]`-gated with no `cfg(test)`
+    # escape hatch, so it and its 23 tests are invisible to the two steps
+    # above -- mirrors the same review-feature clippy/test pair
+    # `cargo xtask pre-push` runs locally (xtask/src/commands/pre_push.rs),
+    # so the local gate and CI stay equivalent. Kept as its own step rather
+    # than folded into the one above so a regression only visible without
+    # the feature (the configuration every shipped build/the step above
+    # actually uses) is never masked by only ever linting with it on.
+    - name: Run cargo clippy (review feature)
+      run: cargo clippy --all-targets --features review -- -D warnings
+
     - name: Run cargo test
       run: cargo test
+
+    # #294: see the "review feature" clippy step above -- same reasoning,
+    # this is the only CI step that actually compiles and runs
+    # `src/review/mod.rs`'s 23 tests.
+    - name: Run cargo test (review feature)
+      run: cargo test --features review
 
   wasm_build:
     name: Build WASM
