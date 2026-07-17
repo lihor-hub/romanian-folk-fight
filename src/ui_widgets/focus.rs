@@ -79,6 +79,7 @@ pub use bevy::input_focus::tab_navigation::{NavAction, TabGroup, TabIndex, TabNa
 pub use bevy::input_focus::{FocusCause, InputFocus};
 use bevy::prelude::*;
 
+use crate::core::logical_node_rect;
 use crate::theme::GOLD;
 
 /// Width of the rendered focus ring, in logical px.
@@ -348,14 +349,15 @@ fn activate_focused_control(
 /// are pointer inputs; without this, a keyboard-only player tabbing to an
 /// off-screen control would move an invisible focus marker.
 ///
-/// Both rects come from the same live layout values
-/// (`ComputedNode`/`UiGlobalTransform`, physical px scaled back to logical
-/// by the node's own `inverse_scale_factor`), which already reflect the
-/// *current* scroll offset -- so the delta between the control's box and
-/// the container's visible box is exactly how far the scroll must move.
-/// Bevy UI's layout system clamps an out-of-range `ScrollPosition` back
-/// into range on its own. Runs only on an actual focus change; a fully
-/// visible control never mutates the scroll (no change-detection noise).
+/// Both rects come from the same live layout values, via
+/// [`logical_node_rect`] (`ComputedNode`/`UiGlobalTransform`, physical px
+/// scaled back to logical by the node's own `inverse_scale_factor`), which
+/// already reflect the *current* scroll offset -- so the delta between the
+/// control's box and the container's visible box is exactly how far the
+/// scroll must move. Bevy UI's layout system clamps an out-of-range
+/// `ScrollPosition` back into range on its own. Runs only on an actual focus
+/// change; a fully visible control never mutates the scroll (no
+/// change-detection noise).
 fn scroll_focused_into_view(
     focus: Res<InputFocus>,
     parents: Query<&ChildOf>,
@@ -369,8 +371,7 @@ fn scroll_focused_into_view(
     let Ok((node, transform)) = nodes.get(focused) else {
         return;
     };
-    let scale = node.inverse_scale_factor();
-    let target = Rect::from_center_size(transform.translation * scale, node.size() * scale);
+    let target = logical_node_rect(transform, node);
 
     let mut current = focused;
     while let Ok(child_of) = parents.get(current) {
@@ -379,11 +380,7 @@ fn scroll_focused_into_view(
         else {
             continue;
         };
-        let container_scale = container_node.inverse_scale_factor();
-        let container = Rect::from_center_size(
-            container_transform.translation * container_scale,
-            container_node.size() * container_scale,
-        );
+        let container = logical_node_rect(container_transform, container_node);
         let delta_y = if target.max.y > container.max.y {
             target.max.y - container.max.y
         } else if target.min.y < container.min.y {
