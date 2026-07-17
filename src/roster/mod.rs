@@ -6,21 +6,27 @@
 //! ("Turul 2", "Turul 3", ...).
 //!
 //! Attribute budgets are enforced by tests: a non-boss opponent of level `L`
-//! carries `4 + 3 * L` total attribute points, a boss `4 + 4 * L`. The
-//! spreads themselves are data, tuned per creature flavor.
+//! carries `7 + 5 * L` total attribute points, a boss `7 + 6 * L`. The
+//! spreads themselves are data, tuned per creature flavor. #128 widened the
+//! budgets from the four-attribute era (`4 + 3 * L` / `4 + 4 * L`) alongside
+//! the player's own pools (`creation::FREE_POINTS`,
+//! `progression::POINTS_PER_LEVEL`), keeping the opponent-to-player total
+//! ratio close to its pre-#128 curve; #149 may retune.
 
 use bevy::prelude::*;
 
-use crate::character::Attributes;
+use crate::character::{AttributeKind, Attributes};
 use crate::cutout::CutoutTemplate;
 use crate::items::ItemId;
 
-/// Base attribute points every fighter starts from (1 per attribute).
-const BUDGET_BASE: u32 = 4;
+/// Base attribute points every fighter starts from — the sum of the eight
+/// per-kind base values ([`AttributeKind::base_total`]: seven 1s plus magie
+/// 0), pinned by a test below.
+const BUDGET_BASE: u32 = 7;
 /// Attribute points per level for a non-boss opponent.
-const POINTS_PER_LEVEL: u32 = 3;
+const POINTS_PER_LEVEL: u32 = 5;
 /// Attribute points per level for a boss.
-const BOSS_POINTS_PER_LEVEL: u32 = 4;
+const BOSS_POINTS_PER_LEVEL: u32 = 6;
 /// Extra attribute-total percent per completed lap of the ladder.
 const LAP_BONUS_PERCENT: u32 = 20;
 
@@ -54,15 +60,14 @@ pub struct Opponent {
     pub accent_hue: Color,
 }
 
-/// Shorthand for a ladder entry; keeps the [`LADDER`] table readable.
+/// Shorthand for a ladder entry; keeps the [`LADDER`] table readable. The
+/// spread comes in as a named-field [`Attributes`] literal (#128: positional
+/// numbers stopped being readable at eight attributes).
 #[allow(clippy::too_many_arguments)]
 const fn opponent(
     name: &'static str,
     level: u32,
-    putere: u32,
-    agilitate: u32,
-    vitalitate: u32,
-    noroc: u32,
+    attrs: Attributes,
     aggression: f32,
     equipment: &'static [ItemId],
     cutout_template: CutoutTemplate,
@@ -73,12 +78,7 @@ const fn opponent(
     Opponent {
         name,
         level,
-        attrs: Attributes {
-            putere,
-            agilitate,
-            vitalitate,
-            noroc,
-        },
+        attrs,
         aggression,
         equipment,
         cutout_template,
@@ -112,10 +112,16 @@ pub static LADDER: [Opponent; 10] = [
     opponent(
         "Hoț de codru",
         1,
-        2,
-        2,
-        2,
-        1,
+        Attributes {
+            putere: 2,
+            agilitate: 2,
+            vitalitate: 2,
+            noroc: 1,
+            atac: 2,
+            aparare: 1,
+            carisma: 1,
+            magie: 1,
+        },
         0.25,
         &[],
         CutoutTemplate::Human,
@@ -126,10 +132,16 @@ pub static LADDER: [Opponent; 10] = [
     opponent(
         "Strigoi",
         2,
-        2,
-        4,
-        2,
-        2,
+        Attributes {
+            putere: 2,
+            agilitate: 4,
+            vitalitate: 2,
+            noroc: 2,
+            atac: 3,
+            aparare: 2,
+            carisma: 1,
+            magie: 1,
+        },
         0.5,
         &[],
         CutoutTemplate::Enemy,
@@ -140,10 +152,16 @@ pub static LADDER: [Opponent; 10] = [
     opponent(
         "Vârcolac",
         3,
-        4,
-        4,
-        3,
-        2,
+        Attributes {
+            putere: 4,
+            agilitate: 4,
+            vitalitate: 3,
+            noroc: 2,
+            atac: 5,
+            aparare: 2,
+            carisma: 1,
+            magie: 1,
+        },
         0.8,
         &[],
         CutoutTemplate::Enemy,
@@ -154,10 +172,16 @@ pub static LADDER: [Opponent; 10] = [
     opponent(
         "Căpcăun",
         4,
-        7,
-        2,
-        5,
-        2,
+        Attributes {
+            putere: 7,
+            agilitate: 2,
+            vitalitate: 5,
+            noroc: 2,
+            atac: 4,
+            aparare: 5,
+            carisma: 1,
+            magie: 1,
+        },
         0.6,
         &[],
         CutoutTemplate::Enemy,
@@ -168,10 +192,16 @@ pub static LADDER: [Opponent; 10] = [
     opponent(
         "Muma Pădurii",
         5,
-        4,
-        3,
-        9,
-        8,
+        Attributes {
+            putere: 4,
+            agilitate: 3,
+            vitalitate: 9,
+            noroc: 6,
+            atac: 3,
+            aparare: 5,
+            carisma: 3,
+            magie: 4,
+        },
         0.45,
         &[],
         CutoutTemplate::Boss,
@@ -182,10 +212,16 @@ pub static LADDER: [Opponent; 10] = [
     opponent(
         "Iele",
         6,
-        4,
-        10,
-        4,
-        4,
+        Attributes {
+            putere: 4,
+            agilitate: 8,
+            vitalitate: 4,
+            noroc: 4,
+            atac: 5,
+            aparare: 4,
+            carisma: 4,
+            magie: 4,
+        },
         0.55,
         &[],
         CutoutTemplate::Enemy,
@@ -196,10 +232,16 @@ pub static LADDER: [Opponent; 10] = [
     opponent(
         "Solomonar",
         7,
-        6,
-        5,
-        6,
-        8,
+        Attributes {
+            putere: 5,
+            agilitate: 4,
+            vitalitate: 6,
+            noroc: 6,
+            atac: 5,
+            aparare: 4,
+            carisma: 4,
+            magie: 8,
+        },
         0.5,
         &[],
         CutoutTemplate::Human,
@@ -210,10 +252,16 @@ pub static LADDER: [Opponent; 10] = [
     opponent(
         "Balaur cu trei capete",
         8,
-        10,
-        4,
-        10,
-        4,
+        Attributes {
+            putere: 9,
+            agilitate: 4,
+            vitalitate: 9,
+            noroc: 4,
+            atac: 8,
+            aparare: 8,
+            carisma: 2,
+            magie: 3,
+        },
         0.7,
         &[],
         CutoutTemplate::Boss,
@@ -224,10 +272,16 @@ pub static LADDER: [Opponent; 10] = [
     opponent(
         "Zmeu",
         9,
-        9,
-        8,
-        8,
-        6,
+        Attributes {
+            putere: 9,
+            agilitate: 7,
+            vitalitate: 8,
+            noroc: 5,
+            atac: 9,
+            aparare: 8,
+            carisma: 4,
+            magie: 2,
+        },
         0.85,
         &[ItemId::Palos],
         CutoutTemplate::Boss,
@@ -238,10 +292,16 @@ pub static LADDER: [Opponent; 10] = [
     opponent(
         "Zmeul Zmeilor",
         10,
-        12,
-        10,
-        12,
-        10,
+        Attributes {
+            putere: 11,
+            agilitate: 8,
+            vitalitate: 11,
+            noroc: 8,
+            atac: 10,
+            aparare: 9,
+            carisma: 5,
+            magie: 5,
+        },
         0.75,
         &[ItemId::BuzduganCuTreiPeceti, ItemId::CamasaDeZale],
         CutoutTemplate::Boss,
@@ -251,8 +311,9 @@ pub static LADDER: [Opponent; 10] = [
     ),
 ];
 
-/// The attribute-point budget of an opponent: `4 + 3 * level` for regular
-/// creatures, `4 + 4 * level` for bosses.
+/// The attribute-point budget of an opponent: `7 + 5 * level` for regular
+/// creatures, `7 + 6 * level` for bosses (#128 widened both, see the module
+/// docs).
 pub fn attribute_budget(level: u32, is_boss: bool) -> u32 {
     let per_level = if is_boss {
         BOSS_POINTS_PER_LEVEL
@@ -262,25 +323,24 @@ pub fn attribute_budget(level: u32, is_boss: bool) -> u32 {
     BUDGET_BASE + per_level * level
 }
 
-/// Total attribute points of a spread.
+/// Total attribute points of a spread, over all eight kinds.
 pub fn attribute_total(attrs: &Attributes) -> u32 {
-    attrs.putere + attrs.agilitate + attrs.vitalitate + attrs.noroc
+    attrs.total()
 }
 
 /// Scales `base` for the given 1-based `lap`: the attribute total grows by
 /// [`LAP_BONUS_PERCENT`] per completed lap, rounded half-up, and the growth
 /// is distributed over the attributes by largest remainder (ties resolved in
-/// putere, agilitate, vitalitate, noroc order), so the scaled total always
-/// matches the rounded target exactly. Lap 1 is the identity.
+/// [`AttributeKind::ALL`] order), so the scaled total always matches the
+/// rounded target exactly. Lap 1 is the identity.
 pub fn scaled_attributes(base: &Attributes, lap: u32) -> Attributes {
     // Float-free integer math: the multiplier is `numerator / 100`.
     let numerator = (100 + LAP_BONUS_PERCENT * lap.saturating_sub(1)) as u64;
-    let scaled = [base.putere, base.agilitate, base.vitalitate, base.noroc]
-        .map(|value| value as u64 * numerator);
+    let scaled = AttributeKind::ALL.map(|kind| base.get(kind) as u64 * numerator);
     let target = (scaled.iter().sum::<u64>() + 50) / 100;
     let mut values = scaled.map(|value| value / 100);
     let mut extra = target - values.iter().sum::<u64>();
-    let mut order = [0usize, 1, 2, 3];
+    let mut order = [0usize, 1, 2, 3, 4, 5, 6, 7];
     order.sort_by_key(|&i| std::cmp::Reverse(scaled[i] % 100));
     for &i in &order {
         if extra == 0 {
@@ -289,12 +349,11 @@ pub fn scaled_attributes(base: &Attributes, lap: u32) -> Attributes {
         values[i] += 1;
         extra -= 1;
     }
-    Attributes {
-        putere: values[0] as u32,
-        agilitate: values[1] as u32,
-        vitalitate: values[2] as u32,
-        noroc: values[3] as u32,
+    let mut result = Attributes::default();
+    for (index, kind) in AttributeKind::ALL.into_iter().enumerate() {
+        *result.get_mut(kind) = values[index] as u32;
     }
+    result
 }
 
 /// Marker (plus intro line) for a boss fighter entity: the arena attaches it
@@ -427,10 +486,18 @@ mod tests {
 
     #[test]
     fn the_budget_formulas_match_the_spec() {
-        assert_eq!(attribute_budget(1, false), 7, "4 + 3 * 1");
-        assert_eq!(attribute_budget(9, false), 31);
-        assert_eq!(attribute_budget(5, true), 24, "4 + 4 * 5");
-        assert_eq!(attribute_budget(10, true), 44);
+        assert_eq!(attribute_budget(1, false), 12, "7 + 5 * 1");
+        assert_eq!(attribute_budget(9, false), 52);
+        assert_eq!(attribute_budget(5, true), 37, "7 + 6 * 5");
+        assert_eq!(attribute_budget(10, true), 67);
+    }
+
+    /// [`BUDGET_BASE`] is defined as "every fighter's unallocated total";
+    /// this pins it to the character model's own base values so the two
+    /// can't drift apart silently.
+    #[test]
+    fn the_budget_base_matches_the_character_models_base_total() {
+        assert_eq!(BUDGET_BASE, AttributeKind::base_total());
     }
 
     #[test]
@@ -562,16 +629,21 @@ mod tests {
 
     #[test]
     fn lap_scaling_distributes_by_largest_remainder() {
-        // Hoț de codru 2/2/2/1 (total 7) on lap 2: target round(8.4) = 8;
-        // every attribute floors, the single extra point lands on putere
-        // (first of the tied largest remainders).
+        // Hoț de codru 2/2/2/1/2/1/1/1 (total 12) on lap 2: target
+        // round(14.4) = 14; every attribute floors (sum 12), and the two
+        // extra points land on putere and agilitate (the first of the tied
+        // largest remainders, in AttributeKind::ALL order).
         assert_eq!(
             scaled_attributes(&LADDER[0].attrs, 2),
             Attributes {
                 putere: 3,
-                agilitate: 2,
+                agilitate: 3,
                 vitalitate: 2,
                 noroc: 1,
+                atac: 2,
+                aparare: 1,
+                carisma: 1,
+                magie: 1,
             }
         );
     }
@@ -603,10 +675,13 @@ mod tests {
         for lap in 1..=5 {
             for opponent in &LADDER {
                 let scaled = scaled_attributes(&opponent.attrs, lap);
-                assert!(scaled.putere >= opponent.attrs.putere);
-                assert!(scaled.agilitate >= opponent.attrs.agilitate);
-                assert!(scaled.vitalitate >= opponent.attrs.vitalitate);
-                assert!(scaled.noroc >= opponent.attrs.noroc);
+                for kind in AttributeKind::ALL {
+                    assert!(
+                        scaled.get(kind) >= opponent.attrs.get(kind),
+                        "{} lap {lap}: {kind:?}",
+                        opponent.name
+                    );
+                }
             }
         }
     }

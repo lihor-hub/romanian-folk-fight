@@ -346,6 +346,7 @@ mod tests {
             agilitate,
             vitalitate,
             noroc,
+            ..Attributes::default()
         }
     }
 
@@ -911,8 +912,11 @@ mod tests {
     }
 
     /// Regression pin for the equipment issue (#18): fighters without gear
-    /// must reproduce the exact pre-equipment numbers of this scripted duel
-    /// (values captured from the engine before equipment existed).
+    /// must reproduce the exact numbers of this scripted duel. Values
+    /// recaptured for #128 (the hit roll moved from the agility differential
+    /// to atac/apărare, so the same seed now lands the fourth strike); the
+    /// pin still guards what it always did — that gear-free fighters go
+    /// through no equipment code path.
     #[test]
     fn unarmed_fighters_reproduce_pre_equipment_numbers() {
         let mut a = fighter();
@@ -936,14 +940,14 @@ mod tests {
             .map(|&action| resolve_action(&mut a, &mut b, action, &mut rng))
             .collect();
         assert_eq!((a.hp, a.stamina), (100, 32));
-        assert_eq!((b.hp, b.stamina), (78, 50));
+        assert_eq!((b.hp, b.stamina), (72, 50));
         assert_eq!(
             events.concat(),
             vec![
                 CombatEvent::Crit { dmg: 12 },
                 CombatEvent::Missed,
                 CombatEvent::Guarded,
-                CombatEvent::Missed,
+                CombatEvent::Hit { dmg: 6 },
                 CombatEvent::Rested { amount: 20 },
                 CombatEvent::Missed,
             ]
@@ -971,6 +975,76 @@ mod tests {
             (a, b, events)
         };
         assert_eq!(run(), run(), "same seed, same duel");
+    }
+
+    /// #128's viable-first-fight guarantee: every level-one creation preset
+    /// — unequipped, so this holds even for the starter-item-less custom
+    /// path's point budget — beats the ladder's first opponent under a fixed
+    /// seed with the same simple policy the review autoplay uses (quick
+    /// strike, rest when out of stamina) against the real enemy AI. #149 may
+    /// retune the balance constants, but it must keep this test green.
+    #[test]
+    fn every_level_one_preset_survives_the_first_ladder_fight_with_a_fixed_seed() {
+        use crate::combat::ai::{self, AiProfile};
+        use crate::creation::HeroPreset;
+        use crate::roster::LADDER;
+
+        const SURVIVABILITY_SEED: u64 = 128;
+        const MAX_TURNS: usize = 80;
+
+        let first = &LADDER[0];
+        for preset in HeroPreset::ALL {
+            let mut player = FighterState::new(preset.attributes());
+            let mut enemy = FighterState::new(first.attrs);
+            let profile = AiProfile {
+                aggression: first.aggression,
+            };
+            let mut rng = ChaCha8Rng::seed_from_u64(SURVIVABILITY_SEED);
+            let mut distance = DuelDistance::starting();
+            let mut won = false;
+            for _ in 0..MAX_TURNS {
+                let action = if player.stamina < QUICK_STRIKE_COST {
+                    CombatAction::Rest
+                } else {
+                    CombatAction::QuickStrike
+                };
+                let events = resolve_action_at_distance(
+                    &mut player,
+                    &mut enemy,
+                    action,
+                    &mut distance,
+                    &mut rng,
+                );
+                if events.contains(&CombatEvent::Defeated) {
+                    won = true;
+                    break;
+                }
+                let action =
+                    ai::choose_action_at_distance(&enemy, &player, &profile, distance, &mut rng);
+                let events = resolve_action_at_distance(
+                    &mut enemy,
+                    &mut player,
+                    action,
+                    &mut distance,
+                    &mut rng,
+                );
+                assert!(
+                    !events.contains(&CombatEvent::Defeated),
+                    "{}: a fresh level-one hero must not fall to {}",
+                    preset.name(),
+                    first.name
+                );
+            }
+            assert!(
+                won,
+                "{}: must beat {} within {MAX_TURNS} turns (enemy hp {}, player hp {})",
+                preset.name(),
+                first.name,
+                enemy.hp,
+                player.hp
+            );
+            assert!(player.hp > 0, "{}: survives the win", preset.name());
+        }
     }
 
     #[test]

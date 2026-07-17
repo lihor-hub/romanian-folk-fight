@@ -483,6 +483,10 @@ mod tests {
         agilitate: 2,
         vitalitate: 4,
         noroc: 3,
+        atac: 1,
+        aparare: 2,
+        carisma: 1,
+        magie: 0,
     };
 
     fn player_character() -> PlayerCharacter {
@@ -1029,7 +1033,7 @@ mod tests {
         assert_eq!(boss, None);
         use crate::roster::attribute_total;
         let total = attribute_total(&attrs);
-        assert_eq!(total, 8, "total 7 scaled by 1.2 rounds to 8");
+        assert_eq!(total, 14, "total 12 scaled by 1.2 rounds to 14");
         assert!(
             total > attribute_total(&LADDER[0].attrs),
             "lap 2 is measurably stronger"

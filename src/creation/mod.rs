@@ -374,7 +374,8 @@ fn spawn_control_deck(
                     max_width: Val::Percent(100.0),
                     min_height: Val::Px(CREATION_PANEL_HEIGHT),
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(8.0),
+                    // #128: 8 -> 6 to help the taller attribute grid fit.
+                    row_gap: Val::Px(6.0),
                     padding: UiRect::all(Val::Px(16.0)),
                     ..default()
                 },
@@ -401,13 +402,17 @@ fn spawn_control_deck(
             .with_children(|row| {
                 for choice in HeroChoice::ALL {
                     row.spawn((
-                        // #216: height bumped 42 -> `MIN_TOUCH_TARGET` (44)
-                        // so this preset tile meets the touch-target floor.
+                        // #216: height `MIN_TOUCH_TARGET` (44) keeps the
+                        // touch-target floor. #128: width 118 -> 96 (and the
+                        // label 15 -> 13) so three tiles per row fit the
+                        // deck's 308px inner width (3 * 96 + 2 * 6 = 300),
+                        // freeing the vertical room the four new attribute
+                        // cells need.
                         button_bundle(
                             choice.label(),
-                            Val::Px(118.0),
+                            Val::Px(96.0),
                             Val::Px(MIN_TOUCH_TARGET),
-                            15.0,
+                            13.0,
                             ui_font,
                         ),
                         CreationAction::SelectChoice(choice),
@@ -422,7 +427,8 @@ fn spawn_control_deck(
                 CreationLabel::Description,
                 Node {
                     width: Val::Percent(100.0),
-                    min_height: Val::Px(46.0),
+                    // #128: 46 -> 40; two 15px lines still fit.
+                    min_height: Val::Px(40.0),
                     ..default()
                 },
             ));
@@ -493,10 +499,18 @@ fn spawn_control_deck(
                 }
             });
 
+            // #128: eight attributes render as compact cells, two per row
+            // (see `ui_widgets::attribute_row`'s width math), so the deck
+            // still fits a 900px-tall desktop viewport and the 356px deck
+            // width that already carries the phone breakpoint.
             deck.spawn((
                 Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(4.0),
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
+                    justify_content: JustifyContent::Center,
+                    column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(6.0),
                     ..default()
                 },
                 CreationLayoutRole::AttributeControls,
@@ -1029,7 +1043,10 @@ mod tests {
             .query_filtered::<(), With<Button>>()
             .iter(app.world())
             .count();
-        assert_eq!(buttons, 25);
+        assert_eq!(
+            buttons, 33,
+            "8 more stepper buttons since #128's four new attribute rows"
+        );
     }
 
     #[test]
@@ -1461,8 +1478,8 @@ mod tests {
         assert_eq!(tab_focus(&mut app), Some(first_preset));
 
         // Walk all the way around: 5 presets, 2 name arrows, 4 appearance
-        // rows x2, 4 attribute rows x2, Confirm, Back = 20 controls total.
-        let total_controls = HeroChoice::ALL.len() + 2 + 4 * 2 + 4 * 2 + 2;
+        // rows x2, 8 attribute rows x2 (#128), Confirm, Back = 28 controls.
+        let total_controls = HeroChoice::ALL.len() + 2 + 4 * 2 + 8 * 2 + 2;
         for _ in 1..total_controls {
             tab_focus(&mut app);
         }
@@ -1565,6 +1582,15 @@ mod tests {
                 CreationAction::Increase(AttributeKind::Vitalitate),
             );
         }
+        // #128: the custom pool is 16 points now; spend the last 6 on the
+        // new kinds (magie included, up from its 0 base).
+        for _ in 0..3 {
+            press(&mut app, CreationAction::Increase(AttributeKind::Atac));
+        }
+        for _ in 0..2 {
+            press(&mut app, CreationAction::Increase(AttributeKind::Aparare));
+        }
+        press(&mut app, CreationAction::Increase(AttributeKind::Magie));
 
         press(&mut app, CreationAction::Confirm);
         app.update();
@@ -1616,7 +1642,11 @@ mod tests {
                 putere: 3,
                 agilitate: 4,
                 vitalitate: 4,
-                noroc: 3,
+                noroc: 2,
+                atac: 4,
+                aparare: 4,
+                carisma: 2,
+                magie: 0,
             }
         );
         assert_eq!(player.appearance, HeroPreset::Voinicul.appearance());
@@ -1690,7 +1720,7 @@ mod tests {
         );
         assert_eq!(
             label_text(&mut app, CreationLabel::Points),
-            "Puncte rămase: 10"
+            "Puncte rămase: 16"
         );
         press(
             &mut app,
@@ -1706,7 +1736,7 @@ mod tests {
         );
         assert_eq!(
             label_text(&mut app, CreationLabel::Points),
-            "Puncte rămase: 9"
+            "Puncte rămase: 15"
         );
         press(
             &mut app,

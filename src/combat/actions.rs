@@ -552,12 +552,20 @@ mod tests {
                 agilitate: 2,
                 vitalitate: 4,
                 noroc: 3,
+                atac: 1,
+                aparare: 2,
+                carisma: 1,
+                magie: 0,
             },
             enemy_attributes: Attributes {
                 putere: 2,
                 agilitate: 2,
                 vitalitate: 2,
                 noroc: 1,
+                atac: 2,
+                aparare: 1,
+                carisma: 1,
+                magie: 1,
             },
             presentation_busy: false,
         }
@@ -902,12 +910,20 @@ mod tests {
             agilitate: 2,
             vitalitate: 4,
             noroc: 3,
+            atac: 5,
+            aparare: 2,
+            carisma: 1,
+            magie: 0,
         };
         let defender = Attributes {
             putere: 2,
             agilitate: 2,
             vitalitate: 2,
             noroc: 1,
+            atac: 2,
+            aparare: 2,
+            carisma: 1,
+            magie: 1,
         };
         assert_eq!(
             hit_chance(CombatAction::QuickStrike, &attacker, &defender),
@@ -991,16 +1007,12 @@ mod tests {
     #[test]
     fn hit_chance_is_clamped_to_the_engine_bounds() {
         let attacker = Attributes {
-            putere: 1,
-            agilitate: 1,
-            vitalitate: 1,
             noroc: 100,
+            ..Attributes::default()
         };
         let defender = Attributes {
-            putere: 1,
-            agilitate: 100,
-            vitalitate: 1,
-            noroc: 1,
+            aparare: 100,
+            ..Attributes::default()
         };
         let descriptor = descriptor_for(
             CombatAction::QuickStrike,

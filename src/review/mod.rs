@@ -1659,7 +1659,11 @@ mod tests {
                 putere: 4,
                 agilitate: 3,
                 vitalitate: 4,
-                noroc: 3,
+                noroc: 2,
+                atac: 4,
+                aparare: 4,
+                carisma: 2,
+                magie: 0,
             });
             fighter.damage_bonus = 3;
             fighter.armor = 1;
@@ -1675,6 +1679,10 @@ mod tests {
                     agilitate: 2,
                     vitalitate: 2,
                     noroc: 1,
+                    atac: 2,
+                    aparare: 1,
+                    carisma: 1,
+                    magie: 1,
                 }),
                 AiProfile { aggression: 0.25 },
             )
