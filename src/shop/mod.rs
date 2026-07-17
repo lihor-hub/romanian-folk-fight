@@ -476,10 +476,38 @@ fn spawn_shop_screen(
                 .spawn(Node {
                     width: Val::Px(SHOP_BODY_WIDTH),
                     max_width: Val::Percent(96.0),
-                    flex_direction: FlexDirection::Row,
-                    flex_wrap: FlexWrap::Wrap,
+                    // #297: at phone widths the two panels stack as a plain
+                    // column. #296 stacked them by letting a `FlexWrap::Wrap`
+                    // row wrap onto two lines, but the wrapped row's
+                    // *resolved height* only covered its first line -- the
+                    // back button (this body's next sibling) rendered at
+                    // that height, on top of the catalog column's first
+                    // header, at every phone DPR (see issue #297's recapture
+                    // evidence). A column never wraps, so its content height
+                    // is reliably the sum of its children and the button
+                    // genuinely lands below both panels. Desktop keeps the
+                    // original side-by-side wrapped row every accepted
+                    // desktop baseline renders from.
+                    flex_direction: if viewport.is_mobile {
+                        FlexDirection::Column
+                    } else {
+                        FlexDirection::Row
+                    },
+                    flex_wrap: if viewport.is_mobile {
+                        FlexWrap::NoWrap
+                    } else {
+                        FlexWrap::Wrap
+                    },
                     justify_content: JustifyContent::Center,
-                    align_items: AlignItems::FlexStart,
+                    // The column's cross axis is horizontal: `Center` keeps
+                    // the fixed-width preview stage horizontally centered,
+                    // exactly where the wrapped row's `justify_content:
+                    // Center` used to place it on its own line.
+                    align_items: if viewport.is_mobile {
+                        AlignItems::Center
+                    } else {
+                        AlignItems::FlexStart
+                    },
                     column_gap: Val::Px(SHOP_BODY_GAP),
                     row_gap: Val::Px(10.0),
                     // #287: the root column is a scroll container
@@ -502,23 +530,21 @@ fn spawn_shop_screen(
                     ..default()
                 })
                 .with_children(|body| {
-                    // #287: at phone widths the wrapped body's two lines
-                    // stack (catalog's own width already fills the
-                    // available row, pushing the preview stage onto the
-                    // next line) -- so whichever of the two spawns first
-                    // lands on that first line. The letterboxed 4:3 world
-                    // strip the preview rig's world camera can draw into
-                    // sits roughly in the screen's vertical middle, with
-                    // the header above eating into the space before it;
-                    // landing the preview stage on the *first* wrapped line
-                    // (right after the header) is what lands its resolved
-                    // rect inside that strip, mirroring why the creation
-                    // screen never had this problem: its preview stage is
-                    // already the first body item there. Desktop viewports
-                    // never wrap (catalog and preview sit side by side), so
-                    // the spawn order there only controls left/right
-                    // placement -- kept as catalog-left/preview-right,
-                    // matching every accepted desktop baseline.
+                    // #287: at phone widths the body's two panels stack (a
+                    // plain column since #297) -- so whichever of the two
+                    // spawns first lands at the top. The letterboxed 4:3
+                    // world strip the preview rig's world camera can draw
+                    // into sits roughly in the screen's vertical middle,
+                    // with the header above eating into the space before
+                    // it; landing the preview stage *first* (right after
+                    // the header) is what lands its resolved rect inside
+                    // that strip, mirroring why the creation screen never
+                    // had this problem: its preview stage is already the
+                    // first body item there. Desktop viewports lay the two
+                    // side by side, so the spawn order there only controls
+                    // left/right placement -- kept as catalog-left/
+                    // preview-right, matching every accepted desktop
+                    // baseline.
                     if viewport.is_mobile {
                         spawn_shop_preview_stage(body, &equipment, &attributes, ui_font, icons);
                         spawn_shop_catalog_column(
@@ -1656,6 +1682,67 @@ mod tests {
             0.0,
             "the header row must not shrink below its content height either, for the same \
              reason (#287)"
+        );
+    }
+
+    /// #297 red-first: at phone widths the body must stack its two panels
+    /// as a plain `FlexDirection::Column`, not a wrapped row. #296 already
+    /// reordered the panels and pinned `flex_shrink: 0.0`, but the recapture
+    /// run for its baselines (issue #297) showed the wrapped body's
+    /// *resolved height* still only covered its first wrapped line: the
+    /// back button -- the body's next sibling -- rendered at that height,
+    /// on top of the catalog column's `Armă` header, at every phone DPR
+    /// (see `gold-journey/phone{,-dpr2,-dpr3}-shop` actuals). A column
+    /// never wraps, so its content height is reliably the sum of its
+    /// children -- sidestepping the wrapped-row height computation
+    /// entirely instead of fighting it.
+    #[test]
+    fn phone_widths_stack_the_body_as_a_column() {
+        let mut app = test_app_with_window(375.0, 812.0);
+
+        let catalog = layout_role_entity(&mut app, ShopLayoutRole::CatalogColumn);
+        let (body, _) = sibling_position(&mut app, catalog);
+        let node = app.world().get::<Node>(body).expect("body has a Node");
+
+        assert_eq!(
+            node.flex_direction,
+            FlexDirection::Column,
+            "at phone widths the body must be a plain column: a wrapped row's resolved \
+             height only covers its first line, so the back button (the body's next \
+             sibling) lands on top of the catalog column instead of below it (#297)"
+        );
+        assert_eq!(
+            node.flex_wrap,
+            FlexWrap::NoWrap,
+            "the mobile column must not wrap -- wrapping is exactly the layout whose \
+             resolved height excluded the second line (#297)"
+        );
+    }
+
+    /// #297: desktop widths keep the original side-by-side wrapped row --
+    /// the two panels fit on one line there, the resolved height is that
+    /// line's height, and every accepted desktop gold-journey baseline
+    /// renders from that layout. The phone-only column above must not leak
+    /// into desktop.
+    #[test]
+    fn desktop_widths_keep_the_body_as_a_wrapped_row() {
+        let mut app = test_app_with_window(1280.0, 800.0);
+
+        let catalog = layout_role_entity(&mut app, ShopLayoutRole::CatalogColumn);
+        let (body, _) = sibling_position(&mut app, catalog);
+        let node = app.world().get::<Node>(body).expect("body has a Node");
+
+        assert_eq!(
+            node.flex_direction,
+            FlexDirection::Row,
+            "desktop must keep the side-by-side row layout every accepted desktop-shop \
+             baseline renders from (#297)"
+        );
+        assert_eq!(
+            node.flex_wrap,
+            FlexWrap::Wrap,
+            "desktop keeps the original wrap behavior (it never actually wraps at \
+             1280x800; this preserves the accepted baselines' layout inputs) (#297)"
         );
     }
 
