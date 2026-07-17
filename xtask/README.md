@@ -362,8 +362,9 @@ fight -> fight result -> shop -- via `src/review/mod.rs`'s
 `window.localStorage`-based seam: seed the combat RNG, pick a named preset,
 and advance screens by writing the same player-triggered `FlowIntent`s a
 button click writes (never `NextState<GameState>` directly). Readiness per
-checkpoint is the review seam's published current-screen marker plus
-`cold-menu`'s existing frame-stability contract -- no fixed sleeps. The fixed
+checkpoint first waits for the review seam's published current-screen marker,
+then advances bounded animations, freezes time, and applies `cold-menu`'s
+frame-stability contract -- no fixed sleeps. The fixed
 seed/preset/autoplay policy is pinned by a native unit test in
 `src/review/mod.rs` (`gold_journey_seed_wins_the_first_duel`) using the pure
 combat engine directly, so the whole journey's outcome (not just its
@@ -393,21 +394,21 @@ Each of the 6 rows walks the same five screens (`menu`, `creation`, `fight`,
 `fight-result`, `shop`) in one continuous browser session (one fresh Chrome
 profile per row), exactly as #187 did per viewport -- DPR just adds three
 rows per base viewport instead of a second scenario or a second runner. As
-of #284 (see the next section), only the `desktop` row runs by default; the
-other 5 rows are dormant unless explicitly reactivated.
+of #284 (see the next section), all six matrix rows are dormant unless
+explicitly reactivated; the default uses a separate representative viewport.
 
 #### Desktop-only default scope (#284)
 
 Agent/CI feedback is dominated by this scenario's wall-clock cost, most of
 which comes from the phone and DPR-2/3 legs above. For current development,
-`gold-journey`'s *default* run walks only the `desktop` row (1280x800 @ DPR
-1) -- 5 checkpoints instead of 30 -- while still covering all five current
+`gold-journey`'s *default* run walks `normal-desktop` (1440x900 @ DPR 1) --
+5 checkpoints instead of 30 -- while still covering all five current
 screens (the "current-screen gold journey": menu, creation, fight,
 fight-result, shop). Nothing about the matrix is deleted: the full
 six-viewport table above is preserved byte-for-byte in
-`xtask/src/web_smoke/gold_journey.rs` (`FULL_VIEWPORTS`), and every baseline
-under `tests/visual/baselines/gold-journey/` (all 30 pre-existing
-`<viewport>-<checkpoint>.png` files) is untouched.
+`xtask/src/web_smoke/gold_journey.rs` (`FULL_VIEWPORTS`), and all 30 existing
+matrix baselines remain available. The five active captures use distinct
+`normal-desktop-<checkpoint>.png` baselines.
 
 Reactivate the full matrix by setting an env var before invoking the
 scenario -- no code change needed:

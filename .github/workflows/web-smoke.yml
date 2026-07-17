@@ -14,7 +14,7 @@ name: Browser smoke
 # ran (the DPR/viewport dimension only changes the headless-Chrome
 # emulation per checkpoint; the wasm bundle it drives is built once). As of
 # #284, the default push/pull_request run narrows that to the single
-# desktop/DPR-1 viewport (5 checkpoints, the "current-screen gold journey")
+# `normal-desktop` 1440x900/DPR-1 viewport (5 checkpoints)
 # -- see that job's own comment and `xtask/src/web_smoke/gold_journey.rs`'s
 # module docs for the narrowing mechanism and how `full_matrix` below
 # reactivates the full matrix on a manual run.
@@ -144,13 +144,14 @@ jobs:
         retention-days: 14
 
   gold-journey:
-    name: gold-journey (desktop DPR-1 current-screen journey; full matrix opt-in)
+    name: gold-journey (1440x900 DPR-1 normal desktop; full matrix opt-in)
     runs-on: ubuntu-latest
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
       # #284: the default push/pull_request run walks only the 5-checkpoint
-      # desktop/DPR-1 journey (menu, creation, fight, fight-result, shop).
+      # normal-desktop 1440x900/DPR-1 journey (menu, creation, fight,
+      # fight-result, shop).
       # A manual `workflow_dispatch` run with `full_matrix: true` reactivates
       # the full 30-checkpoint desktop/phone x DPR 1/2/3 matrix -- see
       # xtask/src/web_smoke/gold_journey.rs's module docs for the selection
@@ -180,13 +181,13 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
-    - name: Run the gold-journey browser smoke (desktop DPR-1 by default; full matrix opt-in)
+    - name: Run the gold-journey browser smoke (1440x900 DPR-1 by default; full matrix opt-in)
       # Same alias-independent invocation as the cold-menu job above (no
       # worktree bootstrap runs in CI). Builds its own review-feature wasm
       # bundle into dist-gold-journey/ once -- never dist/ (see
       # xtask/src/web_smoke/gold_journey.rs) -- then reuses that single
-      # build across whichever viewport(s) are active: one (desktop DPR 1,
-      # the #284 default) or all 6 viewport x DPR entries (30 checkpoints)
+      # build across whichever viewport(s) are active: one (normal desktop
+      # at 1440x900 DPR 1) or all 6 viewport x DPR entries (30 checkpoints)
       # when XTASK_WEB_SMOKE_GOLD_JOURNEY_FULL_MATRIX is set above; only the
       # headless-Chrome device-metrics emulation varies per checkpoint.
       run: >-

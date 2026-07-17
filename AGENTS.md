@@ -15,8 +15,9 @@
 Budget for these before starting; they dominate wall-clock time.
 
 - `cargo xtask pre-push` (fmt, clippy, test, build-matrix — clippy and test each run twice, default features then again with `--features review` so `src/review/mod.rs` stays covered, #294) — ~4 min; required before every push. The review-feature pair adds only single-digit-to-~25s once bevy's own dependency graph is already warm from the preceding default-feature steps.
-- `cargo xtask web-smoke --scenario <name>` — builds and serves the wasm game in a real browser; ~10 min per scenario.
-- `cargo xtask web-smoke --all` / the gold-journey desktop+phone DPR matrix — ~30 min per full baseline capture.
+- `cargo xtask web-smoke --scenario gold-journey` — the fast browser loop: one 1440x900 DPR-1 journey across all five current screens; ~10 min from a cold wasm build.
+- `cargo xtask web-smoke --scenario <name>` — runs one specialized phone, zoom, touch, accessibility, persistence, or rendering scenario; ~10 min per scenario.
+- `cargo xtask web-smoke --all` — runs every registered scenario; reserve it for explicit broad verification.
 - Rebase onto `origin/main` **before** capturing or re-accepting visual baselines, never after — a rebase that changes rendered UI invalidates baselines and forces a full re-capture.
 - `cargo xtask test logic` is the fast loop for pure game-rule changes; use it while iterating, save the full gate for the end.
 

@@ -57,7 +57,7 @@
 //! device pixel ratios 1, 2, and 3 -- 30 checkpoints, driven by DPR-per-tab
 //! CDP emulation (see `browser::launch`'s doc comment) rather than a new
 //! scenario or a second scenario runner. As of #284, the *default* run
-//! narrows that to a single viewport (`desktop`, 1280x800 @ DPR 1 -- 5
+//! narrows that to a representative viewport (`normal-desktop`, 1440x900 @ DPR 1 -- 5
 //! checkpoints); the full 30-checkpoint matrix is preserved and stays
 //! reachable via an opt-in env var -- see `gold_journey`'s module docs'
 //! "Desktop-only default scope (#284)" section for the selection mechanism
