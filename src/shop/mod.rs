@@ -36,8 +36,23 @@ use crate::ui_widgets::wide_button;
 
 const SHOP_ROOT_PADDING: f32 = 12.0;
 const SHOP_BODY_WIDTH: f32 = 760.0;
+/// The body's `max_width`, as a percent of the root's padded inner width.
+/// Named so the catalog-clamp math (`catalog_clamped_width`) can reuse the
+/// exact literal the layout applies (#307).
+const SHOP_BODY_MAX_WIDTH_PCT: f32 = 96.0;
 const SHOP_BODY_GAP: f32 = 12.0;
 const SHOP_CATALOG_WIDTH: f32 = 430.0;
+
+/// Catalog item-row cell widths. Every cell except the name is fixed; the
+/// name cell flexes at phone widths (see [`spawn_item_row`]) so the row's
+/// content collapses to the clamped catalog width instead of overflowing it
+/// and shoving the trailing buy/equip button off the right edge (#307).
+const SHOP_ITEM_NAME_WIDTH: f32 = 144.0;
+const SHOP_ITEM_STAT_WIDTH: f32 = 62.0;
+const SHOP_ITEM_PRICE_WIDTH: f32 = 70.0;
+const SHOP_ITEM_BUTTON_WIDTH: f32 = 92.0;
+const SHOP_ITEM_ROW_GAP: f32 = 8.0;
+const SHOP_ITEM_ROW_PADDING_X: f32 = 8.0;
 const SHOP_PREVIEW_STAGE_WIDTH: f32 = 318.0;
 const SHOP_PANEL_HEIGHT: f32 = 450.0;
 const SHOP_PREVIEW_FRAME_HEIGHT: f32 = 216.0;
@@ -475,7 +490,7 @@ fn spawn_shop_screen(
             parent
                 .spawn(Node {
                     width: Val::Px(SHOP_BODY_WIDTH),
-                    max_width: Val::Percent(96.0),
+                    max_width: Val::Percent(SHOP_BODY_MAX_WIDTH_PCT),
                     // #297: at phone widths the two panels stack as a plain
                     // column. #296 stacked them by letting a `FlexWrap::Wrap`
                     // row wrap onto two lines, but the wrapped row's
@@ -555,6 +570,7 @@ fn spawn_shop_screen(
                             ui_font,
                             panel_texture,
                             icons,
+                            viewport.is_mobile,
                         );
                     } else {
                         spawn_shop_catalog_column(
@@ -565,6 +581,7 @@ fn spawn_shop_screen(
                             ui_font,
                             panel_texture,
                             icons,
+                            viewport.is_mobile,
                         );
                         spawn_shop_preview_stage(body, &equipment, &attributes, ui_font, icons);
                     }
@@ -595,6 +612,7 @@ fn spawn_shop_catalog_column(
     ui_font: &UiFont,
     panel_texture: &PanelTexture,
     icons: &ShopIcons,
+    is_mobile: bool,
 ) {
     body.spawn((
         Node {
@@ -623,7 +641,7 @@ fn spawn_shop_catalog_column(
             );
             for item in CATALOG.iter().filter(|item| item.slot == slot) {
                 let state = ItemButtonState::of(item.id, wallet, owned, equipment);
-                spawn_item_row(catalog, item, state, ui_font, panel_texture);
+                spawn_item_row(catalog, item, state, ui_font, panel_texture, is_mobile);
             }
         }
     });
@@ -907,32 +925,47 @@ fn stat_chip(label: String, shop_label: ShopLabel, ui_font: &UiFont) -> impl Bun
 }
 
 /// One catalog row: name, stat, price, and the buy/equip/equipped button.
+///
+/// At phone widths the catalog column is clamped well below its
+/// `SHOP_CATALOG_WIDTH` (the body's `max_width: 96%` pins it to ~351 logical
+/// px on a 390 px-wide phone), and this row's fixed cells used to add up to
+/// 408 px -- wider than that clamp. Nothing shrank, so the row overflowed and
+/// the trailing buy/equip button hung ~half off the right edge of the
+/// viewport (#307). The fix keeps every cell fixed *except* the name cell,
+/// which flexes to absorb the leftover width on phones (see [`name_cell`]),
+/// and pins the button's `flex_shrink` to 0 so the primary tap target keeps
+/// its full width. Desktop keeps the original fixed-width name cell every
+/// accepted desktop baseline renders from.
 fn spawn_item_row(
     parent: &mut ChildSpawnerCommands,
     item: &Item,
     state: ItemButtonState,
     ui_font: &UiFont,
     panel_texture: &PanelTexture,
+    is_mobile: bool,
 ) {
     parent
         .spawn(panel_bundle(
             panel_texture,
             Node {
                 align_items: AlignItems::Center,
-                column_gap: Val::Px(8.0),
-                padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                column_gap: Val::Px(SHOP_ITEM_ROW_GAP),
+                padding: UiRect::axes(Val::Px(SHOP_ITEM_ROW_PADDING_X), Val::Px(4.0)),
                 margin: UiRect::vertical(Val::Px(2.0)),
                 ..default()
             },
         ))
         .with_children(|row| {
             row.spawn((
-                column(144.0),
+                name_cell(is_mobile),
                 line_text(item.name.to_string(), 14.0, ui_font),
             ));
-            row.spawn((column(62.0), line_text(stat_text(item), 14.0, ui_font)));
             row.spawn((
-                column(70.0),
+                column(SHOP_ITEM_STAT_WIDTH),
+                line_text(stat_text(item), 14.0, ui_font),
+            ));
+            row.spawn((
+                column(SHOP_ITEM_PRICE_WIDTH),
                 line_text(format!("{} g", item.price), 14.0, ui_font),
             ));
             let mut button = row.spawn((
@@ -940,12 +973,16 @@ fn spawn_item_row(
                 Focusable,
                 TabIndex(0),
                 Node {
-                    width: Val::Px(92.0),
+                    width: Val::Px(SHOP_ITEM_BUTTON_WIDTH),
                     // ≥44px touch target (#31), up from the original 26px
                     // mouse-only height.
                     height: Val::Px(MIN_TOUCH_TARGET),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
+                    // #307: the primary tap target must never shrink or be
+                    // shoved off the clamped catalog's right edge -- the name
+                    // cell absorbs the width pressure instead.
+                    flex_shrink: 0.0,
                     ..default()
                 },
                 BackgroundColor(state.background()),
@@ -971,6 +1008,54 @@ fn column(width: f32) -> Node {
         width: Val::Px(width),
         ..default()
     }
+}
+
+/// The catalog row's name cell. On phones it flexes from a zero basis to
+/// absorb whatever width remains after the fixed stat/price/button cells, so
+/// the row's content collapses to the clamped catalog width instead of
+/// overflowing it and clipping the trailing buy/equip button off the right
+/// edge (#307). Desktop keeps the original fixed-width cell (`column`) every
+/// accepted desktop baseline renders from.
+fn name_cell(is_mobile: bool) -> Node {
+    if is_mobile {
+        Node {
+            flex_grow: 1.0,
+            flex_shrink: 1.0,
+            flex_basis: Val::Px(0.0),
+            // A scrollable ancestor already zeroes the automatic minimum
+            // size, but pin it explicitly so the cell can always shrink far
+            // enough to keep the button on-screen even for a long name.
+            min_width: Val::Px(0.0),
+            ..default()
+        }
+    } else {
+        column(SHOP_ITEM_NAME_WIDTH)
+    }
+}
+
+/// The width the item row cannot shrink below without clipping its trailing
+/// buy/equip button. The name cell flexes at phone widths (see [`name_cell`])
+/// so it contributes nothing to the minimum there; every other cell is fixed.
+#[cfg(test)]
+fn item_row_min_width(is_mobile: bool) -> f32 {
+    let name = if is_mobile { 0.0 } else { SHOP_ITEM_NAME_WIDTH };
+    name + SHOP_ITEM_STAT_WIDTH
+        + SHOP_ITEM_PRICE_WIDTH
+        + SHOP_ITEM_BUTTON_WIDTH
+        + SHOP_ITEM_ROW_GAP * 3.0
+        + SHOP_ITEM_ROW_PADDING_X * 2.0
+}
+
+/// The catalog column's resolved content width at a given viewport width: its
+/// `SHOP_CATALOG_WIDTH` clamped by the body's `max_width`, which is in turn a
+/// percent of the root's padded inner width. Mirrors the flexbox clamp chain
+/// the layout applies so the fit math (`item_row_min_width`) can be checked
+/// against the width the button actually has to fit inside (#307).
+#[cfg(test)]
+fn catalog_clamped_width(viewport_width: f32) -> f32 {
+    let root_inner = viewport_width - SHOP_ROOT_PADDING * 2.0;
+    let body = SHOP_BODY_WIDTH.min(root_inner * SHOP_BODY_MAX_WIDTH_PCT / 100.0);
+    SHOP_CATALOG_WIDTH.min(body)
 }
 
 /// Query filter: buttons whose interaction changed this frame.
@@ -1743,6 +1828,121 @@ mod tests {
             FlexWrap::Wrap,
             "desktop keeps the original wrap behavior (it never actually wraps at \
              1280x800; this preserves the accepted baselines' layout inputs) (#297)"
+        );
+    }
+
+    /// The `Node` of the catalog cell that renders `id`'s name (the name cell
+    /// carries both the cell `Node` and its `Text`, so the item name uniquely
+    /// identifies it).
+    fn item_name_cell_node(app: &mut App, id: ItemId) -> Node {
+        let name = id.item().name;
+        app.world_mut()
+            .query::<(&Text, &Node)>()
+            .iter(app.world())
+            .find(|(text, _)| text.0 == name)
+            .map(|(_, node)| node.clone())
+            .unwrap_or_else(|| panic!("catalog name cell for {name} exists"))
+    }
+
+    /// The `Node` of `id`'s buy/equip button.
+    fn item_buy_button_node(app: &mut App, id: ItemId) -> Node {
+        let button = find_button(app, ShopAction::Item(id));
+        app.world()
+            .get::<Node>(button)
+            .cloned()
+            .expect("buy button has a Node")
+    }
+
+    /// #307 red-first (pure math): the gold-journey phone viewport is 390 CSS
+    /// px wide (DPR 1/2/3 all resolve to the same logical width). The catalog
+    /// column clamps to ~351 px there, but the row's fixed-cell layout needs
+    /// 408 px -- so the trailing buy button used to hang ~57 px off the right
+    /// edge. Flexing the name cell drops the row's minimum to the fixed
+    /// stat/price/button (plus gaps/padding), which fits.
+    #[test]
+    fn phone_item_row_min_width_fits_the_clamped_catalog() {
+        let clamped = catalog_clamped_width(390.0);
+        assert!(
+            item_row_min_width(true) <= clamped,
+            "phone item row minimum {} must fit the clamped catalog {clamped} (#307)",
+            item_row_min_width(true)
+        );
+        // Guards the fix: the old fixed-name layout genuinely overflowed --
+        // that overflow is exactly #307's clipped button.
+        assert!(
+            item_row_min_width(false) > clamped,
+            "the fixed-name layout ({}) overflows the clamped phone catalog ({clamped}); \
+             flexing the name cell is what removes the overflow (#307)",
+            item_row_min_width(false)
+        );
+    }
+
+    /// #307: desktop keeps the fixed-name layout, which comfortably fits the
+    /// unclamped catalog -- so the phone-only flex must not be needed there.
+    #[test]
+    fn desktop_item_row_min_width_fits_the_unclamped_catalog() {
+        let clamped = catalog_clamped_width(1280.0);
+        assert_eq!(clamped, SHOP_CATALOG_WIDTH, "desktop catalog is unclamped");
+        assert!(
+            item_row_min_width(false) <= clamped,
+            "desktop fixed-name row {} must fit the catalog {clamped}",
+            item_row_min_width(false)
+        );
+    }
+
+    /// #307 red-first (live layout): at phone widths every catalog row must
+    /// flex its name cell (grow/shrink from a zero basis, no fixed width) so
+    /// the row collapses to the clamped catalog width, and pin the buy
+    /// button's `flex_shrink` to 0 so the primary tap target keeps its full
+    /// width and never clips off the right edge.
+    #[test]
+    fn phone_catalog_rows_flex_the_name_cell_and_pin_the_buy_button() {
+        let mut app = test_app_with_window(390.0, 844.0);
+
+        let name = item_name_cell_node(&mut app, ItemId::Palos);
+        assert_eq!(
+            name.flex_grow, 1.0,
+            "the name cell must absorb the row's leftover width on phones (#307)"
+        );
+        assert_eq!(
+            name.flex_basis,
+            Val::Px(0.0),
+            "flexing from a zero basis lets the fixed cells claim their width first (#307)"
+        );
+        assert_eq!(
+            name.width,
+            Val::Auto,
+            "the name cell must carry no fixed width to overflow the clamped catalog (#307)"
+        );
+
+        let button = item_buy_button_node(&mut app, ItemId::Palos);
+        assert_eq!(
+            button.width,
+            Val::Px(SHOP_ITEM_BUTTON_WIDTH),
+            "the buy button keeps its full width (#307)"
+        );
+        assert_eq!(
+            button.flex_shrink, 0.0,
+            "the primary tap target must never shrink off the viewport edge (#307)"
+        );
+    }
+
+    /// #307: desktop keeps the original fixed-width name cell every accepted
+    /// desktop-shop baseline renders from -- the phone-only flex must not
+    /// leak into desktop and diff those baselines.
+    #[test]
+    fn desktop_catalog_rows_keep_the_fixed_width_name_cell() {
+        let mut app = test_app_with_window(1280.0, 800.0);
+
+        let name = item_name_cell_node(&mut app, ItemId::Palos);
+        assert_eq!(
+            name.width,
+            Val::Px(SHOP_ITEM_NAME_WIDTH),
+            "desktop keeps its fixed-width name cell (#307)"
+        );
+        assert_eq!(
+            name.flex_grow, 0.0,
+            "desktop name cell must not flex-grow (#307)"
         );
     }
 
