@@ -660,14 +660,66 @@ fn drain_pending_input(checkpoint: &Checkpoint) -> Result<(), String> {
 /// close something and must confirm focus left; see [`wait_for_screen`],
 /// [`wait_for_label`], [`wait_for_overlay_open`], and
 /// [`wait_for_focus_to_move_off`] for this module's four such predicates).
+///
+/// ## One bounded retry for a provably-lost press (#305's CI failures)
+///
+/// PR #305's CI hit this scenario's settle assertions twice, at two
+/// different Enter activations (the settings overlay never autofocusing
+/// `"-"`; the mute label never flipping) -- both after a settled, drained
+/// Enter, both with 120 further rendered frames showing *no effect at all*.
+/// A press that reached the game resolves in a tick or two, so the only
+/// consistent reading is a CDP key press lost (or diverted) under CI load.
+/// When `assert_outcome` times out, this function therefore re-reads the
+/// snapshot and -- only if [`enter_press_left_no_trace`] proves the press
+/// had no observable effect (focus still on the same entity with the same
+/// rendered label) -- presses `Enter` once more and re-asserts. A press
+/// that *did* do something (label flipped late, focus moved) never
+/// re-fires, so no activation can double-toggle; and a genuinely broken
+/// autofocus still fails loudly, now with both attempts' errors.
 fn activate_focused_control(
     checkpoint: &Checkpoint,
-    assert_outcome: impl FnOnce(&Checkpoint, Option<AccessibilitySnapshot>) -> Result<(), String>,
+    assert_outcome: impl Fn(&Checkpoint, Option<AccessibilitySnapshot>) -> Result<(), String>,
 ) -> Result<(), String> {
     drain_pending_input(checkpoint)?;
     let before = read_accessibility(checkpoint)?;
     checkpoint.press_key("Enter")?;
-    assert_outcome(checkpoint, before)
+    let first_error = match assert_outcome(checkpoint, before.clone()) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    let current = read_accessibility(checkpoint)?;
+    if !enter_press_left_no_trace(&before, &current) {
+        return Err(first_error);
+    }
+    checkpoint.press_key("Enter")?;
+    assert_outcome(checkpoint, before).map_err(|retry_error| {
+        format!(
+            "{retry_error} (after one retry for an apparently lost Enter press; \
+             first attempt: {first_error})"
+        )
+    })
+}
+
+/// Pure decision behind [`activate_focused_control`]'s single retry: `true`
+/// only when the post-timeout snapshot proves the `Enter` press had no
+/// observable effect whatsoever -- focus still sits on the same entity
+/// (`focused_entity`) *and* that control still renders the same label
+/// (`focused_label`, which an in-place toggle like the mute button changes
+/// even though the entity stays put). Anything else -- a moved focus, a
+/// flipped label, or either snapshot missing (nothing provable) -- returns
+/// `false`, so the retry can never re-activate a control whose first press
+/// actually landed.
+fn enter_press_left_no_trace(
+    before: &Option<AccessibilitySnapshot>,
+    current: &Option<AccessibilitySnapshot>,
+) -> bool {
+    match (before, current) {
+        (Some(before), Some(current)) => {
+            before.focused_entity == current.focused_entity
+                && before.focused_label == current.focused_label
+        }
+        _ => false,
+    }
 }
 
 /// [`activate_focused_control`], but first settles focus on `label` via
@@ -681,7 +733,7 @@ fn activate_focused_control(
 fn navigate_and_activate(
     checkpoint: &Checkpoint,
     label: &str,
-    assert_outcome: impl FnOnce(&Checkpoint, Option<AccessibilitySnapshot>) -> Result<(), String>,
+    assert_outcome: impl Fn(&Checkpoint, Option<AccessibilitySnapshot>) -> Result<(), String>,
 ) -> Result<(), String> {
     press_arrow_until_label(checkpoint, label)?;
     activate_focused_control(checkpoint, assert_outcome)
@@ -1007,6 +1059,60 @@ mod tests {
             targets: Vec::new(),
             min_target_size: 0.0,
         }
+    }
+
+    // `enter_press_left_no_trace` -- the pure decision behind
+    // `activate_focused_control`'s single lost-press retry (#305's CI
+    // failures). These pin the exact "no observable effect" contract that
+    // makes the retry safe: it may only fire when nothing at all happened.
+
+    #[test]
+    fn a_press_with_identical_focus_and_label_left_no_trace() {
+        let before = Some(snapshot("7v0", "Setări"));
+        let current = Some(snapshot("7v0", "Setări"));
+        assert!(enter_press_left_no_trace(&before, &current));
+    }
+
+    #[test]
+    fn a_flipped_label_on_the_same_entity_is_a_landed_press_never_retried() {
+        // The mute toggle flips its own label in place: same entity,
+        // different label. Retrying here would double-toggle.
+        let before = Some(snapshot("7v0", "Sunet: Pornit"));
+        let current = Some(snapshot("7v0", "Sunet: Oprit"));
+        assert!(!enter_press_left_no_trace(&before, &current));
+    }
+
+    #[test]
+    fn moved_focus_is_a_landed_press_never_retried() {
+        // Opening the settings overlay autofocuses its first control: a
+        // late-landing open must poll onward, not press Enter again (which
+        // would hit the freshly focused volume stepper).
+        let before = Some(snapshot("7v0", "Setări"));
+        let current = Some(snapshot("12v0", "-"));
+        assert!(!enter_press_left_no_trace(&before, &current));
+    }
+
+    #[test]
+    fn cleared_focus_is_a_landed_press_never_retried() {
+        // Closing an overlay over the main menu clears focus to None
+        // (`core::despawn_screen`) -- observable effect, no retry.
+        let before = Some(snapshot("7v0", "Înapoi"));
+        let current = Some(AccessibilitySnapshot {
+            focused_entity: None,
+            focused_label: None,
+            focus_marker_visible: false,
+            targets: Vec::new(),
+            min_target_size: 0.0,
+        });
+        assert!(!enter_press_left_no_trace(&before, &current));
+    }
+
+    #[test]
+    fn missing_snapshots_prove_nothing_and_never_retry() {
+        let some = Some(snapshot("7v0", "Setări"));
+        assert!(!enter_press_left_no_trace(&None, &some));
+        assert!(!enter_press_left_no_trace(&some, &None));
+        assert!(!enter_press_left_no_trace(&None, &None));
     }
 
     // `advance_stable_streak` -- the pure decision behind `drain_pending_input`
