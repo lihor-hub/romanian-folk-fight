@@ -155,7 +155,7 @@
 //! Agent/CI feedback is dominated by this scenario's wall-clock cost, most
 //! of which comes from walking the phone and DPR-2/3 legs of the matrix
 //! above. For current development, [`active_viewports`] defaults to a
-//! single entry -- [`ACTIVE_VIEWPORTS`], `desktop` at 1280x800/DPR 1 -- so
+//! single entry -- [`ACTIVE_VIEWPORTS`], `normal-desktop` at 1440x900/DPR 1 -- so
 //! an ordinary `--scenario gold-journey` run walks exactly the five
 //! [`CHECKPOINTS`] screens (menu, creation, fight, fight-result, shop) once,
 //! at the one viewport current development cares about (5 checkpoints, not
@@ -166,12 +166,10 @@
 //! see [`resolve_viewports`] for the selection logic (unit-tested below) and
 //! `.github/workflows/web-smoke.yml`'s `gold-journey` job / its manual
 //! `workflow_dispatch` `full_matrix` input for how CI reactivates it on
-//! demand. Every baseline this scenario reads/writes is unaffected: the
-//! narrowed default only changes which of the existing
-//! `tests/visual/baselines/gold-journey/<viewport>-<checkpoint>.png` files
-//! get exercised on a given run, never their contents or names. This is a
-//! deliberately temporary scope (see issue #284's body) -- reactivating the
-//! broader coverage is a one-line env var, not a code change.
+//! demand. The representative viewport uses its own `normal-desktop`
+//! baseline keys, leaving the preserved 1280x800 `desktop` matrix baselines
+//! untouched. Reactivating broader coverage remains a one-line env var, not
+//! a code change.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -295,14 +293,15 @@ const FULL_VIEWPORTS: &[ViewportSpec] = &[
     },
 ];
 
-/// #284's narrowed default: the single `desktop` (1280x800 @ DPR 1) entry
-/// from [`FULL_VIEWPORTS`], covering the five [`CHECKPOINTS`] screens at the
-/// one viewport the active development/CI feedback loop currently exercises.
+/// The representative normal desktop browser viewport (1440x900 @ DPR 1),
+/// covering the five [`CHECKPOINTS`] screens once in the active feedback loop.
+/// Its distinct name keeps these baselines separate from [`FULL_VIEWPORTS`]'s
+/// preserved 1280x800 `desktop` row.
 /// See "Desktop-only default scope (#284)" in the module docs above.
 const ACTIVE_VIEWPORTS: &[ViewportSpec] = &[ViewportSpec {
-    name: "desktop",
-    width: 1280,
-    height: 800,
+    name: "normal-desktop",
+    width: 1440,
+    height: 900,
     dpr: 1.0,
 }];
 
@@ -327,8 +326,8 @@ fn resolve_viewports(full_matrix_env: Option<&str>) -> &'static [ViewportSpec] {
     }
 }
 
-/// The viewport set this run actually walks: [`ACTIVE_VIEWPORTS`] (desktop
-/// DPR 1 only) by default, or the full [`FULL_VIEWPORTS`] matrix when
+/// The viewport set this run actually walks: [`ACTIVE_VIEWPORTS`] (normal
+/// desktop at DPR 1) by default, or the full [`FULL_VIEWPORTS`] matrix when
 /// [`FULL_MATRIX_ENV_VAR`] is set to `1`/`true` (#284).
 fn active_viewports() -> &'static [ViewportSpec] {
     resolve_viewports(std::env::var(FULL_MATRIX_ENV_VAR).ok().as_deref())
@@ -723,35 +722,21 @@ fn step(
     })
 }
 
-/// Waits for [`CheckpointSpec::expected_screen`] and #168's stability
-/// contract, without capturing/asserting -- used when this scenario needs to
-/// reach a screen before issuing a further command (e.g. reaching
-/// `CharacterCreation` before selecting the preset) but the checkpoint
-/// itself is captured afterward.
-///
-/// Turns a completed [`wait_for_readiness`] outcome into a failure via
-/// [`readiness_error`] -- the same check [`capture`] runs -- rather than
-/// discarding it (`#272`'s agent flagged this: the previous implementation
-/// was `wait_for_readiness(..).map(|_| ())`, which threw away the returned
-/// `Readiness` entirely). `wait_for_readiness` itself only ever returns
-/// `Err` for a genuine I/O failure (a CDP call failing); it returns `Ok`
-/// even when the screen was never reached or the first paint never
-/// stabilized within budget, packing that fact into the returned
-/// `Readiness` instead -- so discarding the tuple's second and third fields
-/// silently accepted a checkpoint that isn't actually ready, and the caller
-/// (e.g. `run_viewport_journey`, right before selecting a creation preset)
-/// would immediately issue its next command against a screen that may not
-/// have finished spawning yet.
+/// Waits only for [`CheckpointSpec::expected_screen`] before a command or time
+/// freeze. Screenshot stability is deliberately deferred until [`capture`]:
+/// the fight screen has perpetual motion, so requiring byte-identical frames
+/// before `setTimePaused` creates an impossible dependency at viewports where
+/// every animation step changes at least one physical pixel.
 fn wait_for_checkpoint(
     checkpoint: &Checkpoint,
     spec: &CheckpointSpec,
     viewport: &ViewportSpec,
 ) -> Result<(), SmokeError> {
     let scenario = format!("web-smoke gold-journey[{}][{}]", viewport.name, spec.name);
-    let (_, _, readiness) = wait_for_readiness(checkpoint, spec, viewport).map_err(|e| {
+    let readiness = wait_for_screen_readiness(checkpoint, spec).map_err(|e| {
         SmokeError::scenario(scenario.clone(), e, artifacts::scenario_dir(SCENARIO))
     })?;
-    if let Some(problem) = readiness_error(spec, &readiness) {
+    if let Some(problem) = screen_readiness_error(spec, &readiness) {
         return Err(SmokeError::scenario(
             scenario,
             problem,
@@ -761,15 +746,60 @@ fn wait_for_checkpoint(
     Ok(())
 }
 
-/// Turns a completed [`wait_for_readiness`] outcome into a diagnosed failure
-/// message, or `None` if both facts hold (the expected screen was reached
-/// and the first paint stabilized). The one place both [`capture`] (this
-/// scenario's full per-checkpoint assertions) and [`wait_for_checkpoint`] (a
-/// lighter "just get me to this screen" wait) turn a `Readiness` into a
-/// pass/fail decision, so the two callers can never drift apart on what "not
-/// ready yet" means. Pure (no I/O), so it is unit-testable directly against
-/// fabricated `Readiness` values without a real browser (see the `tests`
-/// module below).
+/// Polls the review seam until the expected screen is active. This does not
+/// capture screenshots: stability can only be required after callers freeze
+/// perpetual motion.
+fn wait_for_screen_readiness(
+    checkpoint: &Checkpoint,
+    spec: &CheckpointSpec,
+) -> Result<Readiness, String> {
+    let start = Instant::now();
+    let mut last_screen = None;
+    let mut frames_observed = 0;
+
+    for _ in 0..READY_MAX_FRAMES {
+        if start.elapsed() > READY_MAX_WALL_CLOCK {
+            break;
+        }
+        checkpoint.wait_for_frame()?;
+        frames_observed += 1;
+        last_screen = read_screen(checkpoint)?;
+        let status = checkpoint.read_status()?;
+        if status.app_booted() && last_screen.as_deref() == Some(spec.expected_screen) {
+            return Ok(Readiness {
+                reached_screen: true,
+                stabilized: false,
+                frames_observed,
+                elapsed: start.elapsed(),
+                last_screen,
+            });
+        }
+    }
+
+    Ok(Readiness {
+        reached_screen: last_screen.as_deref() == Some(spec.expected_screen),
+        stabilized: false,
+        frames_observed,
+        elapsed: start.elapsed(),
+        last_screen,
+    })
+}
+
+fn screen_readiness_error(spec: &CheckpointSpec, readiness: &Readiness) -> Option<String> {
+    (!readiness.reached_screen).then(|| {
+        format!(
+            "never observed screen `{}` within {:?}/{} frames (last seen: {:?})",
+            spec.expected_screen, READY_MAX_WALL_CLOCK, READY_MAX_FRAMES, readiness.last_screen
+        )
+    })
+}
+
+/// Turns [`capture`]'s post-freeze [`wait_for_readiness`] outcome into a
+/// diagnosed failure, or `None` when the expected screen was reached and its
+/// screenshot stabilized. The lighter pre-freeze path deliberately uses
+/// [`screen_readiness_error`] because perpetual motion cannot stabilize until
+/// time is paused. Pure (no I/O), so it is unit-testable against fabricated
+/// [`Readiness`] values without a real browser.
 fn readiness_error(spec: &CheckpointSpec, readiness: &Readiness) -> Option<String> {
     if !readiness.reached_screen {
         Some(format!(
@@ -1184,12 +1214,12 @@ mod tests {
     // comment for why).
 
     #[test]
-    fn default_selection_is_desktop_dpr1_only() {
+    fn default_selection_is_normal_desktop_dpr1_only() {
         let viewports = resolve_viewports(None);
         assert_eq!(viewports.len(), 1, "#284: default must be desktop-only");
-        assert_eq!(viewports[0].name, "desktop");
-        assert_eq!(viewports[0].width, 1280);
-        assert_eq!(viewports[0].height, 800);
+        assert_eq!(viewports[0].name, "normal-desktop");
+        assert_eq!(viewports[0].width, 1440);
+        assert_eq!(viewports[0].height, 900);
         assert_eq!(viewports[0].dpr, 1.0);
     }
 
@@ -1202,7 +1232,7 @@ mod tests {
                 1,
                 "env value {value:?} should not activate the full matrix"
             );
-            assert_eq!(viewports[0].name, "desktop");
+            assert_eq!(viewports[0].name, "normal-desktop");
         }
     }
 
@@ -1298,5 +1328,20 @@ mod tests {
         let err = readiness_error(&CHECKPOINTS[0], &readiness(false, false))
             .expect("some error is reported");
         assert!(!err.contains("never stabilized"));
+    }
+
+    #[test]
+    fn screen_only_readiness_accepts_motion_before_the_time_freeze() {
+        assert_eq!(
+            screen_readiness_error(&CHECKPOINTS[2], &readiness(true, false)),
+            None
+        );
+    }
+
+    #[test]
+    fn screen_only_readiness_still_rejects_a_missing_screen() {
+        let err = screen_readiness_error(&CHECKPOINTS[2], &readiness(false, false))
+            .expect("a missing screen remains an error");
+        assert!(err.contains("never observed screen"));
     }
 }
