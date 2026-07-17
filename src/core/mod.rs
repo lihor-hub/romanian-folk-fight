@@ -10,7 +10,7 @@ use bevy::window::{PrimaryWindow, WindowResized};
 
 use crate::theme::is_mobile_width;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "review"))]
 pub(crate) use projection::screen_point_for_world_point;
 pub(crate) use projection::{letterbox_zoom, logical_node_rect, world_point_for_screen_point};
 

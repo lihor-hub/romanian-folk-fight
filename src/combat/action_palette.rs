@@ -43,7 +43,7 @@ use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 
 use crate::character::{Attributes, EnemyFighter, PlayerFighter, Stamina};
-use crate::core::{UiFont, ViewportInfo};
+use crate::core::{LetterboxRect, UiFont, ViewportInfo};
 use crate::menu::DisabledButton;
 use crate::theme::{
     ACTION_BUTTON_TOUCH_TARGET, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED,
@@ -92,6 +92,50 @@ const PHONE_TARGET_HEIGHT: f32 = 56.0;
 /// Gap between phone controls in the same row, and between the category row
 /// and the (when open) action row above it.
 const PHONE_ROW_GAP: f32 = 8.0;
+
+/// Clearance the phone action bar's container keeps above the real window's
+/// bottom edge (#276) -- matches the pre-#276 flat `bottom: Val::Px(8.0)`
+/// [`spawn_phone_action_bar`] used to hard-code, so a viewport with no
+/// letterbox slack below the stage (see [`phone_bar_bottom_offset`]) falls
+/// back to exactly the old placement instead of a new, untested magic
+/// number.
+const PHONE_BAR_WINDOW_MARGIN: f32 = 8.0;
+
+/// #276's single explicit mobile layout contract: the `bottom` (`Val::Px`,
+/// relative to [`HudScreen`] -- see `hud::hud_root_node`'s doc comment)
+/// [`spawn_phone_action_bar`]'s container must use so that even its
+/// tallest state -- both rows open -- never grows *into* the letterboxed
+/// arena stage at all, and therefore can never cover the fighters' bodies or
+/// [`super::hud::LogPanelRoot`]'s combat log, both of which (like every
+/// full-window HUD overlay, #125) stay confined inside the stage.
+///
+/// On a real phone, [`ViewportInfo`]'s width is far smaller than its height,
+/// so the fixed 4:3 [`LetterboxRect`] (#125) occupies only a thin band
+/// roughly in the screen's vertical middle, leaving a large strip of
+/// background below it (and above it) the arena camera never draws into --
+/// see this module's `mobile_layout` test module for the exact 390x844
+/// numbers this issue was filed against. That strip is precisely the #276
+/// bug's root cause: pre-#276, [`spawn_phone_action_bar`] anchored
+/// `bottom: Val::Px(8.0)` against the stage's *own* bottom edge, so opening a
+/// category grew the bar upward *into* that same thin band the fighters and
+/// the combat log already occupy -- even the closed, single-row bar already
+/// reached into it. This function instead anchors the bar against the real
+/// window's bottom edge whenever the stage doesn't already reach it,
+/// reserving exactly the otherwise-unused strip below the stage for the bar,
+/// so opening a category grows into space nothing else was ever drawing
+/// into, rather than the arena.
+///
+/// Falls back to the flat [`PHONE_BAR_WINDOW_MARGIN`] when the viewport has
+/// no such slack (`letterbox.size.y` already spans the window's full height
+/// -- a squarish or landscape-shaped "mobile-width" window, which
+/// `is_mobile_width`'s width-only breakpoint does not itself rule out): in
+/// that edge case there is no unused strip to reserve, so this keeps the
+/// pre-#276 placement rather than guessing at a different one.
+pub(super) fn phone_bar_bottom_offset(viewport: ViewportInfo, letterbox: LetterboxRect) -> f32 {
+    let stage_bottom = letterbox.position.y + letterbox.size.y;
+    let below_stage_room = (viewport.height - stage_bottom).max(0.0);
+    PHONE_BAR_WINDOW_MARGIN - below_stage_room
+}
 
 /// The combat action a HUD button submits when clicked, plus the stable
 /// descriptor id it was built from — id-keyed (not action-keyed) lookup so
@@ -184,9 +228,11 @@ pub(super) fn spawn_action_bar(
     panel_texture: &PanelTexture,
     is_mobile: bool,
     extra: &ExtraDescriptors,
+    viewport: &ViewportInfo,
+    letterbox: &LetterboxRect,
 ) {
     if is_mobile {
-        spawn_phone_action_bar(parent, ui_font, extra);
+        spawn_phone_action_bar(parent, ui_font, extra, viewport, letterbox);
         return;
     }
 
@@ -245,14 +291,22 @@ pub(super) fn spawn_action_bar(
 /// #199 forbids ("does not cover required fighter/status information").
 /// A plain [`PANEL_LINEN`] backdrop with slim padding keeps both 56px rows
 /// clear of the nameplates without shrinking any touch target.
+///
+/// `bottom` (#276) comes from [`phone_bar_bottom_offset`] instead of a flat
+/// constant -- see that function's doc comment for why: on a real phone this
+/// anchors the whole bar against the *real window's* bottom edge, in the
+/// otherwise-unused strip below the letterboxed stage, instead of the
+/// stage's own bottom edge the pre-#276 bar grew into.
 fn spawn_phone_action_bar(
     parent: &mut ChildSpawnerCommands,
     ui_font: &UiFont,
     extra: &ExtraDescriptors,
+    viewport: &ViewportInfo,
+    letterbox: &LetterboxRect,
 ) {
     let node = Node {
         position_type: PositionType::Absolute,
-        bottom: Val::Px(8.0),
+        bottom: Val::Px(phone_bar_bottom_offset(*viewport, *letterbox)),
         left: Val::Px(8.0),
         right: Val::Px(8.0),
         flex_direction: FlexDirection::Column,
@@ -845,6 +899,7 @@ pub(super) fn sync_phone_open_category(
 pub(super) fn rebuild_action_bar_on_breakpoint_change(
     mut commands: Commands,
     viewport: Res<ViewportInfo>,
+    letterbox: Res<LetterboxRect>,
     ui_font: Res<UiFont>,
     panel_texture: Res<PanelTexture>,
     extra: Res<ExtraDescriptors>,
@@ -879,7 +934,15 @@ pub(super) fn rebuild_action_bar_on_breakpoint_change(
     *phone_state = PhonePaletteState::default();
     input_focus.clear();
     commands.entity(hud_root).with_children(|parent| {
-        spawn_action_bar(parent, &ui_font, &panel_texture, viewport.is_mobile, &extra);
+        spawn_action_bar(
+            parent,
+            &ui_font,
+            &panel_texture,
+            viewport.is_mobile,
+            &extra,
+            &viewport,
+            &letterbox,
+        );
     });
 }
 
@@ -1670,6 +1733,132 @@ mod tests {
                 .iter(app.world())
                 .count();
             assert_eq!(buttons, 0, "the new fight's action row starts empty");
+        }
+    }
+
+    // --- #276's mobile layout contract ---
+
+    mod mobile_layout {
+        use super::*;
+
+        /// The real `LetterboxRect` a 390x844 phone viewport produces (see
+        /// `core::letterbox_camera`): the fixed 4:3 design resolution
+        /// (800x600) letterboxes to a 390x292.5 band, vertically centered --
+        /// i.e. a large, otherwise-unused strip both above and below it.
+        /// Hand-computed here (rather than driven through a real `App`,
+        /// which never runs `letterbox_camera` headlessly -- it needs a real
+        /// `Window` -- so `LetterboxRect` stays at its full-resolution
+        /// default in every existing headless test app) so this module's
+        /// tests exercise the exact numbers #276 was filed against.
+        fn phone_letterbox() -> LetterboxRect {
+            LetterboxRect {
+                position: Vec2::new(0.0, 275.75),
+                size: Vec2::new(390.0, 292.5),
+            }
+        }
+
+        fn phone_viewport() -> ViewportInfo {
+            ViewportInfo {
+                width: 390.0,
+                height: 844.0,
+                is_mobile: true,
+            }
+        }
+
+        /// The phone action bar's tallest possible height: both rows open
+        /// (a category row plus a populated action row), the gap between
+        /// them, and the container's own padding on both the top and bottom
+        /// edge.
+        fn max_phone_bar_height() -> f32 {
+            PHONE_TARGET_HEIGHT * 2.0 + PHONE_ROW_GAP + ACTION_BAR_PADDING * 2.0
+        }
+
+        #[test]
+        fn reserves_the_unused_strip_below_a_tall_phones_letterboxed_stage() {
+            let offset = phone_bar_bottom_offset(phone_viewport(), phone_letterbox());
+            // stage_bottom = 275.75 + 292.5 = 568.25; below_stage_room =
+            // 844.0 - 568.25 = 275.75; offset = 8.0 - 275.75.
+            assert_eq!(
+                offset,
+                8.0 - 275.75,
+                "must anchor against the real window's bottom edge, not the stage's"
+            );
+        }
+
+        #[test]
+        fn falls_back_to_the_flat_margin_with_no_letterbox_slack() {
+            // A "mobile-width" viewport whose letterboxed stage already
+            // spans the full window height (no unused strip below it to
+            // reserve) -- e.g. a squarish or landscape-shaped window, which
+            // `is_mobile_width`'s width-only breakpoint does not itself rule
+            // out.
+            let viewport = ViewportInfo {
+                width: 690.0,
+                height: 517.5,
+                is_mobile: true,
+            };
+            let letterbox = LetterboxRect {
+                position: Vec2::ZERO,
+                size: Vec2::new(690.0, 517.5),
+            };
+            let offset = phone_bar_bottom_offset(viewport, letterbox);
+            assert_eq!(
+                offset, PHONE_BAR_WINDOW_MARGIN,
+                "with no slack below the stage, must keep the pre-#276 flat margin"
+            );
+        }
+
+        /// The #276 acceptance criterion, proven geometrically: on a tall
+        /// phone (real letterbox slack below the stage), even the tallest
+        /// possible bar -- both rows open -- must land entirely below the
+        /// stage's own bottom edge, so it can never intersect anything
+        /// inside the stage (the fighters or the combat log, both confined
+        /// there like every full-window HUD overlay per #125).
+        #[test]
+        fn the_tallest_open_bar_never_reaches_back_into_the_stage() {
+            let letterbox = phone_letterbox();
+            let offset = phone_bar_bottom_offset(phone_viewport(), letterbox);
+            // The container's bottom edge sits `-offset` px below the
+            // stage's own bottom edge (`offset` is negative here); its top
+            // edge is `max_phone_bar_height()` above that. For the whole box
+            // to stay outside the stage, that top edge must still be at or
+            // below the stage's bottom edge -- i.e. `-offset` must be at
+            // least as large as the tallest possible bar.
+            assert!(
+                -offset >= max_phone_bar_height(),
+                "the fully-open bar (height {}) must fit entirely within the {} px reserved \
+                 below the stage (offset {offset})",
+                max_phone_bar_height(),
+                -offset
+            );
+        }
+
+        /// Integration proof that [`spawn_phone_action_bar`] actually wires
+        /// the contract through: the spawned container's declared
+        /// `Node.bottom` must equal what [`phone_bar_bottom_offset`] computes
+        /// from the exact same `ViewportInfo`/`LetterboxRect` resources the
+        /// app spawned it with (whatever they happen to be headlessly --
+        /// see `phone_letterbox`'s doc comment for why a headless app's
+        /// `LetterboxRect` is not the real 390x844 value), not a value
+        /// independently derived or left over from the pre-#276 flat
+        /// constant.
+        #[test]
+        fn the_spawned_phone_bar_uses_the_contracts_bottom_offset() {
+            let mut app = mobile_test_app();
+            let viewport = *app.world().resource::<ViewportInfo>();
+            let letterbox = *app.world().resource::<LetterboxRect>();
+            let expected = phone_bar_bottom_offset(viewport, letterbox);
+
+            let node = app
+                .world_mut()
+                .query_filtered::<&Node, With<ActionBarRoot>>()
+                .single(app.world())
+                .expect("one action bar root");
+            assert_eq!(
+                node.bottom,
+                Val::Px(expected),
+                "the spawned phone bar's bottom offset must come from phone_bar_bottom_offset"
+            );
         }
     }
 

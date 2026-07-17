@@ -97,17 +97,21 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
 use crate::arena::fx::ParallaxLayer;
-use crate::arena::{ENEMY_ANCHOR, PLAYER_ANCHOR};
+use crate::arena::{ENEMY_ANCHOR, FIGHTER_SIZE, PLAYER_ANCHOR};
 use crate::character::{EnemyFighter, PlayerFighter, Stamina};
 use crate::combat::action_palette::{
     ActionButton, ActionCostOrReason, CategoryButton, PhonePaletteState,
 };
 use crate::combat::actions::{self, ActionCategory};
 use crate::combat::engine::QUICK_STRIKE_COST;
+use crate::combat::hud::LogPanelRoot;
 use crate::combat::pause::PauseAction;
 use crate::combat::systems::{CombatPresentation, PlayerActionEvent};
 use crate::combat::{CombatAction, CombatRng, CombatSide, CombatTurn};
-use crate::core::{GameState, LetterboxRect, ViewportInfo, WorldCamera, logical_node_rect};
+use crate::core::{
+    GameState, LetterboxRect, ViewportInfo, WorldCamera, logical_node_rect,
+    screen_point_for_world_point,
+};
 use crate::creation::{CharacterDraft, CreationAction, HeroChoice, HeroPreset};
 use crate::items::ItemId;
 use crate::menu::{DisabledButton, MenuAction};
@@ -467,14 +471,15 @@ impl TargetRect {
     }
 }
 
-/// Everything the `fight-palette-phone` scenario (#199) needs to assert the
-/// category-disclosure palette beyond what [`PaletteSnapshot`]'s top-level
-/// fields already cover: how many primary category controls are visible
-/// (must never exceed four), which one (if any) is currently open, the exact
-/// on-screen box of every currently visible target (category buttons plus,
-/// while open, that category's action buttons), whether they all fit inside
-/// the stage, and the smallest dimension across all of them (the 44px CSS
-/// touch-target floor the issue requires).
+/// Everything the `fight-palette-phone` scenario (#199, extended by #276)
+/// needs to assert the category-disclosure palette beyond what
+/// [`PaletteSnapshot`]'s top-level fields already cover: how many primary
+/// category controls are visible (must never exceed four), which one (if
+/// any) is currently open, the exact on-screen box of every currently
+/// visible target (category buttons plus, while open, that category's
+/// action buttons), whether they all land inside the real browser window,
+/// and the smallest dimension across all of them (the 44px CSS touch-target
+/// floor the issue requires).
 #[derive(serde::Serialize, Debug, Clone, PartialEq)]
 struct PhonePaletteSnapshot {
     visible_category_count: usize,
@@ -487,7 +492,20 @@ struct PhonePaletteSnapshot {
     /// not just count.
     open_action_ids: Vec<String>,
     targets: Vec<TargetRect>,
-    fits_in_stage: bool,
+    /// Whether every visible target lands inside the real browser window
+    /// (`0..viewport.width` x `0..viewport.height`) -- `false` means the
+    /// palette overflowed the page entirely (it would produce unwanted
+    /// scroll, which `check_no_unexpected_scroll` on the `xtask` side also
+    /// catches independently).
+    ///
+    /// #276 renamed this from `fits_in_stage` (checked against
+    /// [`LetterboxRect`] instead) and changed its meaning: on a real phone,
+    /// [`LetterboxRect`]'s tiny letterboxed band only covers the vertical
+    /// middle of the screen, and #276 deliberately anchors the phone action
+    /// bar against the real window's bottom edge, in the (otherwise unused)
+    /// strip below that band -- so "inside the stage" is no longer the right
+    /// question for the phone bar specifically; "inside the window" is.
+    fits_in_window: bool,
     /// `min(width, height)` across every entry in `targets`; `0.0` if
     /// `targets` is empty (nothing currently visible to measure).
     min_target_size: f32,
@@ -496,6 +514,36 @@ struct PhonePaletteSnapshot {
     /// means the palette covers required fighter/status information, which
     /// #199 forbids.
     overlaps_status_panels: bool,
+    /// Whether any visible palette control's box intersects either fighter's
+    /// deterministic readable-body-region proxy (#276, see
+    /// [`fighter_readable_rect`]) -- `true` means the palette covers a
+    /// fighter's visible body, which #276 forbids in both the closed and
+    /// every open-category state.
+    overlaps_fighter_region: bool,
+    /// Whether any visible palette control's box intersects
+    /// [`crate::combat::hud::LogPanelRoot`]'s rendered rect (#276) -- `true`
+    /// means the palette covers the combat log, which #276 forbids.
+    overlaps_log_panel: bool,
+}
+
+/// #276's deterministic proxy for "the area a fighter's body is readable
+/// in": a world-space box centered on `anchor` (`arena::PLAYER_ANCHOR` or
+/// `arena::ENEMY_ANCHOR`) sized to `arena::FIGHTER_SIZE`, projected to
+/// full-window logical screen space through the same letterbox projection
+/// every other geometry fact in this module uses. Deliberately built from
+/// the fixed spawn anchor/sprite-bounding-box constants rather than a
+/// fighter's *live* `Transform` (which can shift with duel distance or a
+/// mid-animation attack lunge/footwork offset): a proxy that changed frame
+/// to frame depending on incidental animation state would not be
+/// deterministic, and the bug this guards against (#276) is a vertical
+/// layout overlap, not a horizontal-position one -- both anchors share the
+/// same Y, so the fixed anchor is exact for the axis that matters here.
+fn fighter_readable_rect(anchor: Transform, letterbox: LetterboxRect) -> Rect {
+    let half_size = FIGHTER_SIZE / 2.0;
+    let center = anchor.translation.truncate();
+    let corner_a = screen_point_for_world_point(center - half_size, letterbox);
+    let corner_b = screen_point_for_world_point(center + half_size, letterbox);
+    Rect::from_corners(corner_a, corner_b)
 }
 
 /// The data [`focus_snapshot`] needs to describe whichever
@@ -565,6 +613,7 @@ fn publish_palette_state(
         (&UiGlobalTransform, &ComputedNode),
         With<crate::combat::hud::FighterPanelRoot>,
     >,
+    log_panels: Query<(&UiGlobalTransform, &ComputedNode), With<LogPanelRoot>>,
     focus_action_buttons: FocusActionButton,
     focus_category_buttons: Query<(Entity, &CategoryButton, Option<&Outline>)>,
     reason_texts: Query<&Text, With<ActionCostOrReason>>,
@@ -621,6 +670,30 @@ fn publish_palette_state(
                 .iter()
                 .any(|panel| !panel.intersect(*target).is_empty())
         });
+        // #276: the phone action bar is deliberately anchored against the
+        // real window's bottom edge (see `action_palette::phone_bar_bottom_offset`),
+        // not the letterboxed stage's -- so the meaningful containment check
+        // for it is "inside the window", not "inside the stage".
+        let window = Rect::from_corners(Vec2::ZERO, Vec2::new(viewport.width, viewport.height));
+        let fits_in_window = window.contains(extent.min) && window.contains(extent.max);
+        let fighter_rects = [
+            fighter_readable_rect(PLAYER_ANCHOR, *letterbox),
+            fighter_readable_rect(ENEMY_ANCHOR, *letterbox),
+        ];
+        let overlaps_fighter_region = all_rects.iter().any(|target| {
+            fighter_rects
+                .iter()
+                .any(|fighter| !fighter.intersect(*target).is_empty())
+        });
+        let log_rects: Vec<Rect> = log_panels
+            .iter()
+            .map(|(transform, node)| logical_node_rect(transform, node))
+            .collect();
+        let overlaps_log_panel = all_rects.iter().any(|target| {
+            log_rects
+                .iter()
+                .any(|log| !log.intersect(*target).is_empty())
+        });
         PhonePaletteSnapshot {
             visible_category_count: category_rects.len(),
             open_category,
@@ -630,13 +703,15 @@ fn publish_palette_state(
                 .copied()
                 .map(TargetRect::from_rect)
                 .collect(),
-            fits_in_stage: fits,
+            fits_in_window,
             min_target_size: if min_target_size.is_finite() {
                 min_target_size
             } else {
                 0.0
             },
             overlaps_status_panels,
+            overlaps_fighter_region,
+            overlaps_log_panel,
         }
     });
 
