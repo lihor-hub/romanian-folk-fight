@@ -12,12 +12,12 @@ use bevy::prelude::*;
 use bevy::ui::UiSystems;
 
 use crate::character::{Attributes, PlayerAppearance, PlayerFighter, stats};
+#[cfg(test)]
+use crate::core::screen_point_for_world_point;
 use crate::core::{
-    GameState, LOGICAL_HEIGHT, LOGICAL_WIDTH, LetterboxRect, UiFont, despawn_screen,
+    GameState, LOGICAL_HEIGHT, LOGICAL_WIDTH, LetterboxRect, UiFont, ViewportInfo, despawn_screen,
     letterbox_zoom, logical_node_rect, world_point_for_screen_point,
 };
-#[cfg(test)]
-use crate::core::{ViewportInfo, screen_point_for_world_point};
 use crate::creation::PlayerCharacter;
 use crate::cutout::{CutoutRig, human_template_for, spawn_cutout_rig_with_gear};
 use crate::flow::FlowIntent;
@@ -399,6 +399,7 @@ fn spawn_shop_screen(
     owned: Res<OwnedItems>,
     equipment: Res<PlayerEquipment>,
     player: Option<Res<PlayerCharacter>>,
+    viewport: Res<ViewportInfo>,
     assets: ShopScreenAssets,
 ) {
     let ui_font = &*assets.ui_font;
@@ -445,6 +446,14 @@ fn spawn_shop_screen(
                     justify_content: JustifyContent::SpaceBetween,
                     align_items: AlignItems::Center,
                     margin: UiRect::bottom(Val::Px(8.0)),
+                    // #287: without this, the root's default flex-shrink=1
+                    // lets this row compress below its natural content
+                    // height whenever the shop's total content (header +
+                    // wrapped body + back button) overflows the window --
+                    // silently disagreeing with its own rendered size the
+                    // same way the wrapped body did (see the body's own
+                    // `flex_shrink: 0.0` below for the full explanation).
+                    flex_shrink: 0.0,
                     ..default()
                 })
                 .with_children(|header| {
@@ -473,84 +482,66 @@ fn spawn_shop_screen(
                     align_items: AlignItems::FlexStart,
                     column_gap: Val::Px(SHOP_BODY_GAP),
                     row_gap: Val::Px(10.0),
+                    // #287: the root column is a scroll container
+                    // (`overflow: Overflow::scroll_y()`), which exists
+                    // precisely so content taller than the window scrolls
+                    // instead of compressing -- but a scrollable ancestor
+                    // also resets a flex item's *automatic* minimum size to
+                    // zero, so without an explicit `flex_shrink: 0.0` the
+                    // engine's default flex-shrink=1 was free to squeeze
+                    // this row's resolved height below the sum of its two
+                    // wrapped lines (catalog + preview stage) whenever the
+                    // stacked mobile layout overflowed the window. The back
+                    // button, laid out as this row's next sibling, then
+                    // landed at that compressed height instead of below the
+                    // row's actual, taller rendered content -- overlapping
+                    // the preview panel/frame. Pinning this to zero keeps
+                    // the row at its true content height and lets the root's
+                    // own scrolling handle any overflow instead.
+                    flex_shrink: 0.0,
                     ..default()
                 })
                 .with_children(|body| {
-                    body.spawn((
-                        Node {
-                            width: Val::Px(SHOP_CATALOG_WIDTH),
-                            max_width: Val::Percent(100.0),
-                            height: Val::Px(SHOP_PANEL_HEIGHT),
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(4.0),
-                            overflow: Overflow::scroll_y(),
-                            ..default()
-                        },
-                        ShopLayoutRole::CatalogColumn,
-                        ScrollPosition::default(),
-                        crate::ui_widgets::Scrollable,
-                    ))
-                    .with_children(|catalog| {
-                        for slot in Slot::ALL {
-                            spawn_icon_text_row(
-                                catalog,
-                                ShopIconKind::Slot(slot),
-                                slot_label(slot).to_string(),
-                                18.0,
-                                ui_font,
-                                icons,
-                                None,
-                            );
-                            for item in CATALOG.iter().filter(|item| item.slot == slot) {
-                                let state =
-                                    ItemButtonState::of(item.id, &wallet, &owned, &equipment);
-                                spawn_item_row(catalog, item, state, ui_font, panel_texture);
-                            }
-                        }
-                    });
-
-                    // Unlike every other panel on this screen, the preview
-                    // stage deliberately does **not** use `panel_bundle` or a
-                    // `BackgroundColor` fill: the world-space cutout rig it
-                    // frames (spawned separately by [`spawn_shop_preview`],
-                    // positioned by [`update_shop_preview_transform`]) is
-                    // rendered by the *world* camera, composited underneath
-                    // the *UI* camera's output -- so any opaque UI fill over
-                    // the frame's rect would hide the rig completely, no
-                    // matter how the rig itself is positioned or scaled
-                    // (#273, the same root cause #123 fixed for the creation
-                    // screen). The loadout rows and stat chips below the
-                    // frame keep their own WALNUT backing for legibility;
-                    // they never overlap the frame.
-                    body.spawn((
-                        Node {
-                            width: Val::Px(SHOP_PREVIEW_STAGE_WIDTH),
-                            max_width: Val::Percent(100.0),
-                            min_height: Val::Px(SHOP_PANEL_HEIGHT),
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(8.0),
-                            padding: UiRect::all(Val::Px(14.0)),
-                            ..default()
-                        },
-                        ShopLayoutRole::PreviewStage,
-                    ))
-                    .with_children(|preview_panel| {
-                        // The cutout "window": no fill of its own, so the
-                        // world-space rig underneath (positioned to land
-                        // here, see `update_shop_preview_transform`) renders
-                        // unobscured. Only the gold outline remains (#273).
-                        preview_panel.spawn((
-                            Node {
-                                width: Val::Percent(100.0),
-                                height: Val::Px(SHOP_PREVIEW_FRAME_HEIGHT),
-                                border: UiRect::all(Val::Px(2.0)),
-                                ..default()
-                            },
-                            BorderColor::all(GOLD),
-                        ));
-                        spawn_loadout_preview(preview_panel, &equipment, ui_font, icons);
-                        spawn_stat_strip(preview_panel, &attributes, &equipment, ui_font);
-                    });
+                    // #287: at phone widths the wrapped body's two lines
+                    // stack (catalog's own width already fills the
+                    // available row, pushing the preview stage onto the
+                    // next line) -- so whichever of the two spawns first
+                    // lands on that first line. The letterboxed 4:3 world
+                    // strip the preview rig's world camera can draw into
+                    // sits roughly in the screen's vertical middle, with
+                    // the header above eating into the space before it;
+                    // landing the preview stage on the *first* wrapped line
+                    // (right after the header) is what lands its resolved
+                    // rect inside that strip, mirroring why the creation
+                    // screen never had this problem: its preview stage is
+                    // already the first body item there. Desktop viewports
+                    // never wrap (catalog and preview sit side by side), so
+                    // the spawn order there only controls left/right
+                    // placement -- kept as catalog-left/preview-right,
+                    // matching every accepted desktop baseline.
+                    if viewport.is_mobile {
+                        spawn_shop_preview_stage(body, &equipment, &attributes, ui_font, icons);
+                        spawn_shop_catalog_column(
+                            body,
+                            &wallet,
+                            &owned,
+                            &equipment,
+                            ui_font,
+                            panel_texture,
+                            icons,
+                        );
+                    } else {
+                        spawn_shop_catalog_column(
+                            body,
+                            &wallet,
+                            &owned,
+                            &equipment,
+                            ui_font,
+                            panel_texture,
+                            icons,
+                        );
+                        spawn_shop_preview_stage(body, &equipment, &attributes, ui_font, icons);
+                    }
                 });
             parent.spawn((
                 wide_button("Înapoi în arenă", ui_font),
@@ -563,6 +554,105 @@ fn spawn_shop_screen(
         appearance,
         assets.asset_server.as_deref(),
     );
+}
+
+/// The catalog column: every equipment slot's header plus its buyable items,
+/// grouped by slot. Extracted from [`spawn_shop_screen`] so the body can
+/// spawn it before or after [`spawn_shop_preview_stage`] depending on
+/// [`ViewportInfo::is_mobile`] (#287).
+#[allow(clippy::too_many_arguments)]
+fn spawn_shop_catalog_column(
+    body: &mut ChildSpawnerCommands,
+    wallet: &Wallet,
+    owned: &OwnedItems,
+    equipment: &PlayerEquipment,
+    ui_font: &UiFont,
+    panel_texture: &PanelTexture,
+    icons: &ShopIcons,
+) {
+    body.spawn((
+        Node {
+            width: Val::Px(SHOP_CATALOG_WIDTH),
+            max_width: Val::Percent(100.0),
+            height: Val::Px(SHOP_PANEL_HEIGHT),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(4.0),
+            overflow: Overflow::scroll_y(),
+            ..default()
+        },
+        ShopLayoutRole::CatalogColumn,
+        ScrollPosition::default(),
+        crate::ui_widgets::Scrollable,
+    ))
+    .with_children(|catalog| {
+        for slot in Slot::ALL {
+            spawn_icon_text_row(
+                catalog,
+                ShopIconKind::Slot(slot),
+                slot_label(slot).to_string(),
+                18.0,
+                ui_font,
+                icons,
+                None,
+            );
+            for item in CATALOG.iter().filter(|item| item.slot == slot) {
+                let state = ItemButtonState::of(item.id, wallet, owned, equipment);
+                spawn_item_row(catalog, item, state, ui_font, panel_texture);
+            }
+        }
+    });
+}
+
+/// The preview stage: the cutout window frame (the world-rendered rig lands
+/// here, see [`update_shop_preview_transform`]) plus the loadout body map and
+/// stat strip beneath it. Extracted from [`spawn_shop_screen`] so the body
+/// can spawn it before or after [`spawn_shop_catalog_column`] depending on
+/// [`ViewportInfo::is_mobile`] (#287).
+///
+/// Unlike every other panel on this screen, this one deliberately does
+/// **not** use `panel_bundle` or a `BackgroundColor` fill: the world-space
+/// cutout rig it frames is rendered by the *world* camera, composited
+/// underneath the *UI* camera's output -- so any opaque UI fill over the
+/// frame's rect would hide the rig completely, no matter how the rig itself
+/// is positioned or scaled (#273, the same root cause #123 fixed for the
+/// creation screen). The loadout rows and stat chips below the frame keep
+/// their own WALNUT backing for legibility; they never overlap the frame.
+fn spawn_shop_preview_stage(
+    body: &mut ChildSpawnerCommands,
+    equipment: &PlayerEquipment,
+    attributes: &Attributes,
+    ui_font: &UiFont,
+    icons: &ShopIcons,
+) {
+    body.spawn((
+        Node {
+            width: Val::Px(SHOP_PREVIEW_STAGE_WIDTH),
+            max_width: Val::Percent(100.0),
+            min_height: Val::Px(SHOP_PANEL_HEIGHT),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(8.0),
+            padding: UiRect::all(Val::Px(14.0)),
+            ..default()
+        },
+        ShopLayoutRole::PreviewStage,
+    ))
+    .with_children(|preview_panel| {
+        // The cutout "window": no fill of its own, so the world-space rig
+        // underneath (positioned to land here, see
+        // `update_shop_preview_transform`) renders unobscured. Only the gold
+        // outline remains (#273).
+        preview_panel.spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Px(SHOP_PREVIEW_FRAME_HEIGHT),
+                border: UiRect::all(Val::Px(2.0)),
+                ..default()
+            },
+            BorderColor::all(GOLD),
+        ));
+        spawn_loadout_preview(preview_panel, equipment, ui_font, icons);
+        spawn_stat_strip(preview_panel, attributes, equipment, ui_font);
+    });
 }
 
 fn spawn_shop_preview(
@@ -1419,13 +1509,150 @@ mod tests {
         app
     }
 
-    fn preview_stage_entity(app: &mut App) -> Entity {
+    /// The (sole) entity carrying `role` among the shop's layout markers.
+    fn layout_role_entity(app: &mut App, role: ShopLayoutRole) -> Entity {
         app.world_mut()
             .query::<(Entity, &ShopLayoutRole)>()
             .iter(app.world())
-            .find(|(_, role)| **role == ShopLayoutRole::PreviewStage)
+            .find(|(_, r)| **r == role)
             .map(|(e, _)| e)
-            .expect("preview stage exists")
+            .unwrap_or_else(|| panic!("{role:?} exists"))
+    }
+
+    fn preview_stage_entity(app: &mut App) -> Entity {
+        layout_role_entity(app, ShopLayoutRole::PreviewStage)
+    }
+
+    /// `entity`'s parent and its index among that parent's [`Children`] --
+    /// used to prove sibling *order* (not just presence), e.g. for #287's
+    /// mobile preview-stage-first reordering.
+    fn sibling_position(app: &mut App, entity: Entity) -> (Entity, usize) {
+        let parent = app
+            .world()
+            .get::<ChildOf>(entity)
+            .expect("entity has a parent")
+            .parent();
+        let index = app
+            .world()
+            .get::<Children>(parent)
+            .expect("parent has children")
+            .iter()
+            .position(|child| child == entity)
+            .expect("entity is among its parent's children");
+        (parent, index)
+    }
+
+    /// #287 defect 1, red-first: at phone widths the shop's wrapped body
+    /// must place [`ShopLayoutRole::PreviewStage`] *before*
+    /// [`ShopLayoutRole::CatalogColumn`]. The two never fit side by side at
+    /// this width (the catalog alone already fills the wrapped row), so
+    /// whichever spawns first lands on the body's first line, right after
+    /// the header -- and that first line is what lands inside the
+    /// letterboxed world strip the preview rig's world camera can actually
+    /// draw into. Before this fix the catalog was always first, pushing the
+    /// preview stage onto a second line below the strip, where the rig is
+    /// structurally invisible no matter how it's positioned. This mirrors
+    /// why the creation screen never had the problem: its preview stage is
+    /// already the first (and only) body item there.
+    #[test]
+    fn phone_widths_place_the_preview_stage_before_the_catalog_column() {
+        let mut app = test_app_with_window(375.0, 812.0);
+
+        let catalog = layout_role_entity(&mut app, ShopLayoutRole::CatalogColumn);
+        let preview = layout_role_entity(&mut app, ShopLayoutRole::PreviewStage);
+        let (catalog_parent, catalog_index) = sibling_position(&mut app, catalog);
+        let (preview_parent, preview_index) = sibling_position(&mut app, preview);
+
+        assert_eq!(
+            catalog_parent, preview_parent,
+            "catalog and preview stage must share the wrapped body as their parent"
+        );
+        assert!(
+            preview_index < catalog_index,
+            "at phone widths the preview stage (index {preview_index}) must come before \
+             the catalog column (index {catalog_index}) so it wraps onto the body's first \
+             line, inside the letterboxed world strip, instead of being pushed below it (#287)"
+        );
+    }
+
+    /// #287: desktop widths must keep the *original* catalog-first order --
+    /// the two panels sit side by side there (never wrapping), so spawn
+    /// order there only controls left/right placement, and every accepted
+    /// desktop gold-journey baseline has the catalog on the left, the
+    /// preview stage on the right. The phone-only reorder above must not
+    /// leak into desktop layouts.
+    #[test]
+    fn desktop_widths_keep_the_catalog_column_before_the_preview_stage() {
+        let mut app = test_app_with_window(1280.0, 800.0);
+
+        let catalog = layout_role_entity(&mut app, ShopLayoutRole::CatalogColumn);
+        let preview = layout_role_entity(&mut app, ShopLayoutRole::PreviewStage);
+        let (_, catalog_index) = sibling_position(&mut app, catalog);
+        let (_, preview_index) = sibling_position(&mut app, preview);
+
+        assert!(
+            catalog_index < preview_index,
+            "desktop must keep the catalog (index {catalog_index}) before the preview stage \
+             (index {preview_index}): unlike phone widths, they sit side by side and never \
+             wrap, so reordering here would only swap their left/right placement, diffing \
+             every accepted desktop-shop baseline for no reason (#287)"
+        );
+    }
+
+    /// #287 defect 2, red-first: the header row and the wrapped body --
+    /// [`ShopAction::BackToArena`]'s previous siblings under the scrollable
+    /// root -- must never shrink below their natural content height. The
+    /// root is a scroll container (`overflow: Overflow::scroll_y()`)
+    /// specifically so content taller than the window scrolls instead of
+    /// compressing, but a scrollable ancestor also resets a flex item's
+    /// *automatic* minimum size to zero -- so without an explicit
+    /// `flex_shrink: 0.0` on these two, the engine's default flex-shrink=1
+    /// was free to squeeze the wrapped body's resolved height below the sum
+    /// of its two stacked lines whenever the mobile layout's total content
+    /// overflowed the window. The back button, laid out as the body's next
+    /// sibling, then landed at that compressed height instead of below the
+    /// body's actual, taller rendered content -- overlapping the preview
+    /// panel/frame (visible in the accepted `phone-shop` baseline).
+    #[test]
+    fn header_and_body_never_shrink_below_their_content_height() {
+        let mut app = test_app();
+        set_state(&mut app, GameState::Shop);
+
+        let catalog = layout_role_entity(&mut app, ShopLayoutRole::CatalogColumn);
+        let (body, _) = sibling_position(&mut app, catalog);
+        let (root, body_index) = sibling_position(&mut app, body);
+        assert_eq!(
+            body_index, 1,
+            "the wrapped body must be the root's second child (header, body, back button)"
+        );
+        let root_children: Vec<Entity> = app
+            .world()
+            .get::<Children>(root)
+            .expect("root has children")
+            .iter()
+            .collect();
+        assert_eq!(
+            root_children.len(),
+            3,
+            "the root must have exactly header, body, and the back button as children"
+        );
+        let header = root_children[0];
+
+        let flex_shrink =
+            |app: &App, entity: Entity| app.world().get::<Node>(entity).unwrap().flex_shrink;
+        assert_eq!(
+            flex_shrink(&app, body),
+            0.0,
+            "the wrapped body must not shrink below its content height (#287) -- otherwise \
+             the back button, laid out right after it, is positioned using a compressed \
+             height and overlaps the body's real, larger rendered content"
+        );
+        assert_eq!(
+            flex_shrink(&app, header),
+            0.0,
+            "the header row must not shrink below its content height either, for the same \
+             reason (#287)"
+        );
     }
 
     /// Hand-supplies the `PreviewStage` node's resolved `ComputedNode`/
