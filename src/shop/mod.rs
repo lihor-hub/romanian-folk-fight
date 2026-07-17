@@ -12,11 +12,12 @@ use bevy::prelude::*;
 use bevy::ui::UiSystems;
 
 use crate::character::{Attributes, PlayerAppearance, PlayerFighter, stats};
-#[cfg(test)]
-use crate::core::ViewportInfo;
 use crate::core::{
     GameState, LOGICAL_HEIGHT, LOGICAL_WIDTH, LetterboxRect, UiFont, despawn_screen,
+    letterbox_zoom, logical_node_rect, world_point_for_screen_point,
 };
+#[cfg(test)]
+use crate::core::{ViewportInfo, screen_point_for_world_point};
 use crate::creation::PlayerCharacter;
 use crate::cutout::{CutoutRig, human_template_for, spawn_cutout_rig_with_gear};
 use crate::flow::FlowIntent;
@@ -602,70 +603,6 @@ fn shop_layout_fits_width(viewport_width: f32) -> bool {
         && SHOP_PREVIEW_STAGE_WIDTH.min(usable_width) <= usable_width
 }
 
-/// A UI node's resolved on-screen rect, in the same logical-pixel space
-/// (top-left origin, y-down) [`LetterboxRect`] is expressed in --
-/// `ComputedNode::size` is in physical pixels and `UiGlobalTransform`'s
-/// translation places the node's center in physical-pixel space, so both are
-/// scaled back to logical pixels by the node's own `inverse_scale_factor`.
-/// Identical formula to `creation::logical_node_rect` /
-/// `review::logical_node_rect` -- duplicated per this module's own
-/// layout-math needs, matching that existing precedent rather than threading
-/// a cross-module helper through.
-fn logical_node_rect(transform: &UiGlobalTransform, node: &ComputedNode) -> Rect {
-    let scale = node.inverse_scale_factor();
-    Rect::from_center_size(transform.translation * scale, node.size() * scale)
-}
-
-/// How many logical screen pixels one world unit currently occupies:
-/// [`LetterboxRect::size`] is the on-screen rect (in the same logical pixels
-/// [`ComputedNode`] resolves to) the letterboxed world camera's `Fixed`
-/// projection stretches its fixed [`LOGICAL_WIDTH`] x [`LOGICAL_HEIGHT`]
-/// world area across, so this ratio is exactly 1.0 at the design resolution
-/// (no bars), bigger on a wide desktop window (more screen room for the same
-/// fixed world area), smaller on a narrow phone width. Falls back to `1.0` on
-/// a not-yet-computed (zero-size) rect rather than dividing by zero.
-fn preview_zoom(letterbox: LetterboxRect) -> f32 {
-    if letterbox.size.x <= 0.0 {
-        1.0
-    } else {
-        letterbox.size.x / LOGICAL_WIDTH
-    }
-}
-
-/// Inverse-projects a point in full-window logical screen space (top-left
-/// origin, y-down -- [`ComputedNode`]/[`LetterboxRect`]'s shared convention)
-/// into the world-space point the letterboxed world camera renders there.
-/// This is the same fix #123 applied to the creation screen (#273): the old
-/// `shop_preview_x_for_width` derived the rig's position from
-/// `ViewportInfo::width` alone, implicitly assuming world space and UI
-/// screen space were the same 1:1 coordinate system -- only true when the
-/// window happened to be exactly [`LOGICAL_WIDTH`] x [`LOGICAL_HEIGHT`] (no
-/// letterbox bars). This derives it from the `PreviewStage` node's *actual*
-/// resolved screen rect instead.
-fn world_point_for_screen_point(screen: Vec2, letterbox: LetterboxRect) -> Vec2 {
-    let zoom = preview_zoom(letterbox);
-    let local = screen - letterbox.position;
-    Vec2::new(
-        local.x / zoom - LOGICAL_WIDTH / 2.0,
-        LOGICAL_HEIGHT / 2.0 - local.y / zoom,
-    )
-}
-
-/// The forward projection -- world space back to full-window logical screen
-/// space -- exact inverse of [`world_point_for_screen_point`]. Production
-/// code never needs this (the rig is only ever placed screen -> world);
-/// tests use it to verify the rig's resulting `Transform` actually lands
-/// back inside the `PreviewStage` rect it was derived from (#273).
-#[cfg(test)]
-fn screen_point_for_world_point(world: Vec2, letterbox: LetterboxRect) -> Vec2 {
-    let zoom = preview_zoom(letterbox);
-    letterbox.position
-        + Vec2::new(
-            (world.x + LOGICAL_WIDTH / 2.0) * zoom,
-            (LOGICAL_HEIGHT / 2.0 - world.y) * zoom,
-        )
-}
-
 /// Reads the `PreviewStage` node's resolved screen rect and repositions
 /// every [`ShopPreview`] root so its projected screen position lands at
 /// that rect's center (offset up by [`SHOP_PREVIEW_Y`] world units, toward
@@ -695,7 +632,7 @@ fn update_shop_preview_transform(
     };
     let stage_rect = logical_node_rect(transform, node);
     let target = world_point_for_screen_point(stage_rect.center(), *letterbox);
-    let zoom = preview_zoom(*letterbox);
+    let zoom = letterbox_zoom(*letterbox);
     for mut preview_transform in &mut previews {
         preview_transform.translation.x = target.x;
         preview_transform.translation.y = target.y + SHOP_PREVIEW_Y;
@@ -1589,8 +1526,8 @@ mod tests {
         set_preview_stage_rect(&mut narrow, sample_stage_rect(375.0));
         narrow.update();
 
-        let wide_zoom = preview_zoom(*wide.world().resource::<LetterboxRect>());
-        let narrow_zoom = preview_zoom(*narrow.world().resource::<LetterboxRect>());
+        let wide_zoom = letterbox_zoom(*wide.world().resource::<LetterboxRect>());
+        let narrow_zoom = letterbox_zoom(*narrow.world().resource::<LetterboxRect>());
         assert!(wide_zoom > narrow_zoom, "sanity: wide window zooms in more");
 
         let wide_scale = shop_preview_transform(&mut wide).scale.x;

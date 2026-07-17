@@ -107,7 +107,7 @@ use crate::combat::engine::QUICK_STRIKE_COST;
 use crate::combat::pause::PauseAction;
 use crate::combat::systems::{CombatPresentation, PlayerActionEvent};
 use crate::combat::{CombatAction, CombatRng, CombatSide, CombatTurn};
-use crate::core::{GameState, LetterboxRect, ViewportInfo, WorldCamera};
+use crate::core::{GameState, LetterboxRect, ViewportInfo, WorldCamera, logical_node_rect};
 use crate::creation::{CharacterDraft, CreationAction, HeroChoice, HeroPreset};
 use crate::items::ItemId;
 use crate::menu::{DisabledButton, MenuAction};
@@ -496,17 +496,6 @@ struct PhonePaletteSnapshot {
     /// means the palette covers required fighter/status information, which
     /// #199 forbids.
     overlaps_status_panels: bool,
-}
-
-/// The `Rect` a UI node actually occupies on screen, in the same logical-
-/// pixel space [`LetterboxRect`] is expressed in: `ComputedNode::size` is in
-/// physical pixels and `UiGlobalTransform`'s translation places the node's
-/// center in physical-pixel space (matching `ComputedNode::contains_point`'s
-/// own convention), so both are scaled back to logical pixels by the node's
-/// own `inverse_scale_factor` before building the rect.
-fn logical_node_rect(transform: &UiGlobalTransform, node: &ComputedNode) -> Rect {
-    let scale = node.inverse_scale_factor();
-    Rect::from_center_size(transform.translation * scale, node.size() * scale)
 }
 
 /// The data [`focus_snapshot`] needs to describe whichever

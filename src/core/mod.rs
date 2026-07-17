@@ -1,5 +1,7 @@
 //! Core plugin: global game states, camera, and screen-cleanup helpers.
 
+mod projection;
+
 use bevy::camera::Viewport;
 use bevy::camera::visibility::RenderLayers;
 use bevy::input_focus::InputFocus;
@@ -7,6 +9,10 @@ use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized};
 
 use crate::theme::is_mobile_width;
+
+#[cfg(test)]
+pub(crate) use projection::screen_point_for_world_point;
+pub(crate) use projection::{letterbox_zoom, logical_node_rect, world_point_for_screen_point};
 
 /// Fixed logical resolution the arena world is designed at (matches
 /// `arena::ARENA_WIDTH`/`ARENA_HEIGHT`). The camera keeps this exact world
