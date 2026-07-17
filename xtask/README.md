@@ -49,7 +49,7 @@ cargo xtask web-smoke --scenario corrupt-save-recovery  # seed a corrupt/future-
 cargo xtask web-smoke --scenario save-reload   # result -> shop -> real reload -> Continuă resumes at Shop with every run value intact (#217)
 cargo xtask web-smoke --scenario abandon-forfeit  # Abandonează clears the run snapshot, returns to Main Menu, disables Continuă (#217)
 cargo xtask web-smoke --all                    # every registered scenario back to back (#198)
-cargo xtask pre-push            # fmt check, clippy, cargo test, build-matrix -- stops at first failure
+cargo xtask pre-push            # fmt check, clippy (default + review feature), cargo test (default + review feature), build-matrix -- stops at first failure
 ```
 
 ### `test logic`
@@ -600,10 +600,26 @@ artifacts under `target/xtask-artifacts/web-smoke/abandon-forfeit/journey/`.
 
 The full repository-native gate, in order, stopping at the first failure:
 `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo test`, then `check build-matrix`. This mirrors what the git
-`pre-push` hook and CI expect a clean tree to pass. It does not run
-`assets check` or `web-smoke`, which have their own dedicated workflows
-(`.github/workflows/assets.yml`, `.github/workflows/web-smoke.yml`).
+`cargo clippy --all-targets --features review -- -D warnings`, `cargo
+test`, `cargo test --features review`, then `check build-matrix`. This
+mirrors what the git `pre-push` hook and CI's `build_and_test` job expect a
+clean tree to pass. It does not run `assets check` or `web-smoke`, which
+have their own dedicated workflows (`.github/workflows/assets.yml`,
+`.github/workflows/web-smoke.yml`).
+
+The `--features review` clippy/test pair (#294) exists because
+`src/review/mod.rs` (the review-only browser-harness seam, #187) is
+`#![cfg(feature = "review")]`-gated with no `cfg(test)` escape hatch: without
+it, the module (and its 23 tests) are not compiled at all by the two plain
+steps above, so a break in that seam previously compiled green through this
+gate and only surfaced when someone separately ran the review-feature
+web-smoke build or the feature's clippy/test commands by hand. It runs as
+its own extra pair rather than folded into the plain steps so the
+default-feature configuration (the one every shipped build actually uses)
+keeps its own independent clippy/test coverage. `check build-matrix` stays
+free of `--features review` (as well as `dev`) -- see `check_cmd.rs` and
+`Cargo.toml`'s `[features]` doc comment: `review` is never enabled by a
+plain `cargo build`/`--release` or the ordinary `trunk build --release`.
 
 ## Process/result conventions
 
