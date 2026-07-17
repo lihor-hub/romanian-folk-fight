@@ -34,7 +34,11 @@
 //!   `setTimePaused` (freezes `Time<Virtual>` around each capture so
 //!   screens with continuous idle animation -- the fight screen's parallax
 //!   drift and idle sprite frames -- can satisfy the byte-identical-frames
-//!   stability streak).
+//!   stability streak), and `advanceTime` (#272; jumps `Time<Virtual>`
+//!   forward by a fixed amount in one step, right before `setTimePaused`, so
+//!   any bounded, time-driven reveal animation is unambiguously finished
+//!   before the freeze -- see [`SETTLE_TIME_ADVANCE_SECONDS`] and
+//!   [`captured_checkpoint`]).
 //! - **Readiness** (the game -> this scenario): the current `GameState`'s
 //!   `Debug` name, published every frame to [`REVIEW_SCREEN_KEY`]. Every
 //!   checkpoint here waits for that exact screen name *and* #168's existing
@@ -63,7 +67,37 @@
 //! tolerance: per `baseline`'s policy (unchanged from #168), a baseline
 //! mismatch is reported with a pixel count but is not by itself a failure --
 //! the hard assertions (console errors, assets, scroll, blank paint) gate
-//! identically on every run.
+//! identically on every run. This tolerance is deliberate and stays scoped
+//! to *unbounded, perpetual* idle motion (arena parallax/idle sprite frames)
+//! -- it is not a license for a *bounded, one-shot* reveal animation to
+//! settle at a different frame on every run, which is exactly what #272's
+//! settling step (below) rules out.
+//!
+//! ## Settling bounded reveal animations before capture (#272)
+//!
+//! The `fight-result` and `shop` checkpoints render a static breakdown (no
+//! fighters, no perpetual motion), so unlike `fight` they are expected to be
+//! byte-identical run to run -- but #168's byte-identical-frames streak alone
+//! cannot *guarantee* that: a value that renders as a rounded/quantized pixel
+//! image while still animating toward its final total (a count-up reveal,
+//! for instance) can hold the *same* rendered pixels across several
+//! consecutive frames purely by that quantization, satisfying the streak by
+//! coincidence at whatever fraction of the animation's duration the harness
+//! happened to be polling -- observed in practice as a checkpoint captured at
+//! ~14%/~65% progress on different runs. [`captured_checkpoint`] closes this
+//! gap generically (every checkpoint, not a `fight-result`/`shop` special
+//! case) by sending `advanceTime` with [`SETTLE_TIME_ADVANCE_SECONDS`] right
+//! before `setTimePaused`: a single jump far longer than any plausible
+//! bounded animation on these screens, so whatever the streak already
+//! measured as "stable," any such animation is *unambiguously* finished
+//! (not just quantized-still-for-a-moment) by the time the clock actually
+//! freezes and the screenshot is taken. This does not, and is not intended
+//! to, change the `fight` checkpoint's own unbounded-motion tolerance above:
+//! jumping time shifts a perpetual parallax drift's phase by a fixed amount,
+//! but the *starting* phase at the moment `fight` is reached is still
+//! wall-clock-dependent, so the resulting phase stays non-deterministic
+//! either way -- `fight`'s pixel-count tolerance is unaffected by this
+//! change, by design (see the issue's own scope note on the `fight` cell).
 //!
 //! ## Separate build, separate `dist/`
 //!
@@ -341,6 +375,18 @@ const READY_MAX_FRAMES: usize = 3600;
 const READY_MAX_WALL_CLOCK: Duration = Duration::from_secs(180);
 const STABLE_FRAMES_REQUIRED: usize = 3;
 
+/// Sent as an `advanceTime` command right before every checkpoint's
+/// `setTimePaused` freeze (#272; see the module docs' "Settling bounded
+/// reveal animations before capture" section). Five in-game seconds is
+/// comfortably longer than any plausible bounded, time-driven reveal
+/// animation on these screens (for reference, `progression::FIGHT_END_DELAY_SECONDS`
+/// -- a comparable fixed-duration timer on the game side -- runs 1.5
+/// seconds), so the jump guarantees such an animation has reached its
+/// terminal frame before the clock freezes, regardless of which real-world
+/// frame the byte-identical-frames streak happened to land the freeze on
+/// beforehand.
+const SETTLE_TIME_ADVANCE_SECONDS: f32 = 5.0;
+
 pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError> {
     let dist_dir = build_review_release()?;
     let server = StaticServer::start(dist_dir).map_err(|e| {
@@ -608,10 +654,12 @@ fn run_viewport_journey(
 }
 
 /// One captured checkpoint: reach the expected screen with time running
-/// (transitions, the fight-end delay, and autoplay all need the clock),
-/// then freeze `Time<Virtual>` so idle animation can't defeat the
-/// byte-identical-frames stability streak, capture + assert + baseline, and
-/// unfreeze for the journey's next leg.
+/// (transitions, the fight-end delay, and autoplay all need the clock), send
+/// `advanceTime` to deterministically settle any bounded reveal animation to
+/// its terminal frame (#272 -- see the module docs' "Settling bounded reveal
+/// animations before capture" section), then freeze `Time<Virtual>` so idle
+/// animation can't defeat the byte-identical-frames stability streak,
+/// capture + assert + baseline, and unfreeze for the journey's next leg.
 fn captured_checkpoint(
     checkpoint: &Checkpoint,
     viewport: &ViewportSpec,
@@ -622,6 +670,17 @@ fn captured_checkpoint(
     missing_baseline: &mut bool,
 ) -> Result<(), SmokeError> {
     wait_for_checkpoint(checkpoint, spec, viewport)?;
+    // #272: jump the clock forward before freezing it, so a bounded,
+    // time-driven reveal animation still in flight when the byte-identical-
+    // frames streak above happened to settle (possibly by quantization
+    // coincidence, mid-animation) is unambiguously finished by the time the
+    // capture below actually runs.
+    step(viewport, || {
+        send_command(
+            checkpoint,
+            serde_json::json!({"cmd": "advanceTime", "seconds": SETTLE_TIME_ADVANCE_SECONDS}),
+        )
+    })?;
     step(viewport, || {
         send_command(
             checkpoint,

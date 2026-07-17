@@ -61,6 +61,11 @@
 //!   - `setTimePaused`: pauses/unpauses Bevy's `Time<Virtual>` so the
 //!     harness can capture a byte-stable screenshot on screens with
 //!     continuous idle animation; see [`ReviewCommand::SetTimePaused`].
+//!   - `advanceTime`: jumps `Time<Virtual>` forward by a fixed number of
+//!     seconds in one step (not a per-frame tick), sent right before
+//!     `setTimePaused` so any bounded, time-driven reveal animation is
+//!     unambiguously finished before the clock freezes for a screenshot
+//!     (#272); see [`advance_virtual_time`]'s doc comment.
 //!   - `setAutoplay`: toggles [`ReviewAutoplay`], which
 //!     [`autoplay_player_turn`] reads to script the player's side of the
 //!     duel with a fixed, deterministic policy (Rest below the quick-strike
@@ -208,6 +213,46 @@ pub enum ReviewCommand {
     SetTimePaused {
         paused: bool,
     },
+    /// Jumps Bevy's `Time<Virtual>` forward by `seconds` in a single step
+    /// (`Time::advance_by`, not a per-frame tick) -- see
+    /// [`advance_virtual_time`]'s doc comment for the determinism problem
+    /// this solves (#272). Sent by the harness right before `SetTimePaused`
+    /// on every checkpoint, so any bounded, time-driven reveal animation
+    /// (e.g. a result-screen count-up) is unambiguously past its terminal
+    /// frame before the clock freezes for a screenshot.
+    AdvanceTime {
+        seconds: f32,
+    },
+}
+
+/// Applies [`ReviewCommand::AdvanceTime`]: jumps `virtual_time` forward by
+/// `seconds` in one call to `Time::advance_by` -- not several small per-frame
+/// ticks -- so every system reading `Time<Virtual>` observes a `delta_secs()`
+/// far larger than any plausible in-game animation duration on its very next
+/// `Update`, rather than the harness waiting real frames for the clock to
+/// accumulate that much elapsed time on its own.
+///
+/// # Why this fixes #272
+///
+/// Before this command existed, the harness's only way to confirm a screen
+/// had "settled" before freezing the clock (`SetTimePaused`) was #168's
+/// byte-identical-screenshot streak: wait for a few consecutive rendered
+/// frames to come out pixel-identical, then freeze. That heuristic silently
+/// assumes identical consecutive frames only happen once nothing is still
+/// animating -- but a smoothly *quantized* value (e.g. a count-up rounded to
+/// the nearest whole galbeni) can render the *same* rounded pixels across
+/// several consecutive frames while still mid-animation, satisfying the
+/// streak by coincidence at whatever fraction of the animation's duration
+/// the harness happened to sample -- exactly the "captured at ~14%/~65%
+/// progress" nondeterminism #272 reports. Explicitly fast-forwarding the
+/// clock past any plausible animation duration *before* relying on that
+/// streak removes the coincidence: by the time frames are compared, the
+/// animation is guaranteed finished, not just quantized-still for a moment.
+///
+/// A negative `seconds` clamps to zero rather than panicking (`Duration`
+/// cannot represent a negative amount and time must never move backwards).
+fn advance_virtual_time(virtual_time: &mut Time<Virtual>, seconds: f32) {
+    virtual_time.advance_by(std::time::Duration::from_secs_f32(seconds.max(0.0)));
 }
 
 /// Whether [`autoplay_player_turn`] is currently scripting the player's
@@ -917,6 +962,9 @@ fn poll_review_commands(
                 virtual_time.unpause();
             }
         }
+        Ok(ReviewCommand::AdvanceTime { seconds }) => {
+            advance_virtual_time(&mut virtual_time, seconds);
+        }
         Err(error) => warn!("review: malformed command `{raw}`: {error}"),
     }
 }
@@ -1234,6 +1282,71 @@ mod tests {
                 .unwrap(),
             ReviewCommand::SetTimePaused { paused: true }
         );
+    }
+
+    #[test]
+    fn advance_time_command_parses() {
+        assert_eq!(
+            serde_json::from_str::<ReviewCommand>(r#"{"cmd":"advanceTime","seconds":5.0}"#)
+                .unwrap(),
+            ReviewCommand::AdvanceTime { seconds: 5.0 }
+        );
+    }
+
+    // --- #272: `advance_virtual_time` settles bounded reveal animations ---
+
+    /// The core determinism property [`advance_virtual_time`]'s doc comment
+    /// promises: one call jumps `elapsed`/`delta` by the *whole* requested
+    /// duration at once, not a sequence of small per-frame ticks -- so a
+    /// still-in-flight, time-driven animation observes a `delta_secs()` on
+    /// its very next `Update` far larger than any plausible tween duration,
+    /// guaranteeing it finishes rather than merely advancing one more step.
+    #[test]
+    fn advance_virtual_time_jumps_elapsed_by_the_whole_duration_in_one_step() {
+        let mut virtual_time = Time::<Virtual>::default();
+        let before = virtual_time.elapsed();
+
+        advance_virtual_time(&mut virtual_time, 5.0);
+
+        assert_eq!(
+            virtual_time.delta(),
+            std::time::Duration::from_secs_f32(5.0),
+            "one call must report the whole jump as this update's delta"
+        );
+        assert_eq!(
+            virtual_time.elapsed() - before,
+            std::time::Duration::from_secs_f32(5.0),
+            "elapsed must advance by exactly the requested duration, in one step"
+        );
+    }
+
+    /// A second call keeps accumulating (elapsed grows monotonically) rather
+    /// than resetting -- confirms this is a genuine clock advance, not a
+    /// one-shot override that could mask a bug on a checkpoint that (for
+    /// whatever reason) sends the command twice.
+    #[test]
+    fn advance_virtual_time_accumulates_across_calls() {
+        let mut virtual_time = Time::<Virtual>::default();
+
+        advance_virtual_time(&mut virtual_time, 5.0);
+        advance_virtual_time(&mut virtual_time, 2.0);
+
+        assert_eq!(
+            virtual_time.elapsed(),
+            std::time::Duration::from_secs_f32(7.0)
+        );
+    }
+
+    /// `Duration` cannot represent a negative amount, so a malformed/negative
+    /// `seconds` (never sent by the harness today, but this is the seam's own
+    /// contract) must clamp to zero instead of panicking.
+    #[test]
+    fn advance_virtual_time_clamps_a_negative_duration_to_zero() {
+        let mut virtual_time = Time::<Virtual>::default();
+
+        advance_virtual_time(&mut virtual_time, -3.0);
+
+        assert_eq!(virtual_time.delta(), std::time::Duration::ZERO);
     }
 
     #[test]
