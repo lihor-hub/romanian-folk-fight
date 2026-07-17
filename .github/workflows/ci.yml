@@ -54,8 +54,15 @@ jobs:
       with:
         shared-key: "sccache"
 
+    # #299: `--workspace` -- without it, `cargo clippy` on this `[package]` +
+    # `[workspace]` root manifest only lints the root package and never sees
+    # `xtask`'s own code (144+ unit tests, scenario logic, baseline
+    # handling), unlike `cargo xtask pre-push`'s `clippy_cmd`
+    # (xtask/src/commands/pre_push.rs), which deliberately passes
+    # `--workspace` for exactly this reason. Keeps CI and the local gate
+    # covering the same command surface.
     - name: Run cargo clippy
-      run: cargo clippy --all-targets -- -D warnings
+      run: cargo clippy --workspace --all-targets -- -D warnings
 
     # #294: `src/review/mod.rs` (the review-feature browser-harness seam,
     # #187) is `#![cfg(feature = "review")]`-gated with no `cfg(test)`
@@ -66,17 +73,32 @@ jobs:
     # than folded into the one above so a regression only visible without
     # the feature (the configuration every shipped build/the step above
     # actually uses) is never masked by only ever linting with it on.
+    #
+    # #299: `--workspace` here too -- xtask has no `review` feature of its
+    # own, but omitting `--workspace` would silently drop xtask from this
+    # leg as well. Cargo scopes `--features review` to only the workspace
+    # members that declare it, so passing it alongside `--workspace` does
+    # not error on xtask's behalf (mirrors `clippy_review_cmd` in
+    # pre_push.rs).
     - name: Run cargo clippy (review feature)
-      run: cargo clippy --all-targets --features review -- -D warnings
+      run: cargo clippy --workspace --all-targets --features review -- -D warnings
 
+    # #299: `--workspace` -- with a `[package]` + `[workspace]` root
+    # manifest, plain `cargo test` defaults to the root package only, which
+    # silently skipped xtask's own unit tests. Mirrors `cargo_test_cmd` in
+    # `cargo xtask pre-push` (xtask/src/commands/pre_push.rs).
     - name: Run cargo test
-      run: cargo test
+      run: cargo test --workspace
 
     # #294: see the "review feature" clippy step above -- same reasoning,
     # this is the only CI step that actually compiles and runs
     # `src/review/mod.rs`'s 23 tests.
+    #
+    # #299: `--workspace` here too, mirroring `cargo_test_review_cmd` in
+    # pre_push.rs -- see the "review feature" clippy step above for why this
+    # combines safely with `--features review`.
     - name: Run cargo test (review feature)
-      run: cargo test --features review
+      run: cargo test --workspace --features review
 
   wasm_build:
     name: Build WASM
