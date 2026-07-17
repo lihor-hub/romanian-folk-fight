@@ -728,20 +728,62 @@ fn step(
 /// reach a screen before issuing a further command (e.g. reaching
 /// `CharacterCreation` before selecting the preset) but the checkpoint
 /// itself is captured afterward.
+///
+/// Turns a completed [`wait_for_readiness`] outcome into a failure via
+/// [`readiness_error`] -- the same check [`capture`] runs -- rather than
+/// discarding it (`#272`'s agent flagged this: the previous implementation
+/// was `wait_for_readiness(..).map(|_| ())`, which threw away the returned
+/// `Readiness` entirely). `wait_for_readiness` itself only ever returns
+/// `Err` for a genuine I/O failure (a CDP call failing); it returns `Ok`
+/// even when the screen was never reached or the first paint never
+/// stabilized within budget, packing that fact into the returned
+/// `Readiness` instead -- so discarding the tuple's second and third fields
+/// silently accepted a checkpoint that isn't actually ready, and the caller
+/// (e.g. `run_viewport_journey`, right before selecting a creation preset)
+/// would immediately issue its next command against a screen that may not
+/// have finished spawning yet.
 fn wait_for_checkpoint(
     checkpoint: &Checkpoint,
     spec: &CheckpointSpec,
     viewport: &ViewportSpec,
 ) -> Result<(), SmokeError> {
-    wait_for_readiness(checkpoint, spec, viewport)
-        .map(|_| ())
-        .map_err(|e| {
-            SmokeError::scenario(
-                format!("web-smoke gold-journey[{}][{}]", viewport.name, spec.name),
-                e,
-                artifacts::scenario_dir(SCENARIO),
-            )
-        })
+    let scenario = format!("web-smoke gold-journey[{}][{}]", viewport.name, spec.name);
+    let (_, _, readiness) = wait_for_readiness(checkpoint, spec, viewport).map_err(|e| {
+        SmokeError::scenario(scenario.clone(), e, artifacts::scenario_dir(SCENARIO))
+    })?;
+    if let Some(problem) = readiness_error(spec, &readiness) {
+        return Err(SmokeError::scenario(
+            scenario,
+            problem,
+            artifacts::scenario_dir(SCENARIO),
+        ));
+    }
+    Ok(())
+}
+
+/// Turns a completed [`wait_for_readiness`] outcome into a diagnosed failure
+/// message, or `None` if both facts hold (the expected screen was reached
+/// and the first paint stabilized). The one place both [`capture`] (this
+/// scenario's full per-checkpoint assertions) and [`wait_for_checkpoint`] (a
+/// lighter "just get me to this screen" wait) turn a `Readiness` into a
+/// pass/fail decision, so the two callers can never drift apart on what "not
+/// ready yet" means. Pure (no I/O), so it is unit-testable directly against
+/// fabricated `Readiness` values without a real browser (see the `tests`
+/// module below).
+fn readiness_error(spec: &CheckpointSpec, readiness: &Readiness) -> Option<String> {
+    if !readiness.reached_screen {
+        Some(format!(
+            "never observed screen `{}` within {:?}/{} frames (last seen: {:?})",
+            spec.expected_screen, READY_MAX_WALL_CLOCK, READY_MAX_FRAMES, readiness.last_screen
+        ))
+    } else if !readiness.stabilized {
+        Some(format!(
+            "first paint never stabilized on screen `{}` within {:?}/{} frames ({} observed)",
+            spec.expected_screen, READY_MAX_WALL_CLOCK, READY_MAX_FRAMES, readiness.frames_observed
+        ))
+    } else {
+        None
+    }
 }
 
 /// Waits for the checkpoint to be ready, runs every assertion, writes
@@ -781,16 +823,8 @@ fn capture(
     write_artifacts(&dir, viewport, &status, &screenshot, server);
 
     let mut problems = Vec::new();
-    if !readiness.reached_screen {
-        problems.push(format!(
-            "never observed screen `{}` within {:?}/{} frames (last seen: {:?})",
-            spec.expected_screen, READY_MAX_WALL_CLOCK, READY_MAX_FRAMES, readiness.last_screen
-        ));
-    } else if !readiness.stabilized {
-        problems.push(format!(
-            "first paint never stabilized on screen `{}` within {:?}/{} frames ({} observed)",
-            spec.expected_screen, READY_MAX_WALL_CLOCK, READY_MAX_FRAMES, readiness.frames_observed
-        ));
+    if let Some(problem) = readiness_error(spec, &readiness) {
+        problems.push(problem);
     } else {
         check_no_console_or_page_errors(&status, &mut problems);
         check_required_assets(spec, &status, &mut problems);
@@ -1213,5 +1247,56 @@ mod tests {
             names,
             vec!["menu", "creation", "fight", "fight-result", "shop"]
         );
+    }
+
+    // `readiness_error` -- the pure decision behind both `capture` and
+    // `wait_for_checkpoint`'s pass/fail call on a `Readiness`. Red-first:
+    // before this function existed, `wait_for_checkpoint` was
+    // `wait_for_readiness(..).map(|_| ())`, which silently discarded exactly
+    // the two facts these tests pin (#272's agent flagged this) -- these
+    // tests fail against that old shape (there was nothing to call) and
+    // pin the fixed contract going forward.
+
+    fn readiness(reached_screen: bool, stabilized: bool) -> Readiness {
+        Readiness {
+            reached_screen,
+            stabilized,
+            frames_observed: 42,
+            elapsed: Duration::from_secs(3),
+            last_screen: Some("MainMenu".to_string()),
+        }
+    }
+
+    #[test]
+    fn readiness_error_is_none_when_reached_and_stabilized() {
+        assert_eq!(
+            readiness_error(&CHECKPOINTS[0], &readiness(true, true)),
+            None
+        );
+    }
+
+    #[test]
+    fn readiness_error_reports_the_screen_never_reached() {
+        let err = readiness_error(&CHECKPOINTS[0], &readiness(false, false))
+            .expect("screen never reached is an error");
+        assert!(err.contains("never observed screen"));
+        assert!(err.contains(CHECKPOINTS[0].expected_screen));
+    }
+
+    #[test]
+    fn readiness_error_reports_stabilization_failure_only_once_the_screen_was_reached() {
+        let err = readiness_error(&CHECKPOINTS[0], &readiness(true, false))
+            .expect("stabilization failure is an error");
+        assert!(err.contains("never stabilized"));
+    }
+
+    #[test]
+    fn readiness_error_prefers_the_reached_screen_diagnosis_when_both_facts_are_false() {
+        // If the screen was never even reached, the stabilization streak
+        // never had a chance to run either -- the more fundamental fact
+        // should be the one reported, not a secondary symptom of it.
+        let err = readiness_error(&CHECKPOINTS[0], &readiness(false, false))
+            .expect("some error is reported");
+        assert!(!err.contains("never stabilized"));
     }
 }

@@ -514,16 +514,23 @@ jobs:
   keyboard-accessibility:
     name: keyboard-accessibility (keyboard-only nav + audio controls, every screen)
     runs-on: ubuntu-latest
-    # Informational, non-blocking for now (#270). This scenario drives a long
-    # multi-screen journey entirely through real CDP key events, and on CI's
-    # SwiftShader software GPU a navigation keypress and the following Enter
-    # can land in the same frame, activating the wrong control. The product
-    # focus widget is not at fault (fight-palette-accessible passes every run;
-    # the focus unit suites are green) -- it is the harness's navigate->activate
-    # model racing the slow emulator. #270 hardens that model and re-enables
-    # this as a blocking check (and adds it to branch-protection required
-    # checks). Until then it must not gate merges.
-    continue-on-error: true
+    # Blocking again as of #270. This scenario drives a long multi-screen
+    # journey entirely through real CDP key events; on CI's SwiftShader
+    # software GPU, a navigation keypress and the following Enter could
+    # previously land in the same frame, activating the wrong control (the
+    # product focus widget was never at fault -- fight-palette-accessible
+    # passed every run, and the focus unit suites stayed green -- it was the
+    # harness's own navigate->activate model racing the slow emulator). #270
+    # redesigned that model generally (settle on the intended control, drain
+    # pending input, activate, then assert the specific expected outcome --
+    # see xtask/src/web_smoke/keyboard_accessibility.rs's module docs) and
+    # removed the `continue-on-error: true` this job previously carried.
+    # Adding this job (plus zoom-200/touch-targets) to branch-protection
+    # *required* checks is a separate, maintainer-only admin step (GitHub
+    # rulesets aren't configurable from this repo) -- see the #270 PR
+    # description for that governance note and its interaction with #284/
+    # #289 (zoom-200/touch-targets are manual/full_matrix-only jobs, so
+    # requiring them needs a deliberate decision about that).
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
