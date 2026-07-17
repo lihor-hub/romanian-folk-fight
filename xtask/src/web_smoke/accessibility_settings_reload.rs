@@ -163,8 +163,14 @@ fn run_checks(dir: &Path, server: &StaticServer, profile_dir: &Path) -> Result<(
     let url = format!("{}/", server.base_url());
     checkpoint.navigate(&url)?;
 
-    let (status, menu_shot) =
-        wait_until_ready(&checkpoint, true, READY_MAX_FRAMES, READY_MAX_WALL_CLOCK)?;
+    const MAIN_MENU_LABEL: &str = "the main menu (\"Luptă nouă\", \"Setări\" -- \"Continuă\" is BUTTON_DISABLED-colored while unsaved)";
+    let (status, menu_shot) = wait_until_ready(
+        &checkpoint,
+        true,
+        READY_MAX_FRAMES,
+        READY_MAX_WALL_CLOCK,
+        |_status, screenshot| expect_wide_buttons(screenshot, 2, MAIN_MENU_LABEL).map(|_| ()),
+    )?;
     check_no_console_or_page_errors(&status, "initial load")?;
     let _ = artifacts::write_artifact(dir, "1-menu-before-settings.png", &menu_shot);
     write_viewport_log(dir, "1-viewport-before-settings.log", &status);
@@ -173,32 +179,23 @@ fn run_checks(dir: &Path, server: &StaticServer, profile_dir: &Path) -> Result<(
     assert_zoom_permitted(&zoom_before, "before opening settings")?;
     write_zoom_log(dir, "2-zoom-before-settings.log", &zoom_before);
 
-    let menu_buttons = find_wide_button_centers(&menu_shot)?;
-    if menu_buttons.len() != 2 {
-        return Err(format!(
-            "expected exactly 2 wide BUTTON_NORMAL buttons on the main menu (\"Luptă nouă\", \"Setări\" -- \"Continuă\" is BUTTON_DISABLED-colored while unsaved), found {}: {menu_buttons:?}",
-            menu_buttons.len()
-        ));
-    }
+    let menu_buttons = expect_wide_buttons(&menu_shot, 2, MAIN_MENU_LABEL)?;
     let settings_button = menu_buttons[1]; // bottommost = "Setări" (see module docs)
     checkpoint.click(settings_button.0, settings_button.1)?;
 
+    const SETTINGS_PANEL_LABEL: &str =
+        "the settings panel (Sunet, Mișcare redusă, Contrast ridicat, Înapoi)";
     let (settings_status, settings_shot) = wait_until_ready(
         &checkpoint,
         false,
         UI_SETTLE_MAX_FRAMES,
         UI_SETTLE_MAX_WALL_CLOCK,
+        |_status, screenshot| expect_wide_buttons(screenshot, 4, SETTINGS_PANEL_LABEL).map(|_| ()),
     )?;
     check_no_console_or_page_errors(&settings_status, "settings overlay opened")?;
     let _ = artifacts::write_artifact(dir, "3-settings-panel-opened.png", &settings_shot);
 
-    let toggle_buttons = find_wide_button_centers(&settings_shot)?;
-    if toggle_buttons.len() != 4 {
-        return Err(format!(
-            "expected exactly 4 wide buttons in the settings panel (Sunet, Mișcare redusă, Contrast ridicat, Înapoi), found {}: {toggle_buttons:?}",
-            toggle_buttons.len()
-        ));
-    }
+    let toggle_buttons = expect_wide_buttons(&settings_shot, 4, SETTINGS_PANEL_LABEL)?;
     // Spawn order top-to-bottom (see `src/settings/mod.rs::spawn_overlay`):
     // [0] Sunet (mute), [1] Mișcare redusă, [2] Contrast ridicat, [3] Înapoi.
     let reduced_motion_button = toggle_buttons[1];
@@ -220,11 +217,28 @@ fn run_checks(dir: &Path, server: &StaticServer, profile_dir: &Path) -> Result<(
     assert_accessibility_persisted(&parsed_before, "before reload")?;
 
     checkpoint.reload()?;
-    let (status_after, shot_after) =
-        wait_until_ready(&checkpoint, true, READY_MAX_FRAMES, READY_MAX_WALL_CLOCK)?;
+    // #270's maintainer follow-up: this post-reload main-menu probe is the
+    // one this scenario observed flake on ("found 0" -- read before the
+    // buttons had spawned/colored). Embedding the same exactly-2-wide-
+    // buttons check into `wait_until_ready`'s own `ready` predicate (as the
+    // initial load above already does) means a pixel-stable-but-uncolored
+    // frame is never mistaken for "ready" here either.
+    let (status_after, shot_after) = wait_until_ready(
+        &checkpoint,
+        true,
+        READY_MAX_FRAMES,
+        READY_MAX_WALL_CLOCK,
+        |_status, screenshot| expect_wide_buttons(screenshot, 2, MAIN_MENU_LABEL).map(|_| ()),
+    )?;
     check_no_console_or_page_errors(&status_after, "after reload")?;
     let _ = artifacts::write_artifact(dir, "5-menu-after-reload.png", &shot_after);
     write_viewport_log(dir, "6-viewport-after-reload.log", &status_after);
+    // Redundant with the `ready` predicate above (already guaranteed by the
+    // time `wait_until_ready` returned `Ok`), but kept as an explicit,
+    // separately diagnosed assertion -- the same defense-in-depth shape the
+    // initial-load check above uses -- and to log the resulting centers as
+    // an artifact-adjacent fact.
+    let _ = expect_wide_buttons(&shot_after, 2, MAIN_MENU_LABEL)?;
 
     let zoom_after = read_zoom_status(&checkpoint)?;
     assert_zoom_permitted(&zoom_after, "after reload")?;
@@ -250,22 +264,46 @@ fn wait_frames(checkpoint: &Checkpoint, count: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// Waits for a rendered, stable frame: when `require_boot` is set, first
-/// waits for the #114 loading gate to clear (same contract as
-/// `cold_menu::wait_for_readiness`); either way, then waits for
-/// [`STABLE_FRAMES_REQUIRED`] byte-identical screenshots in a row. Bounded
-/// by `max_frames`/`max_wall_clock`; exceeding the budget is a diagnosed
-/// failure, never a silent pass.
+/// Waits for a rendered, stable frame that *also* satisfies `ready`: when
+/// `require_boot` is set, first waits for the #114 loading gate to clear
+/// (same contract as `cold_menu::wait_for_readiness`); either way, then
+/// waits for [`STABLE_FRAMES_REQUIRED`] byte-identical screenshots in a row
+/// **and** `ready(&status, &screenshot)` returning `Ok(())` on that same
+/// stable screenshot -- retrying (not accepting the pixel-stable frame) if
+/// `ready` says the specific fact it cares about isn't true yet. Bounded by
+/// `max_frames`/`max_wall_clock`; exceeding the budget is a diagnosed
+/// failure (folding in whatever `ready` most recently reported), never a
+/// silent pass.
+///
+/// Byte-identical pixels alone is not proof that a screen is actually done:
+/// a frame can hold perfectly still for several frames in a row before some
+/// later system finishes painting it (`update_button_backgrounds` only
+/// repaints a button's `BUTTON_NORMAL` background off a `Changed<Interaction>`
+/// query, so a freshly spawned button can sit at whatever placeholder
+/// `BackgroundColor` it was spawned with -- itself pixel-stable -- for a
+/// frame or more before its real color lands). Accepting pixel stability as
+/// a proxy for "the specific fact I need is now true," and asserting that
+/// fact only once, afterward, is exactly the shape of the observed CI flake
+/// this closes: `accessibility-settings-reload` failed once with "expected
+/// exactly 2 wide BUTTON_NORMAL buttons on the main menu ... found 0" -- a
+/// stable-looking frame read before the menu's buttons had actually
+/// spawned/colored (see #270's maintainer follow-up). Folding the specific
+/// expected fact into the readiness gate itself, instead of trusting
+/// stability as a stand-in for it, is the same "wait for the specific
+/// expected state, not a fixed settle or first-change" principle
+/// `keyboard_accessibility`'s navigate-then-activate hardening applies.
 fn wait_until_ready(
     checkpoint: &Checkpoint,
     require_boot: bool,
     max_frames: usize,
     max_wall_clock: Duration,
+    ready: impl Fn(&PageStatus, &[u8]) -> Result<(), String>,
 ) -> Result<(PageStatus, Vec<u8>), String> {
     let start = Instant::now();
     let mut last_status: Option<PageStatus> = None;
     let mut last_screenshot: Option<Vec<u8>> = None;
     let mut stable_count = 0usize;
+    let mut last_ready_problem: Option<String> = None;
 
     for _ in 0..max_frames {
         if start.elapsed() > max_wall_clock {
@@ -291,21 +329,76 @@ fn wait_until_ready(
         last_status = Some(status);
 
         if stable_count >= STABLE_FRAMES_REQUIRED {
-            return Ok((
-                last_status.expect("just set"),
-                last_screenshot.expect("just set"),
-            ));
+            let status_ref = last_status.as_ref().expect("just set");
+            let screenshot_ref = last_screenshot.as_deref().expect("just set");
+            match ready(status_ref, screenshot_ref) {
+                Ok(()) => {
+                    return Ok((
+                        last_status.expect("just set"),
+                        last_screenshot.expect("just set"),
+                    ));
+                }
+                Err(problem) => {
+                    // Pixel-stable, but not yet the specific state this
+                    // caller needs -- keep polling instead of accepting a
+                    // false-positive "ready" (see this function's doc
+                    // comment).
+                    last_ready_problem = Some(problem);
+                    stable_count = 0;
+                }
+            }
         }
     }
 
-    let booted_note = match last_status {
+    let booted_note = match &last_status {
         Some(status) if require_boot => format!(" (last observed booted={})", status.app_booted()),
         _ => String::new(),
     };
+    let ready_note = match last_ready_problem {
+        Some(problem) => format!(" (last readiness check: {problem})"),
+        None => String::new(),
+    };
     Err(format!(
-        "screen never reached a stable{} state within {max_wall_clock:?}/{max_frames} frames{booted_note}",
+        "screen never reached a stable{} ready state within {max_wall_clock:?}/{max_frames} frames{booted_note}{ready_note}",
         if require_boot { ", booted" } else { "" }
     ))
+}
+
+/// Turns a scanned button list into a specific-count-or-diagnosed-error
+/// result -- the actual decision [`wait_until_ready`]'s `ready` predicate
+/// embeds into the readiness gate itself. Pure given `buttons` (no image
+/// decoding here), so the exact success/failure boundary is unit-testable
+/// without a screenshot (see the `tests` module below).
+fn expect_exact_button_count(
+    buttons: &[(f64, f64)],
+    expected_count: usize,
+    screen_name: &str,
+) -> Result<(), String> {
+    if buttons.len() == expected_count {
+        Ok(())
+    } else {
+        Err(format!(
+            "expected exactly {expected_count} wide BUTTON_NORMAL buttons on {screen_name}, found {}: {buttons:?}",
+            buttons.len()
+        ))
+    }
+}
+
+/// Scans `screenshot` for wide `BUTTON_NORMAL` buttons and requires exactly
+/// `expected_count` of them ([`expect_exact_button_count`]), returning their
+/// centers. Used both as a [`wait_until_ready`] `ready` predicate (so a
+/// frame is never accepted as "ready" before the expected buttons have
+/// spawned/colored) and, after `wait_until_ready` returns, to get the actual
+/// click-target coordinates -- the same scan, not re-derived differently in
+/// two places.
+fn expect_wide_buttons(
+    screenshot: &[u8],
+    expected_count: usize,
+    screen_name: &str,
+) -> Result<Vec<(f64, f64)>, String> {
+    let buttons = find_wide_button_centers(screenshot)?;
+    expect_exact_button_count(&buttons, expected_count, screen_name)?;
+    Ok(buttons)
 }
 
 fn check_no_console_or_page_errors(status: &PageStatus, phase: &str) -> Result<(), String> {
@@ -550,4 +643,43 @@ fn find_wide_button_centers(screenshot_png: &[u8]) -> Result<Vec<(f64, f64)>, St
     }
     centers.sort_by(|a, b| a.1.partial_cmp(&b.1).expect("no NaNs in pixel coordinates"));
     Ok(centers)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `expect_exact_button_count` -- the pure decision `wait_until_ready`'s
+    // `ready` predicate embeds into the readiness gate (#270's maintainer
+    // follow-up: fold the specific expected fact into the wait itself,
+    // rather than trusting pixel stability as a stand-in for it and
+    // asserting the real fact only once, afterward). Red-first: these pin
+    // the exact success/failure boundary without needing a screenshot.
+
+    #[test]
+    fn expect_exact_button_count_ok_when_the_count_matches() {
+        let buttons = vec![(10.0, 20.0), (10.0, 80.0)];
+        assert!(expect_exact_button_count(&buttons, 2, "the main menu").is_ok());
+    }
+
+    #[test]
+    fn expect_exact_button_count_errs_when_none_are_found() {
+        // The exact observed CI shape (#270's maintainer follow-up): a
+        // stable-looking frame read before any button had spawned/colored.
+        let buttons: Vec<(f64, f64)> = vec![];
+        let err = expect_exact_button_count(&buttons, 2, "the main menu").unwrap_err();
+        assert!(
+            err.contains("expected exactly 2")
+                && err.contains("the main menu")
+                && err.contains("found 0"),
+            "error should name the expected count, the screen, and the actual count: {err}"
+        );
+    }
+
+    #[test]
+    fn expect_exact_button_count_errs_when_too_many_are_found() {
+        let buttons = vec![(1.0, 1.0), (2.0, 2.0), (3.0, 3.0)];
+        let err = expect_exact_button_count(&buttons, 2, "the settings panel").unwrap_err();
+        assert!(err.contains("found 3"));
+    }
 }

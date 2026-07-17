@@ -61,6 +61,43 @@
 //! Like `accessibility-settings-reload` and `reduced-motion-fight`, this
 //! scenario's pass/fail gate is exact telemetry, not a pixel diff.
 //! Screenshots are still captured as artifacts for human review.
+//!
+//! ## Navigate, then activate, generally (#270)
+//!
+//! Every "move focus to a labeled control, then press `Enter`" call site in
+//! this module funnels through one pair of helpers -- [`navigate_and_activate`]
+//! (settles focus via [`press_arrow_until_label`], then activates) and
+//! [`activate_focused_control`] (activates whatever is already focused, for
+//! the one call site that doesn't need to navigate first: the fight HUD's
+//! ⏸ button right after [`walk_full_lap`] returns already sitting on it) --
+//! instead of each site hand-rolling its own "press Enter, then wait a bit"
+//! shape. Both funnel through the same three steps:
+//!
+//! 1. **Settle**: focus already sits on the intended control (verified by
+//!    its exact rendered label, not an index).
+//! 2. **Drain**: [`drain_pending_input`] waits for a short run of genuinely
+//!    unchanging frames before `Enter` is dispatched -- see its own doc
+//!    comment for the concrete CI race this closes (#270's root cause: a
+//!    navigation key and the following `Enter` landing in the same slow
+//!    game-side frame, so `Enter` activates whichever control focus lands
+//!    on *after* the still-in-flight navigation, not the one this scenario
+//!    intended).
+//! 3. **Assert a specific outcome**: the caller-supplied `assert_outcome`
+//!    closure polls for the *exact* fact the activation is supposed to
+//!    produce -- a named screen ([`wait_for_screen`]), a specific flipped
+//!    label ([`wait_for_label`]), an overlay's first control autofocusing
+//!    ([`wait_for_overlay_open`]), or focus moving off the entity that was
+//!    just activated ([`wait_for_focus_to_move_off`]) -- never "the
+//!    snapshot changed at all" (see [`press_key_and_wait_for_change`]'s own
+//!    doc comment for why that weaker check is exactly the shape of #270's
+//!    four prior point-fixes, each patched individually because the next
+//!    call site still had the same latent hole).
+//!
+//! Every one of #270's four confirmed instances (cold first `ArrowRight`,
+//! the pause-overlay walk, settings-close, settings-open) is an activation
+//! this shape now covers uniformly, plus the two sites (resuming from
+//! pause, opening the pause overlay) that were never individually patched
+//! but share the identical race surface.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -94,6 +131,17 @@ const SETTLE_MAX_FRAMES: usize = 120;
 /// [`walk_full_lap`]) -- comfortably above every current screen's actual
 /// control count, so this is a safety bound, not a per-screen tuning knob.
 const MAX_LAP_PRESSES: usize = 40;
+/// Frame budget for [`drain_pending_input`] to observe
+/// [`DRAIN_STABLE_FRAMES_REQUIRED`] consecutive unchanged snapshots before
+/// giving up. Generous relative to the required streak -- this is a safety
+/// bound against a genuinely stuck page, not a tuning knob for the common
+/// case, which drains in a handful of frames.
+const DRAIN_MAX_FRAMES: usize = 60;
+/// Consecutive frames the published accessibility snapshot must hold
+/// completely unchanged before [`drain_pending_input`] considers input
+/// quiesced -- see that function's doc comment for why one unchanged frame
+/// is not enough.
+const DRAIN_STABLE_FRAMES_REQUIRED: usize = 3;
 
 pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
     if update_baselines {
@@ -428,9 +476,9 @@ fn run_journey(
     // Confirm the hero via the real focused Confirm button, keyboard-only --
     // the whole point of this scenario, rather than the `pressButton` shim
     // every other journey scenario uses for navigation.
-    press_arrow_until_label(&checkpoint, "Începe lupta")?;
-    checkpoint.press_key("Enter")?;
-    wait_for_screen(&checkpoint, "Fight", false)?;
+    navigate_and_activate(&checkpoint, "Începe lupta", |checkpoint, _before| {
+        wait_for_screen(checkpoint, "Fight", false)
+    })?;
     // The fight screen animates continuously (parallax drift, idle sprite
     // frames) -- freeze `Time<Virtual>` so the byte-identical-frames
     // stability streak can land, the exact same pause/capture pattern
@@ -466,9 +514,9 @@ fn run_journey(
         serde_json::json!({"cmd": "setTimePaused", "paused": false}),
     )?;
 
-    press_arrow_until_label(&checkpoint, "La prăvălie")?;
-    checkpoint.press_key("Enter")?;
-    wait_for_screen(&checkpoint, "Shop", false)?;
+    navigate_and_activate(&checkpoint, "La prăvălie", |checkpoint, _before| {
+        wait_for_screen(checkpoint, "Shop", false)
+    })?;
     // The shop's cutout preview rig idles too -- same freeze.
     send_command(
         &checkpoint,
@@ -540,6 +588,231 @@ fn press_arrow_until_label(checkpoint: &Checkpoint, label: &str) -> Result<(), S
     ))
 }
 
+/// The pure decision behind [`drain_pending_input`]'s consecutive-frame
+/// counter: given the previously observed snapshot, the one just read, and
+/// how many consecutive identical frames preceded it, returns the new streak
+/// length -- `1` whenever the snapshot moved at all (a fresh streak starts at
+/// the frame that first held still), the old streak plus one otherwise. This
+/// is the one piece of actual *decision* logic inside an otherwise pure
+/// browser-polling loop, extracted as a free function so it is directly
+/// unit-testable without a real browser (see the `tests` module below).
+fn advance_stable_streak(
+    previous: &Option<AccessibilitySnapshot>,
+    current: &Option<AccessibilitySnapshot>,
+    streak: usize,
+) -> usize {
+    if current == previous { streak + 1 } else { 1 }
+}
+
+/// Waits for [`DRAIN_STABLE_FRAMES_REQUIRED`] consecutive frames in which the
+/// published accessibility snapshot does not change at all -- the "drain"
+/// half of the navigate-then-activate hardening this module's docs describe
+/// (#270). On slow CI, the browser's asynchronous CDP key-dispatch pipeline
+/// can still be delivering the effects of a just-settled navigation key for
+/// a frame or two after this scenario's own settle loop
+/// ([`press_key_and_wait_for_change`]) already observed the snapshot move
+/// once -- that loop only proves the press *started* landing, not that
+/// nothing from it is still in flight. Pressing `Enter` immediately after
+/// only the first observed change risks exactly the race #270 describes:
+/// `Enter` lands in the same slow game-side frame as a still-in-flight
+/// navigation keypress, the focus-navigation system (which runs before
+/// button-activation handlers in `Update`) moves focus again before the
+/// activation is even read, and `Enter` fires on whatever control focus
+/// just landed on instead of the one this scenario intended. Requiring a
+/// short run of genuinely unchanging frames -- not just "the frame right
+/// after the one that changed" -- is what actually proves no navigation
+/// input is still working its way through. Bounded by [`DRAIN_MAX_FRAMES`];
+/// never observing that stable run is a diagnosed failure, not a silent
+/// fall-through into pressing `Enter` anyway.
+fn drain_pending_input(checkpoint: &Checkpoint) -> Result<(), String> {
+    let mut last = read_accessibility(checkpoint)?;
+    let mut streak = 0usize;
+    for _ in 0..DRAIN_MAX_FRAMES {
+        checkpoint.wait_for_frame()?;
+        let current = read_accessibility(checkpoint)?;
+        streak = advance_stable_streak(&last, &current, streak);
+        last = current;
+        if streak >= DRAIN_STABLE_FRAMES_REQUIRED {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "input never quiesced -- the accessibility snapshot kept changing for {DRAIN_MAX_FRAMES} \
+         frames without holding still for {DRAIN_STABLE_FRAMES_REQUIRED} in a row (last observed: \
+         {last:?})"
+    ))
+}
+
+/// The one hardened "activate the currently focused control, then reach a
+/// *specific* new state" primitive every activation site in this scenario
+/// funnels through (#270): drains pending input ([`drain_pending_input`]),
+/// captures the snapshot immediately before pressing `Enter` (passed to
+/// `assert_outcome` as `before`, so callers that need it -- e.g. "focus must
+/// move off the entity that was just focused" -- never race a second,
+/// separately-timed read against this one), presses `Enter`, then hands
+/// control to `assert_outcome`.
+///
+/// `assert_outcome` must itself poll for a *specific* expected fact (a named
+/// screen, an exact focused label, focus having moved off a named entity,
+/// ...), never "the snapshot changed at all" -- seeded a bounded loop of the
+/// caller's choosing, since what counts as "done" differs per call site
+/// (some open something and must confirm a new autofocus target, others
+/// close something and must confirm focus left; see [`wait_for_screen`],
+/// [`wait_for_label`], [`wait_for_overlay_open`], and
+/// [`wait_for_focus_to_move_off`] for this module's four such predicates).
+fn activate_focused_control(
+    checkpoint: &Checkpoint,
+    assert_outcome: impl FnOnce(&Checkpoint, Option<AccessibilitySnapshot>) -> Result<(), String>,
+) -> Result<(), String> {
+    drain_pending_input(checkpoint)?;
+    let before = read_accessibility(checkpoint)?;
+    checkpoint.press_key("Enter")?;
+    assert_outcome(checkpoint, before)
+}
+
+/// [`activate_focused_control`], but first settles focus on `label` via
+/// [`press_arrow_until_label`] -- the "navigate" half of the navigate-then-
+/// activate model. Every call site that needs to move focus to a named
+/// control before activating it goes through this; the one exception is the
+/// fight HUD's ⏸ button, which [`walk_full_lap`] already leaves focus
+/// sitting on when it returns, so that call site uses
+/// [`activate_focused_control`] directly instead of navigating to a label it
+/// is already on.
+fn navigate_and_activate(
+    checkpoint: &Checkpoint,
+    label: &str,
+    assert_outcome: impl FnOnce(&Checkpoint, Option<AccessibilitySnapshot>) -> Result<(), String>,
+) -> Result<(), String> {
+    press_arrow_until_label(checkpoint, label)?;
+    activate_focused_control(checkpoint, assert_outcome)
+}
+
+/// [`activate_focused_control`]/[`navigate_and_activate`] outcome: waits for
+/// `InputFocus` to actually move off whatever entity `before` named -- the
+/// precise, race-free signal that an activation which despawns or closes
+/// something (the settings overlay's **Înapoi**, the pause overlay's
+/// **Continuă lupta**) has actually been processed by the game, replacing a
+/// fixed-frame settle or a `read_screen(..) == parent_screen` poll that can
+/// be trivially true *before* the activation has even fired (opening/closing
+/// either overlay is a `Resource` change, never a `GameState` change, so
+/// that condition holds on the very first polled frame regardless of
+/// whether anything happened yet).
+///
+/// This is deliberately not "wait for the whole snapshot to differ from
+/// `before`": over the paused fight, closing the settings overlay refocuses
+/// the pause panel's own first control; over the main menu, it clears focus
+/// to `None` (`core::despawn_screen`'s doc comment); resuming from pause
+/// always clears focus to `None` the same way. All three leave
+/// `focused_entity` different from what it was -- the one fact every one of
+/// these activations actually guarantees -- while an incidental
+/// `targets`-rect shift (the shared widget's scroll-into-view settling, see
+/// `walk_full_lap`'s doc comment) can make the *whole* snapshot differ while
+/// focus is still sitting on the very entity that was just activated, which
+/// is the same false-positive class #268 first found and fixed here (this
+/// function generalizes that fix, previously named
+/// `press_enter_and_wait_for_overlay_close` and settings-close-only, to
+/// every activation that is expected to move focus off itself).
+fn wait_for_focus_to_move_off(
+    checkpoint: &Checkpoint,
+    before: Option<AccessibilitySnapshot>,
+) -> Result<(), String> {
+    let before_focus = before.and_then(|s| s.focused_entity);
+    for _ in 0..SETTLE_MAX_FRAMES {
+        checkpoint.wait_for_frame()?;
+        if let Some(snapshot) = read_accessibility(checkpoint)?
+            && snapshot.focused_entity != before_focus
+        {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "activating the focused control never moved focus off it within {SETTLE_MAX_FRAMES} \
+         frames (focus was {before_focus:?})"
+    ))
+}
+
+/// [`navigate_and_activate`] outcome: waits for the focused control's
+/// rendered label to become exactly `expected` -- e.g. confirming the mute
+/// toggle's label actually flipped to the specific expected polarity
+/// ([`flipped_mute_label`]), rather than accepting the first incidental
+/// snapshot change (a `targets`-rect shift has nothing to do with the label
+/// this scenario actually cares about, the same reasoning
+/// [`wait_for_focus_to_move_off`]'s doc comment gives).
+fn wait_for_label(checkpoint: &Checkpoint, expected: &str) -> Result<(), String> {
+    for _ in 0..SETTLE_MAX_FRAMES {
+        checkpoint.wait_for_frame()?;
+        if let Some(snapshot) = read_accessibility(checkpoint)?
+            && snapshot.focused_label.as_deref() == Some(expected)
+        {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "the focused control's label never became {expected:?} within {SETTLE_MAX_FRAMES} frames"
+    ))
+}
+
+/// [`navigate_and_activate`]/[`activate_focused_control`] outcome for opening
+/// a modal overlay (settings or pause): waits for the overlay's own first
+/// control to actually autofocus, identified by its exact rendered label
+/// (the settings panel's first stepper's `-` button, per
+/// `settings::spawn_overlay`'s spawn order, or the pause panel's **Continuă
+/// lupta**, per `combat::pause::spawn_overlay`'s), then confirms the
+/// underlying `GameState` did not change (opening either overlay is a
+/// `Resource` insert, never a state transition).
+///
+/// Waiting for the specific first-control label -- not a looser "some label
+/// changed" or a fixed settle -- is what actually proves the overlay's own
+/// autofocus system has run, replacing this module's previous settings-open
+/// check (`l.starts_with("Muzică") || l == "-"`, which accepted a label
+/// ("Muzică") no focused control could ever actually render, since it names
+/// the stepper row's static, non-focusable text rather than either of its
+/// buttons' own direct-child labels) and its previous pause-open check
+/// (a loop that silently fell through without erroring if **Continuă
+/// lupta** never autofocused within budget).
+fn wait_for_overlay_open(
+    checkpoint: &Checkpoint,
+    first_control_label: &str,
+    parent_screen: &str,
+) -> Result<(), String> {
+    for _ in 0..SETTLE_MAX_FRAMES {
+        checkpoint.wait_for_frame()?;
+        if let Some(snapshot) = read_accessibility(checkpoint)?
+            && snapshot.focused_label.as_deref() == Some(first_control_label)
+        {
+            let screen = read_screen(checkpoint)?;
+            return if screen.as_deref() == Some(parent_screen) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "opening the overlay must not change the GameState (still {parent_screen}), \
+                     observed {screen:?}"
+                ))
+            };
+        }
+    }
+    Err(format!(
+        "the overlay never autofocused its first control ({first_control_label:?}) within \
+         {SETTLE_MAX_FRAMES} frames"
+    ))
+}
+
+/// The mute toggle's label after flipping, given its current rendered label
+/// -- computed purely from the label text (never queried from the game
+/// itself) so [`navigate_and_activate`]'s mute-toggle outcome can require the
+/// *specific* flipped value via [`wait_for_label`], not just "the label
+/// changed to something". Mirrors `settings::mute_label`'s two literal
+/// strings (duplicated here, not shared code -- the same reasoning
+/// `REVIEW_COMMAND_KEY` above documents: this dev-tooling crate never
+/// depends on the game crate).
+fn flipped_mute_label(current: &str) -> &'static str {
+    if current == "Sunet: Pornit" {
+        "Sunet: Oprit"
+    } else {
+        "Sunet: Pornit"
+    }
+}
+
 /// The main menu: **Luptă nouă**, the disabled **Continuă** marker, and
 /// **Setări** must all be reachable with the visible marker (**Ieși** is
 /// native-only, `#[cfg(not(target_arch = "wasm32"))]` -- this scenario only
@@ -570,36 +843,24 @@ fn exercise_settings_overlay(
     parent_screen: &str,
     notes: &mut Vec<String>,
 ) -> Result<(), String> {
-    press_arrow_until_label(checkpoint, "Setări")?;
-    checkpoint.press_key("Enter")?;
-    // The overlay is not a `GameState`; confirm the screen name is
-    // unchanged, and wait for the overlay's own autofocus to land before
-    // walking its controls.
-    for _ in 0..SETTLE_MAX_FRAMES {
-        checkpoint.wait_for_frame()?;
-        if let Some(snapshot) = read_accessibility(checkpoint)?
-            && snapshot
-                .focused_label
-                .as_deref()
-                .is_some_and(|l| l.starts_with("Muzică") || l == "-")
-        {
-            break;
-        }
-    }
-    let screen_while_open = read_screen(checkpoint)?;
-    if screen_while_open.as_deref() != Some(parent_screen) {
-        return Err(format!(
-            "opening Setări must not change the GameState (still {parent_screen}), observed \
-             {screen_while_open:?}"
-        ));
-    }
+    // Opening the overlay is not a `GameState` change; the overlay's own
+    // autofocus must land on its first control (the Muzică stepper's `-`
+    // button, see `settings::spawn_overlay`'s spawn order) before this
+    // function is willing to walk its controls -- see `navigate_and_activate`
+    // and `wait_for_overlay_open`'s doc comments for why this replaced a
+    // looser "some label starting with Muzică or -" check plus a separate,
+    // unretried `GameState` read.
+    navigate_and_activate(checkpoint, "Setări", |checkpoint, _before| {
+        wait_for_overlay_open(checkpoint, "-", parent_screen)
+    })?;
 
     let lap = walk_full_lap(checkpoint, MAX_LAP_PRESSES)?;
     assert_full_coverage("Settings", &lap)?;
 
     // Keyboard-only audio operability: find the mute toggle by its live
     // label (either polarity), toggle it, and confirm the rendered label
-    // actually flipped.
+    // actually flipped to the specific expected polarity (not just "some
+    // change was observed" -- see `flipped_mute_label`'s doc comment).
     let mute_before = lap
         .iter()
         .filter_map(|s| s.focused_label.as_deref())
@@ -611,97 +872,20 @@ fn exercise_settings_overlay(
                 lap.iter().map(|s| &s.focused_label).collect::<Vec<_>>()
             )
         })?;
-    press_arrow_until_label(checkpoint, &mute_before)?;
-    let after_enter = {
-        let before = read_accessibility(checkpoint)?;
-        checkpoint.press_key("Enter")?;
-        let mut result = None;
-        for _ in 0..SETTLE_MAX_FRAMES {
-            checkpoint.wait_for_frame()?;
-            if let Some(snapshot) = read_accessibility(checkpoint)?
-                && Some(&snapshot) != before.as_ref()
-            {
-                result = Some(snapshot);
-                break;
-            }
-        }
-        result.ok_or_else(|| {
-            "Settings: pressing Enter on the mute toggle produced no snapshot change".to_string()
-        })?
-    };
-    let mute_after = after_enter
-        .focused_label
-        .ok_or_else(|| "Settings: no label after toggling mute".to_string())?;
-    if mute_after == mute_before {
-        return Err(format!(
-            "Settings: Enter on the focused mute toggle must flip its label, still {mute_before:?}"
-        ));
-    }
+    let mute_after = flipped_mute_label(&mute_before);
+    navigate_and_activate(checkpoint, &mute_before, |checkpoint, _before| {
+        wait_for_label(checkpoint, mute_after)
+    })?;
     notes.push(format!(
         "Settings ({parent_screen}): {} controls, mute toggled {mute_before:?} -> \
          {mute_after:?} keyboard-only",
         lap.len()
     ));
 
-    press_arrow_until_label(checkpoint, "Înapoi")?;
-    press_enter_and_wait_for_overlay_close(checkpoint)?;
+    navigate_and_activate(checkpoint, "Înapoi", |checkpoint, before| {
+        wait_for_focus_to_move_off(checkpoint, before)
+    })?;
     Ok(())
-}
-
-/// Presses `Enter` on the focused **Înapoi** button and waits for the
-/// settings overlay to actually finish closing -- specifically, for focus to
-/// leave the **Înapoi** control it was on -- before any caller races ahead
-/// with further key presses.
-///
-/// This is deliberately *not* `read_screen(checkpoint)? == Some(parent_screen)`
-/// polled in a loop, which is what this function replaced: opening the
-/// settings overlay never changes the `GameState` (see this function's
-/// caller, which asserts exactly that right after opening), so that
-/// condition is already true on the very first iteration -- so the old loop
-/// did a single `wait_for_frame` after dispatching the `Enter` keypress and
-/// then returned immediately, regardless of whether the game had actually
-/// processed that keypress yet. That is the concrete shape of `keyboard-
-/// accessibility`'s CI failure at the `press_arrow_until_label("Continuă
-/// lupta")` call right after this one: on a slow runner, returning before
-/// **Înapoi**'s activation has despawned the overlay means the caller's very
-/// next `ArrowRight` is dispatched while focus is *still inside the settings
-/// modal*. If that `ArrowRight` and the still-pending `Enter` land in the
-/// same slow game frame, the focus systems (which run before the settings
-/// button handler in `Update`) move focus off **Înapoi** first, so `Enter`
-/// then activates whatever control focus moved onto -- a volume stepper, say
-/// -- instead of **Înapoi**. The overlay never closes, focus stays trapped
-/// cycling the settings modal's own controls, and `press_arrow_until_label`
-/// exhausts all 64 of its presses without ever reaching the pause overlay's
-/// «Continuă lupta» underneath -- exactly the observed CI error.
-///
-/// Waiting for `focused_entity` to change away from the **Înapoi** control it
-/// started on is the precise, race-free signal that the close has been
-/// processed: over the paused fight, closing refocuses the pause overlay's
-/// own first control; over the main menu, it clears focus to `None` (see
-/// `settings::despawn_overlay`'s doc comment). Both leave `focused_entity`
-/// different from the **Înapoi** entity -- and both are correct settled
-/// outcomes here, so, unlike [`press_key_and_wait_for_change`], this does not
-/// also require `focused_entity.is_some()`. Comparing the whole snapshot (or
-/// merely "any field differs") would instead risk returning on an incidental
-/// `targets`-rect shift while focus is still on **Înapoi** -- the same false-
-/// positive class #268 is about -- so the comparison is specifically on
-/// `focused_entity`.
-fn press_enter_and_wait_for_overlay_close(checkpoint: &Checkpoint) -> Result<(), String> {
-    let before = read_accessibility(checkpoint)?;
-    let before_focus = before.as_ref().and_then(|s| s.focused_entity.clone());
-    checkpoint.press_key("Enter")?;
-    for _ in 0..SETTLE_MAX_FRAMES {
-        checkpoint.wait_for_frame()?;
-        if let Some(snapshot) = read_accessibility(checkpoint)?
-            && snapshot.focused_entity != before_focus
-        {
-            return Ok(());
-        }
-    }
-    Err(format!(
-        "closing the settings overlay (Enter on «Înapoi») never moved focus off the \
-         back button within {SETTLE_MAX_FRAMES} frames (focus still {before_focus:?})"
-    ))
 }
 
 /// Character creation: every preset tile, the name arrows, the appearance
@@ -743,23 +927,12 @@ fn exercise_fight(checkpoint: &Checkpoint, notes: &mut Vec<String>) -> Result<()
     ));
 
     // `walk_full_lap` leaves live focus back on `lap[0]` (the ⏸ button) once
-    // it returns -- open the pause overlay for real from there.
-    checkpoint.press_key("Enter")?;
-    let fight_screen_while_paused = read_screen(checkpoint)?;
-    if fight_screen_while_paused.as_deref() != Some("Fight") {
-        return Err(format!(
-            "opening the pause overlay must not change the GameState, observed \
-             {fight_screen_while_paused:?}"
-        ));
-    }
-    for _ in 0..SETTLE_MAX_FRAMES {
-        checkpoint.wait_for_frame()?;
-        if let Some(snapshot) = read_accessibility(checkpoint)?
-            && snapshot.focused_label.as_deref() == Some("Continuă lupta")
-        {
-            break;
-        }
-    }
+    // it returns -- open the pause overlay for real from there. No
+    // navigation needed (focus is already on the ⏸ button), so this uses
+    // `activate_focused_control` directly rather than `navigate_and_activate`.
+    activate_focused_control(checkpoint, |checkpoint, _before| {
+        wait_for_overlay_open(checkpoint, "Continuă lupta", "Fight")
+    })?;
 
     let pause_lap = walk_full_lap(checkpoint, MAX_LAP_PRESSES)?;
     assert_full_coverage("Pause", &pause_lap)?;
@@ -775,15 +948,14 @@ fn exercise_fight(checkpoint: &Checkpoint, notes: &mut Vec<String>) -> Result<()
 
     exercise_settings_overlay(checkpoint, "Fight", notes)?;
 
-    press_arrow_until_label(checkpoint, "Continuă lupta")?;
-    checkpoint.press_key("Enter")?;
-    // Resuming despawns the pause overlay and clears focus (#216's
-    // `crate::core::despawn_screen`-style pattern); a fixed settle is enough
-    // to confirm the overlay is gone, since there is no longer a "Continuă
-    // lupta"-labeled entity to poll for.
-    for _ in 0..30 {
-        checkpoint.wait_for_frame()?;
-    }
+    // Resuming despawns the pause overlay and clears focus
+    // (`core::despawn_screen`'s doc comment) -- the same "focus must move
+    // off the entity that was just activated" shape settings-close uses, so
+    // this reuses `wait_for_focus_to_move_off` instead of a fixed settle
+    // (which cannot itself fail loudly if the resume never actually landed).
+    navigate_and_activate(checkpoint, "Continuă lupta", |checkpoint, before| {
+        wait_for_focus_to_move_off(checkpoint, before)
+    })?;
     let resumed_screen = read_screen(checkpoint)?;
     if resumed_screen.as_deref() != Some("Fight") {
         return Err(format!(
@@ -821,4 +993,76 @@ fn exercise_shop(checkpoint: &Checkpoint, notes: &mut Vec<String>) -> Result<(),
         lap.len()
     ));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(entity: &str, label: &str) -> AccessibilitySnapshot {
+        AccessibilitySnapshot {
+            focused_entity: Some(entity.to_string()),
+            focused_label: Some(label.to_string()),
+            focus_marker_visible: true,
+            targets: Vec::new(),
+            min_target_size: 0.0,
+        }
+    }
+
+    // `advance_stable_streak` -- the pure decision behind `drain_pending_input`
+    // (#270's "drain" half). Red-first: these pin the exact streak-counting
+    // contract `drain_pending_input`'s loop relies on to ever return `Ok`.
+
+    #[test]
+    fn advance_stable_streak_starts_a_fresh_streak_of_one_on_the_first_frame() {
+        let before_anything = None;
+        let first_read = Some(snapshot("1v0", "Setări"));
+        assert_eq!(advance_stable_streak(&before_anything, &first_read, 0), 1);
+    }
+
+    #[test]
+    fn advance_stable_streak_increments_while_unchanged() {
+        let a = Some(snapshot("1v0", "Setări"));
+        assert_eq!(advance_stable_streak(&a, &a.clone(), 1), 2);
+        assert_eq!(advance_stable_streak(&a, &a.clone(), 2), 3);
+    }
+
+    #[test]
+    fn advance_stable_streak_resets_to_one_on_any_change() {
+        let a = Some(snapshot("1v0", "Setări"));
+        let b = Some(snapshot("2v0", "Sunet: Pornit"));
+        assert_eq!(advance_stable_streak(&a, &b, 5), 1);
+    }
+
+    #[test]
+    fn advance_stable_streak_resets_even_on_a_label_only_change() {
+        // A `targets`-rect shift is not the only thing that can move while
+        // `focused_entity` stays put -- this pins that *any* field differing
+        // (not just the entity id) still resets the streak, since the whole
+        // snapshot is compared.
+        let a = Some(snapshot("1v0", "Sunet: Pornit"));
+        let b = Some(snapshot("1v0", "Sunet: Oprit"));
+        assert_eq!(advance_stable_streak(&a, &b, 2), 1);
+    }
+
+    #[test]
+    fn advance_stable_streak_treats_two_consecutive_nones_as_unchanged() {
+        assert_eq!(advance_stable_streak(&None, &None, 1), 2);
+    }
+
+    // `flipped_mute_label` -- the pure computation behind the mute-toggle
+    // outcome assertion (`wait_for_label`'s expected value). Red-first: this
+    // is the one piece of "what specific value do we expect" logic that used
+    // to be implicit in "the label differs from what it was" -- #270 asks
+    // for the specific expected outcome instead.
+
+    #[test]
+    fn flipped_mute_label_swaps_pornit_to_oprit() {
+        assert_eq!(flipped_mute_label("Sunet: Pornit"), "Sunet: Oprit");
+    }
+
+    #[test]
+    fn flipped_mute_label_swaps_oprit_to_pornit() {
+        assert_eq!(flipped_mute_label("Sunet: Oprit"), "Sunet: Pornit");
+    }
 }

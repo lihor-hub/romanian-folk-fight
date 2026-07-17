@@ -42,7 +42,7 @@ cargo xtask web-smoke --scenario fight-palette-desktop  # deterministic fight sc
 cargo xtask web-smoke --scenario fight-palette-phone  # phone fight screen, assert the category-driven action palette states (#199) -- deactivated from default CI trigger by #284, still runnable directly
 cargo xtask web-smoke --scenario high-contrast  # seed high-contrast preference, verify menu+fight theming and non-color cues (#214)
 cargo xtask web-smoke --scenario fight-palette-accessible  # real-keyboard palette focus order, disabled reason, marker, category-close recovery (#213)
-cargo xtask web-smoke --scenario keyboard-accessibility  # real-keyboard-only pass over every current screen (menu, settings, creation, fight, pause, result, shop) (#216)
+cargo xtask web-smoke --scenario keyboard-accessibility  # real-keyboard-only pass over every current screen (menu, settings, creation, fight, pause, result, shop) (#216); a blocking CI check as of #270's harness hardening
 cargo xtask web-smoke --scenario zoom-200      # every current screen at a 200%-desktop-zoom viewport: no scroll, no clipped control (#216) -- deactivated from default CI trigger by #284, still runnable directly
 cargo xtask web-smoke --scenario touch-targets # every current screen at desktop+phone: no interactive target below 44x44 CSS px (#216) -- deactivated from default CI trigger by #284, still runnable directly
 cargo xtask web-smoke --scenario corrupt-save-recovery  # seed a corrupt/future-version save, verify the Romanian recovery action (#201)
@@ -548,6 +548,16 @@ is accepted for CLI uniformity but has no effect). Diagnostics (menu/
 settings/post-reload screenshots, viewport and zoom-capability logs, both
 `localStorage` reads, the server request log) are always retained under
 `target/xtask-artifacts/web-smoke/accessibility-settings-reload/reload/`.
+
+Each of the three points this scenario waits on a screen (initial load,
+settings-panel-opened, post-reload) folds a *specific* expected fact --
+"exactly N wide `BUTTON_NORMAL` buttons are visible" -- directly into the
+stability wait itself (`wait_until_ready`'s `ready` predicate), rather than
+trusting three byte-identical screenshots as a proxy for "the buttons have
+spawned and been colored" and asserting the real fact only once, afterward.
+This closes a CI flake (#270's maintainer follow-up) where the post-reload
+main-menu probe once read a pixel-stable frame captured before the buttons
+had actually spawned/colored ("found 0").
 
 ### `web-smoke --scenario save-reload` (#217, a child of #146)
 
