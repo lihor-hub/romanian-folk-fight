@@ -212,6 +212,10 @@ mod tests {
                 agilitate: 2,
                 vitalitate: 4,
                 noroc: 3,
+                atac: 1,
+                aparare: 2,
+                carisma: 1,
+                magie: 0,
             },
             appearance: PlayerAppearance {
                 skin_tone: crate::character::SkinTone::Deep,

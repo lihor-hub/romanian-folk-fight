@@ -27,6 +27,19 @@
 //! | `resume_destination` | *(new)* | [`ResumeDestination::Fight`] | the only destination v1's **Continuă** button ever produced (see the pre-#193 doc on `SaveGame::restore`) |
 //! | everything else | `v1.*` | carried over verbatim | no new information needed |
 //!
+//! # v2 → v3 safe-default table (#128)
+//!
+//! v3 widens the attribute spread from four fields to eight
+//! (`atac`/`aparare`/`carisma`/`magie` join, see
+//! [`crate::character::Attributes`]).
+//!
+//! | v3 field | v2 source | migrated value | why it's safe |
+//! |---|---|---|---|
+//! | `attrs.atac` / `attrs.aparare` / `attrs.carisma` | *(new)* | 1 (their [`crate::character::AttributeKind::base_value`]) | exactly what a fresh hero starts with; never fabricates allocated points |
+//! | `attrs.magie` | *(new)* | 0 (its base value) | `magie == 0` is a valid non-caster (zero mana, no starting spell) and is never normalized upward |
+//! | `unspent_points` | `v2.unspent_points` | `+ `[`v3_widening_compensation_points`] | v2 heroes were built from a 10-point creation pool and 2 points per level; v3 widened those to [`crate::creation::FREE_POINTS`] / [`crate::progression::POINTS_PER_LEVEL`]. Granting the difference as *unspent* points lets a migrated hero re-spend into the new attributes and end up exactly as wide as a fresh v3 hero of the same level — without ever pre-allocating on the player's behalf |
+//! | everything else | `v2.*` | carried over verbatim | no new information needed |
+//!
 //! # Extending to a new version (recipe for #133/#137/#140)
 //!
 //! Each of those issues owns exactly one new version and follows the same
@@ -91,15 +104,20 @@ use crate::shop::{OwnedItems, PlayerEquipment};
 /// The version written into every save produced by this build; loads of any
 /// other value either migrate forward (if older and known, see [`Migrate`])
 /// or are discarded (if unknown/newer).
-pub const CURRENT_VERSION: u32 = 2;
+pub const CURRENT_VERSION: u32 = 3;
 
-/// Serde mirror of [`Attributes`]; the character model stays serde-free.
+/// Serde mirror of [`Attributes`] (eight attributes since v3/#128); the
+/// character model stays serde-free.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SavedAttributes {
     pub putere: u32,
     pub agilitate: u32,
     pub vitalitate: u32,
     pub noroc: u32,
+    pub atac: u32,
+    pub aparare: u32,
+    pub carisma: u32,
+    pub magie: u32,
 }
 
 impl From<Attributes> for SavedAttributes {
@@ -109,6 +127,10 @@ impl From<Attributes> for SavedAttributes {
             agilitate: attrs.agilitate,
             vitalitate: attrs.vitalitate,
             noroc: attrs.noroc,
+            atac: attrs.atac,
+            aparare: attrs.aparare,
+            carisma: attrs.carisma,
+            magie: attrs.magie,
         }
     }
 }
@@ -120,6 +142,40 @@ impl From<SavedAttributes> for Attributes {
             agilitate: attrs.agilitate,
             vitalitate: attrs.vitalitate,
             noroc: attrs.noroc,
+            atac: attrs.atac,
+            aparare: attrs.aparare,
+            carisma: attrs.carisma,
+            magie: attrs.magie,
+        }
+    }
+}
+
+/// The four-attribute spread of v1/v2 payloads (pre-#128): kept only so
+/// [`SnapshotV1`]/[`SnapshotV2`] can parse old saves for migration. Nothing
+/// else constructs this.
+#[derive(Deserialize, Debug, Clone, Copy)]
+struct SavedAttributesV2 {
+    putere: u32,
+    agilitate: u32,
+    vitalitate: u32,
+    noroc: u32,
+}
+
+impl SavedAttributesV2 {
+    /// Widens the four-attribute spread to eight, giving each new attribute
+    /// its fresh-hero base value — see the v2 → v3 default table in the
+    /// module docs.
+    fn widen(self) -> SavedAttributes {
+        let base = Attributes::default();
+        SavedAttributes {
+            putere: self.putere,
+            agilitate: self.agilitate,
+            vitalitate: self.vitalitate,
+            noroc: self.noroc,
+            atac: base.atac,
+            aparare: base.aparare,
+            carisma: base.carisma,
+            magie: base.magie,
         }
     }
 }
@@ -208,7 +264,7 @@ pub enum SnapshotLoadError {
 #[derive(Deserialize, Debug, Clone)]
 struct SnapshotV1 {
     name: String,
-    attrs: SavedAttributes,
+    attrs: SavedAttributesV2,
     #[serde(default)]
     appearance: PlayerAppearance,
     level: u32,
@@ -221,6 +277,51 @@ struct SnapshotV1 {
     lap: u32,
 }
 
+/// v2 payload (#193, superseded by #128's v3): kept only so
+/// [`SaveGame::from_json`] can parse and [`Migrate`] old saves. Nothing else
+/// in the codebase constructs this — new saves are always [`SaveGame`]. The
+/// `#[serde(default)]` fields mirror the tolerances the v2-era `SaveGame`
+/// itself had.
+#[derive(Deserialize, Debug, Clone)]
+struct SnapshotV2 {
+    name: String,
+    attrs: SavedAttributesV2,
+    #[serde(default)]
+    appearance: PlayerAppearance,
+    level: u32,
+    xp: u32,
+    unspent_points: u32,
+    wallet: u32,
+    #[serde(default)]
+    lifetime_earnings: u32,
+    owned_items: Vec<String>,
+    equipped: Vec<String>,
+    ladder_progress: usize,
+    lap: u32,
+    #[serde(default)]
+    resume_destination: ResumeDestination,
+}
+
+/// The creation free-point pool a v2-era hero was built from — frozen
+/// historical fact, deliberately *not* [`crate::creation::FREE_POINTS`]
+/// (which later balance passes like #149 may move again).
+const V2_CREATION_FREE_POINTS: u32 = 10;
+
+/// The points-per-level a v2-era hero leveled with — frozen historical
+/// fact, deliberately *not* [`crate::progression::POINTS_PER_LEVEL`].
+const V2_POINTS_PER_LEVEL: u32 = 2;
+
+/// How many extra *unspent* attribute points the v2 → v3 migration grants a
+/// hero of `level`: the creation-pool widening plus the per-level widening
+/// for every level-up the hero has already banked, computed against the
+/// live v3 constants (so a later balance pass keeps migrated heroes exactly
+/// as wide as fresh ones). See the v2 → v3 default table in the module docs.
+fn v3_widening_compensation_points(level: u32) -> u32 {
+    let creation_delta = crate::creation::FREE_POINTS.saturating_sub(V2_CREATION_FREE_POINTS);
+    let per_level_delta = crate::progression::POINTS_PER_LEVEL.saturating_sub(V2_POINTS_PER_LEVEL);
+    creation_delta + per_level_delta * level.saturating_sub(1)
+}
+
 /// Migrates one schema version's payload into the next. Each future version
 /// (#133/#137/#140 — see this module's extension recipe) adds one impl of
 /// this, chained by [`SaveGame::from_json`].
@@ -230,13 +331,12 @@ trait Migrate {
 }
 
 impl Migrate for SnapshotV1 {
-    type Next = SaveGame;
+    type Next = SnapshotV2;
 
     /// See the v1 → v2 default table in this module's docs for the
     /// rationale behind `lifetime_earnings` and `resume_destination`.
-    fn migrate(self) -> SaveGame {
-        SaveGame {
-            version: CURRENT_VERSION,
+    fn migrate(self) -> SnapshotV2 {
+        SnapshotV2 {
             name: self.name,
             attrs: self.attrs,
             appearance: self.appearance,
@@ -254,10 +354,37 @@ impl Migrate for SnapshotV1 {
     }
 }
 
-/// One full run snapshot (v2, #193): mirrors every run-scoped resource — the
-/// confirmed character, the experience state, the wallet and lifetime
-/// earnings, the shop purchases and loadout, the ladder position, and the
-/// typed safe resume destination.
+impl Migrate for SnapshotV2 {
+    type Next = SaveGame;
+
+    /// See the v2 → v3 default table in this module's docs: the four new
+    /// attributes arrive at their fresh-hero base values (magie 0 — a valid
+    /// non-caster, never normalized upward) and the pool widening lands as
+    /// *unspent* points for the player to re-spend.
+    fn migrate(self) -> SaveGame {
+        SaveGame {
+            version: CURRENT_VERSION,
+            name: self.name,
+            attrs: self.attrs.widen(),
+            appearance: self.appearance,
+            level: self.level,
+            xp: self.xp,
+            unspent_points: self.unspent_points + v3_widening_compensation_points(self.level),
+            wallet: self.wallet,
+            lifetime_earnings: self.lifetime_earnings,
+            owned_items: self.owned_items,
+            equipped: self.equipped,
+            ladder_progress: self.ladder_progress,
+            lap: self.lap,
+            resume_destination: self.resume_destination,
+        }
+    }
+}
+
+/// One full run snapshot (v3, #128; envelope from #193): mirrors every
+/// run-scoped resource — the confirmed character (eight attributes), the
+/// experience state, the wallet and lifetime earnings, the shop purchases
+/// and loadout, the ladder position, and the typed safe resume destination.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SaveGame {
     /// Always [`CURRENT_VERSION`] for freshly captured saves; older, known
@@ -374,6 +501,10 @@ impl SaveGame {
             serde_json::from_str(json).map_err(|_| SnapshotLoadError::Invalid)?;
         let save = match probe.version {
             1 => serde_json::from_str::<SnapshotV1>(json)
+                .map_err(|_| SnapshotLoadError::Invalid)?
+                .migrate()
+                .migrate(),
+            2 => serde_json::from_str::<SnapshotV2>(json)
                 .map_err(|_| SnapshotLoadError::Invalid)?
                 .migrate(),
             CURRENT_VERSION => {
@@ -517,6 +648,10 @@ pub(crate) mod tests {
                 agilitate: 3,
                 vitalitate: 7,
                 noroc: 2,
+                atac: 4,
+                aparare: 3,
+                carisma: 2,
+                magie: 0,
             },
             appearance: PlayerAppearance {
                 skin_tone: SkinTone::Olive,
@@ -590,7 +725,12 @@ pub(crate) mod tests {
                 agilitate: 3,
                 vitalitate: 7,
                 noroc: 2,
-            }
+                atac: 4,
+                aparare: 3,
+                carisma: 2,
+                magie: 0,
+            },
+            "all eight attributes are captured, magie 0 included"
         );
         assert_eq!(
             save.appearance,
@@ -681,13 +821,20 @@ pub(crate) mod tests {
             "not json at all",
             "{",
             "42",
+            r#"{"version":3}"#,
             r#"{"version":2}"#,
             r#"{"version":1}"#,
-            // Negative putere: fails to parse as the u32 the v2 shape expects.
+            // Negative atac: fails to parse as the u32 the v3 shape expects.
+            r#"{"version":3,"name":"x","attrs":{"putere":1,"agilitate":1,"vitalitate":1,"noroc":1,"atac":-1,"aparare":1,"carisma":1,"magie":0},"level":1,"xp":0,"unspent_points":0,"wallet":0,"owned_items":[],"equipped":[],"ladder_progress":0,"lap":1}"#,
+            // A v3 payload missing the new attribute fields entirely: only
+            // v1/v2 payloads may omit them (via migration); a payload
+            // *claiming* v3 must carry all eight.
+            r#"{"version":3,"name":"x","attrs":{"putere":1,"agilitate":1,"vitalitate":1,"noroc":1},"level":1,"xp":0,"unspent_points":0,"wallet":0,"owned_items":[],"equipped":[],"ladder_progress":0,"lap":1}"#,
+            // Negative putere in a v2 payload — the v2 parse-then-migrate
+            // path must fail closed too, not just the current-version path.
             r#"{"version":2,"name":"x","attrs":{"putere":-1,"agilitate":1,"vitalitate":1,"noroc":1},"level":1,"xp":0,"unspent_points":0,"wallet":0,"owned_items":[],"equipped":[],"ladder_progress":0,"lap":1}"#,
             // Same corruption, but claiming to be a v1 payload — the v1
-            // parse-then-migrate path must fail closed too, not just the
-            // current-version path.
+            // parse-then-migrate path must fail closed too.
             r#"{"version":1,"name":"x","attrs":{"putere":-1,"agilitate":1,"vitalitate":1,"noroc":1},"level":1,"xp":0,"unspent_points":0,"wallet":0,"owned_items":[],"equipped":[],"ladder_progress":0,"lap":1}"#,
         ] {
             assert!(
@@ -732,6 +879,7 @@ pub(crate) mod tests {
             "not json at all",
             "{",
             "42",
+            r#"{"version":3}"#,
             r#"{"version":2}"#,
             r#"{"version":1}"#,
             r#"{"version":0}"#,
@@ -760,7 +908,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_exact_v1_fixture_migrates_with_the_documented_defaults() {
+    fn an_exact_v1_fixture_migrates_through_the_whole_chain_to_v3() {
         let migrated = SaveGame::from_json(exact_v1_fixture()).expect("v1 fixture migrates");
         assert_eq!(migrated.version, CURRENT_VERSION);
         // Every v1 field is carried over verbatim — no v1 field is lost.
@@ -772,7 +920,12 @@ pub(crate) mod tests {
                 agilitate: 3,
                 vitalitate: 7,
                 noroc: 2,
-            }
+                atac: 1,
+                aparare: 1,
+                carisma: 1,
+                magie: 0,
+            },
+            "the v3 widening gives every new attribute its base value"
         );
         assert_eq!(
             migrated.appearance,
@@ -785,7 +938,11 @@ pub(crate) mod tests {
         );
         assert_eq!(migrated.level, 4);
         assert_eq!(migrated.xp, 120);
-        assert_eq!(migrated.unspent_points, 3);
+        assert_eq!(
+            migrated.unspent_points,
+            3 + v3_widening_compensation_points(4),
+            "the 3 banked v1 points plus the v3 pool-widening compensation"
+        );
         assert_eq!(migrated.wallet, 365);
         assert_eq!(
             migrated.owned_items,
@@ -794,7 +951,7 @@ pub(crate) mod tests {
         assert_eq!(migrated.equipped, vec!["Palos", "ScutDeLemn"]);
         assert_eq!(migrated.ladder_progress, 12);
         assert_eq!(migrated.lap, 2);
-        // The two new v2 fields get their documented safe defaults.
+        // The two v2 fields get their documented safe defaults.
         assert_eq!(
             migrated.lifetime_earnings, 365,
             "lifetime_earnings defaults to the v1 wallet balance"
@@ -803,6 +960,90 @@ pub(crate) mod tests {
             migrated.resume_destination,
             ResumeDestination::Fight,
             "resume_destination defaults to v1's only real behavior"
+        );
+    }
+
+    /// The exact v2 fixture the v2 → v3 default table describes, shaped like
+    /// a real pre-#128 capture (four-attribute spread, `lifetime_earnings`
+    /// and `resume_destination` present).
+    fn exact_v2_fixture() -> &'static str {
+        r#"{"version":2,"name":"Făt-Frumos","attrs":{"putere":5,"agilitate":3,"vitalitate":7,"noroc":2},"appearance":{"skin_tone":"olive","build":"sturdy","hair":"tied","accent":"gold"},"level":4,"xp":120,"unspent_points":3,"wallet":365,"lifetime_earnings":510,"owned_items":["BataCiobaneasca","Palos","ScutDeLemn"],"equipped":["Palos","ScutDeLemn"],"ladder_progress":12,"lap":2,"resume_destination":"shop"}"#
+    }
+
+    #[test]
+    fn an_exact_v2_fixture_migrates_with_the_documented_defaults() {
+        let migrated = SaveGame::from_json(exact_v2_fixture()).expect("v2 fixture migrates");
+        assert_eq!(migrated.version, CURRENT_VERSION);
+        // Every v2 field is carried over verbatim — no v2 field is lost.
+        assert_eq!(migrated.name, "Făt-Frumos");
+        assert_eq!(migrated.level, 4);
+        assert_eq!(migrated.xp, 120);
+        assert_eq!(migrated.wallet, 365);
+        assert_eq!(migrated.lifetime_earnings, 510);
+        assert_eq!(migrated.ladder_progress, 12);
+        assert_eq!(migrated.lap, 2);
+        assert_eq!(
+            migrated.resume_destination,
+            ResumeDestination::Shop,
+            "v2's own resume destination is preserved, not defaulted"
+        );
+        // The widened attributes get their documented base-value defaults.
+        assert_eq!(
+            migrated.attrs,
+            SavedAttributes {
+                putere: 5,
+                agilitate: 3,
+                vitalitate: 7,
+                noroc: 2,
+                atac: 1,
+                aparare: 1,
+                carisma: 1,
+                magie: 0,
+            }
+        );
+        // The pool widening lands as unspent points: creation 16 - 10 = 6,
+        // plus (3 - 2) per banked level-up (level 4 → 3 of them).
+        assert_eq!(migrated.unspent_points, 3 + 6 + 3);
+        assert_eq!(v3_widening_compensation_points(4), 9);
+        // The migrated hero is a valid non-caster until the player says
+        // otherwise: zero mana, magie never normalized upward.
+        let attrs: Attributes = migrated.attrs.into();
+        assert_eq!(attrs.magie, 0);
+        assert_eq!(crate::character::stats::max_mana(&attrs), 0);
+    }
+
+    /// A migrated hero must end up exactly as wide as a fresh v3 hero of the
+    /// same level: spendable total (spread + unspent) equals base + creation
+    /// pool + level-ups.
+    #[test]
+    fn a_migrated_hero_matches_a_fresh_v3_heros_point_budget() {
+        use crate::character::AttributeKind;
+        use crate::creation::FREE_POINTS;
+        use crate::progression::POINTS_PER_LEVEL;
+
+        let migrated = SaveGame::from_json(exact_v2_fixture()).expect("v2 fixture migrates");
+        let attrs: Attributes = migrated.attrs.into();
+        // The v2 hero had spent its whole 10-point creation pool plus
+        // 2 * 3 level-up points, minus the 3 still banked.
+        let fresh_budget =
+            AttributeKind::base_total() + FREE_POINTS + POINTS_PER_LEVEL * (migrated.level - 1);
+        assert_eq!(
+            attrs.total() + migrated.unspent_points,
+            fresh_budget,
+            "no points fabricated, none lost"
+        );
+    }
+
+    /// A level-1 v2 save gets only the creation-pool widening (no banked
+    /// level-ups to compensate).
+    #[test]
+    fn the_widening_compensation_is_level_aware() {
+        assert_eq!(v3_widening_compensation_points(1), 6);
+        assert_eq!(v3_widening_compensation_points(2), 7);
+        assert_eq!(
+            v3_widening_compensation_points(0),
+            6,
+            "a (never produced) level-0 payload saturates instead of underflowing"
         );
     }
 

@@ -24,11 +24,12 @@ pub const FOLK_NAMES: &[&str] = &[
     "Păcală",
 ];
 
-/// Free attribute points to distribute on top of the base values.
-pub const FREE_POINTS: u32 = 10;
-
-/// Every attribute starts at this value and can never drop below it.
-pub const BASE_VALUE: u32 = 1;
+/// Free attribute points to distribute on top of the base values. #128
+/// raised this from 10 (four-attribute era) to 16 so eight attributes stay
+/// meaningfully spendable while a level-1 hero remains viable against ladder
+/// fight 1 (see `combat::engine`'s fixed-seed survivability test); #149 may
+/// retune it.
+pub const FREE_POINTS: u32 = 16;
 
 /// The five starting points on the hero-creation path chooser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,31 +92,51 @@ impl HeroPreset {
         }
     }
 
+    /// Eight-attribute preset spreads (#128). Every spread totals
+    /// [`AttributeKind::base_total`]` + `[`FREE_POINTS`] — the exact budget
+    /// a custom hero has — pinned by this module's preset-budget test.
+    /// Voinicul and Ciobanul are deliberate `magie == 0` non-casters.
     pub fn attributes(self) -> Attributes {
         match self {
             Self::Haiducul => Attributes {
                 putere: 2,
-                agilitate: 5,
+                agilitate: 4,
                 vitalitate: 2,
-                noroc: 5,
+                noroc: 4,
+                atac: 5,
+                aparare: 2,
+                carisma: 3,
+                magie: 1,
             },
             Self::Voinicul => Attributes {
                 putere: 4,
                 agilitate: 3,
                 vitalitate: 4,
-                noroc: 3,
+                noroc: 2,
+                atac: 4,
+                aparare: 4,
+                carisma: 2,
+                magie: 0,
             },
             Self::Ciobanul => Attributes {
                 putere: 3,
                 agilitate: 2,
                 vitalitate: 6,
-                noroc: 3,
+                noroc: 2,
+                atac: 2,
+                aparare: 5,
+                carisma: 3,
+                magie: 0,
             },
             Self::UceniculSolomonar => Attributes {
                 putere: 2,
                 agilitate: 2,
-                vitalitate: 5,
-                noroc: 5,
+                vitalitate: 4,
+                noroc: 3,
+                atac: 2,
+                aparare: 2,
+                carisma: 3,
+                magie: 5,
             },
         }
     }
@@ -272,11 +293,10 @@ impl CharacterDraft {
         self.attributes.get(kind)
     }
 
-    /// Free points spent so far.
+    /// Free points spent so far: the spread's total over the per-kind base
+    /// values ([`AttributeKind::base_value`]; magie's base is 0).
     pub fn points_spent(&self) -> u32 {
-        let attrs = &self.attributes;
-        (attrs.putere + attrs.agilitate + attrs.vitalitate + attrs.noroc)
-            - AttributeKind::ALL.len() as u32 * BASE_VALUE
+        self.attributes.total() - AttributeKind::base_total()
     }
 
     /// Free points still available.
@@ -289,9 +309,10 @@ impl CharacterDraft {
         self.points_remaining() > 0
     }
 
-    /// Whether `kind` can be lowered (it is above the base value).
+    /// Whether `kind` can be lowered (it is above its own base value —
+    /// magie floors at 0, everything else at 1).
     pub fn can_decrease(&self, kind: AttributeKind) -> bool {
-        self.get(kind) > BASE_VALUE
+        self.get(kind) > kind.base_value()
     }
 
     /// Spends one point on `kind`. Returns whether the point was spent.
@@ -411,14 +432,36 @@ mod tests {
         for preset in HeroPreset::ALL {
             assert!(names.insert(preset.name()), "preset names stay unique");
             let attrs = preset.attributes();
-            let points = attrs.putere + attrs.agilitate + attrs.vitalitate + attrs.noroc;
             assert_eq!(
-                points,
-                AttributeKind::ALL.len() as u32 * BASE_VALUE + FREE_POINTS,
+                attrs.total(),
+                AttributeKind::base_total() + FREE_POINTS,
                 "{} uses the same point budget as custom heroes",
                 preset.name()
             );
+            for kind in AttributeKind::ALL {
+                assert!(
+                    attrs.get(kind) >= kind.base_value(),
+                    "{}'s {kind:?} sits at or above its base",
+                    preset.name()
+                );
+            }
         }
+    }
+
+    /// `magie == 0` is a valid, buildable non-caster: preset spreads may
+    /// carry it and the draft floors magie at 0, never normalizing upward.
+    #[test]
+    fn a_magie_zero_preset_is_a_valid_non_caster() {
+        let attrs = HeroPreset::Voinicul.attributes();
+        assert_eq!(attrs.magie, 0);
+        assert_eq!(crate::character::stats::max_mana(&attrs), 0);
+        let mut draft = CharacterDraft::default();
+        draft.select_choice(HeroChoice::Preset(HeroPreset::Voinicul));
+        assert!(
+            !draft.can_decrease(AttributeKind::Magie),
+            "magie floors at 0"
+        );
+        assert!(draft.is_complete(), "magie 0 still counts as fully spent");
     }
 
     #[test]
@@ -466,20 +509,37 @@ mod tests {
         assert_eq!(draft.points_remaining(), 0);
         assert!(!draft.can_increase());
         assert!(!draft.increase(AttributeKind::Putere), "no points left");
-        assert_eq!(draft.get(AttributeKind::Putere), BASE_VALUE);
+        assert_eq!(
+            draft.get(AttributeKind::Putere),
+            AttributeKind::Putere.base_value()
+        );
         assert_eq!(
             draft.get(AttributeKind::Agilitate),
-            BASE_VALUE + FREE_POINTS
+            AttributeKind::Agilitate.base_value() + FREE_POINTS
         );
     }
 
     #[test]
-    fn cannot_drop_below_base_value() {
+    fn cannot_drop_below_each_kinds_base_value() {
         let mut draft = CharacterDraft::default();
-        assert!(!draft.can_decrease(AttributeKind::Vitalitate));
-        assert!(!draft.decrease(AttributeKind::Vitalitate));
-        assert_eq!(draft.get(AttributeKind::Vitalitate), BASE_VALUE);
+        for kind in AttributeKind::ALL {
+            assert!(!draft.can_decrease(kind), "{kind:?} sits at its base");
+            assert!(!draft.decrease(kind));
+            assert_eq!(draft.get(kind), kind.base_value());
+        }
         assert_eq!(draft.points_remaining(), FREE_POINTS, "nothing refunded");
+    }
+
+    #[test]
+    fn magie_can_be_bought_up_from_zero_and_refunded_back_to_zero() {
+        let mut draft = CharacterDraft::default();
+        assert_eq!(draft.get(AttributeKind::Magie), 0, "custom base is 0");
+        assert!(draft.increase(AttributeKind::Magie));
+        assert_eq!(draft.get(AttributeKind::Magie), 1);
+        assert!(draft.can_decrease(AttributeKind::Magie));
+        assert!(draft.decrease(AttributeKind::Magie));
+        assert_eq!(draft.get(AttributeKind::Magie), 0);
+        assert_eq!(draft.points_remaining(), FREE_POINTS);
     }
 
     #[test]
@@ -488,22 +548,27 @@ mod tests {
         draft.increase(AttributeKind::Noroc);
         assert!(draft.can_decrease(AttributeKind::Noroc));
         assert!(draft.decrease(AttributeKind::Noroc));
-        assert_eq!(draft.get(AttributeKind::Noroc), BASE_VALUE);
+        assert_eq!(
+            draft.get(AttributeKind::Noroc),
+            AttributeKind::Noroc.base_value()
+        );
         assert_eq!(draft.points_remaining(), FREE_POINTS);
     }
 
     #[test]
     fn complete_only_when_exactly_all_points_spent() {
+        // 16 free points over 8 kinds: one point on each kind twice spends
+        // them all; every intermediate state is incomplete.
         let mut draft = CharacterDraft::default();
         for kind in AttributeKind::ALL {
             draft.increase(kind);
+        }
+        assert!(!draft.is_complete(), "8 of 16 spent");
+        for kind in AttributeKind::ALL {
+            assert!(!draft.is_complete());
             draft.increase(kind);
         }
-        assert!(!draft.is_complete());
-        draft.increase(AttributeKind::Putere);
-        assert!(!draft.is_complete(), "9 of 10 spent");
-        draft.increase(AttributeKind::Vitalitate);
-        assert!(draft.is_complete(), "all 10 spent");
+        assert!(draft.is_complete(), "all 16 spent");
         draft.decrease(AttributeKind::Putere);
         assert!(!draft.is_complete(), "refund drops completeness");
     }

@@ -16,24 +16,37 @@ impl Plugin for CharacterPlugin {
     fn build(&self, _app: &mut App) {}
 }
 
-/// The four folk attributes of a fighter: strength, agility, vitality, luck.
+/// The eight folk attributes of a fighter (#128): strength, agility,
+/// vitality, luck, attack, defense, charisma, and magic.
 ///
-/// New characters start at 1 in each attribute (see [`Default`]).
+/// New characters start at each attribute's base value (see
+/// [`AttributeKind::base_value`] and [`Default`]): 1 everywhere except
+/// `magie`, which starts at 0 — a hero with `magie == 0` is a valid
+/// non-caster ([`stats::max_mana`] is 0 and no spell is ever granted), never
+/// normalized upward.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Attributes {
     pub putere: u32,
     pub agilitate: u32,
     pub vitalitate: u32,
     pub noroc: u32,
+    pub atac: u32,
+    pub aparare: u32,
+    pub carisma: u32,
+    pub magie: u32,
 }
 
 impl Default for Attributes {
     fn default() -> Self {
         Self {
-            putere: 1,
-            agilitate: 1,
-            vitalitate: 1,
-            noroc: 1,
+            putere: AttributeKind::Putere.base_value(),
+            agilitate: AttributeKind::Agilitate.base_value(),
+            vitalitate: AttributeKind::Vitalitate.base_value(),
+            noroc: AttributeKind::Noroc.base_value(),
+            atac: AttributeKind::Atac.base_value(),
+            aparare: AttributeKind::Aparare.base_value(),
+            carisma: AttributeKind::Carisma.base_value(),
+            magie: AttributeKind::Magie.base_value(),
         }
     }
 }
@@ -46,6 +59,10 @@ impl Attributes {
             AttributeKind::Agilitate => self.agilitate,
             AttributeKind::Vitalitate => self.vitalitate,
             AttributeKind::Noroc => self.noroc,
+            AttributeKind::Atac => self.atac,
+            AttributeKind::Aparare => self.aparare,
+            AttributeKind::Carisma => self.carisma,
+            AttributeKind::Magie => self.magie,
         }
     }
 
@@ -56,37 +73,88 @@ impl Attributes {
             AttributeKind::Agilitate => &mut self.agilitate,
             AttributeKind::Vitalitate => &mut self.vitalitate,
             AttributeKind::Noroc => &mut self.noroc,
+            AttributeKind::Atac => &mut self.atac,
+            AttributeKind::Aparare => &mut self.aparare,
+            AttributeKind::Carisma => &mut self.carisma,
+            AttributeKind::Magie => &mut self.magie,
         }
+    }
+
+    /// Total attribute points of the spread, over all eight kinds — the
+    /// single sum the creation point-buy, the roster budget tests, and the
+    /// lap scaling all build on.
+    pub fn total(&self) -> u32 {
+        AttributeKind::ALL.iter().map(|kind| self.get(*kind)).sum()
     }
 }
 
-/// One of the four allocatable attributes; lets UI screens address rows and
+/// One of the eight allocatable attributes; lets UI screens address rows and
 /// buttons generically instead of per-attribute systems.
+///
+/// Every kind has a declared derived hook (see [`stats`]): `putere` →
+/// [`stats::base_damage`], `agilitate` → initiative
+/// (`combat::engine::player_acts_first`) plus the reserved
+/// continuous-position contract (#134), `vitalitate` → [`stats::max_hp`] /
+/// [`stats::max_stamina`], `noroc` → [`stats::crit_percent`], `atac` /
+/// `aparare` → [`stats::hit_percent`], `carisma` →
+/// [`stats::taunt_percent`], `magie` → [`stats::max_mana`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttributeKind {
     Putere,
     Agilitate,
     Vitalitate,
     Noroc,
+    Atac,
+    Aparare,
+    Carisma,
+    Magie,
 }
 
 impl AttributeKind {
-    /// All four kinds, in display order.
-    pub const ALL: [AttributeKind; 4] = [
+    /// All eight kinds, in display order: the original four, then the #128
+    /// additions with `atac`/`apărare` adjacent (they oppose each other in
+    /// [`stats::hit_percent`]).
+    pub const ALL: [AttributeKind; 8] = [
         AttributeKind::Putere,
         AttributeKind::Agilitate,
         AttributeKind::Vitalitate,
         AttributeKind::Noroc,
+        AttributeKind::Atac,
+        AttributeKind::Aparare,
+        AttributeKind::Carisma,
+        AttributeKind::Magie,
     ];
 
-    /// Romanian display label for the attribute row.
+    /// Romanian display label for the attribute row, diacritics included.
     pub fn label(self) -> &'static str {
         match self {
             AttributeKind::Putere => "Putere",
             AttributeKind::Agilitate => "Agilitate",
             AttributeKind::Vitalitate => "Vitalitate",
             AttributeKind::Noroc => "Noroc",
+            AttributeKind::Atac => "Atac",
+            AttributeKind::Aparare => "Apărare",
+            AttributeKind::Carisma => "Carismă",
+            AttributeKind::Magie => "Magie",
         }
+    }
+
+    /// The value every fresh fighter starts this attribute at, and the floor
+    /// the creation point-buy can never drop below. 1 for every kind except
+    /// [`AttributeKind::Magie`], whose base is 0 so a non-caster
+    /// (`magie == 0`, zero mana, no starting spell) is buildable and never
+    /// normalized upward.
+    pub const fn base_value(self) -> u32 {
+        match self {
+            AttributeKind::Magie => 0,
+            _ => 1,
+        }
+    }
+
+    /// Sum of every kind's [`Self::base_value`] — the attribute total a
+    /// fresh, unallocated fighter carries (7 today: seven 1s plus `magie` 0).
+    pub fn base_total() -> u32 {
+        Self::ALL.iter().map(|kind| kind.base_value()).sum()
     }
 }
 
@@ -269,7 +337,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn attributes_default_to_one_each() {
+    fn attributes_default_to_the_per_kind_base_values() {
         let attrs = Attributes::default();
         assert_eq!(
             attrs,
@@ -278,8 +346,42 @@ mod tests {
                 agilitate: 1,
                 vitalitate: 1,
                 noroc: 1,
-            }
+                atac: 1,
+                aparare: 1,
+                carisma: 1,
+                magie: 0,
+            },
+            "magie starts at 0 (a valid non-caster); everything else at 1"
         );
+        for kind in AttributeKind::ALL {
+            assert_eq!(attrs.get(kind), kind.base_value(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn base_total_sums_the_eight_base_values() {
+        assert_eq!(AttributeKind::base_total(), 7, "seven 1s plus magie 0");
+        assert_eq!(Attributes::default().total(), AttributeKind::base_total());
+    }
+
+    #[test]
+    fn get_and_get_mut_address_every_kind() {
+        let mut attrs = Attributes::default();
+        for (index, kind) in AttributeKind::ALL.into_iter().enumerate() {
+            *attrs.get_mut(kind) = index as u32 + 10;
+        }
+        for (index, kind) in AttributeKind::ALL.into_iter().enumerate() {
+            assert_eq!(attrs.get(kind), index as u32 + 10, "{kind:?}");
+        }
+        assert_eq!(attrs.total(), (10..18).sum::<u32>());
+    }
+
+    #[test]
+    fn labels_keep_the_romanian_diacritics() {
+        assert_eq!(AttributeKind::Aparare.label(), "Apărare");
+        assert_eq!(AttributeKind::Carisma.label(), "Carismă");
+        assert_eq!(AttributeKind::Atac.label(), "Atac");
+        assert_eq!(AttributeKind::Magie.label(), "Magie");
     }
 
     #[test]

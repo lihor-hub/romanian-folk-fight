@@ -565,6 +565,10 @@ mod tests {
                 agilitate: 2,
                 vitalitate: 4,
                 noroc: 2,
+                atac: 3,
+                aparare: 2,
+                carisma: 1,
+                magie: 1,
             },
             appearance: crate::character::PlayerAppearance::default(),
         });
@@ -794,6 +798,10 @@ mod tests {
                 agilitate: 2,
                 vitalitate: 4,
                 noroc: 2,
+                atac: 3,
+                aparare: 2,
+                carisma: 1,
+                magie: 1,
             },
             appearance: crate::character::PlayerAppearance::default(),
         };
@@ -888,6 +896,10 @@ mod tests {
                 agilitate: 2,
                 vitalitate: 4,
                 noroc: 2,
+                atac: 3,
+                aparare: 2,
+                carisma: 1,
+                magie: 1,
             }
         );
         assert_eq!(

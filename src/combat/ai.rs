@@ -139,6 +139,7 @@ mod tests {
             agilitate,
             vitalitate,
             noroc,
+            ..Attributes::default()
         }
     }
 

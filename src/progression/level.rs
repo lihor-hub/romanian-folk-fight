@@ -11,8 +11,10 @@ use bevy::prelude::*;
 
 use crate::character::{AttributeKind, Attributes};
 
-/// Unspent attribute points granted per level gained.
-pub const POINTS_PER_LEVEL: u32 = 2;
+/// Unspent attribute points granted per level gained. #128 raised this from
+/// 2 (four-attribute era) to 3 so eight attributes stay meaningfully
+/// spendable across a run; #149 may retune it.
+pub const POINTS_PER_LEVEL: u32 = 3;
 
 /// XP required to go from `level` to `level + 1`:
 /// `100 + 50 * (level - 1) * level / 2` — 100, 150, 250, 400, … a
@@ -188,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn a_single_level_up_grants_two_points_and_carries_the_surplus() {
+    fn a_single_level_up_grants_points_per_level_and_carries_the_surplus() {
         let mut level = Level::default();
         assert_eq!(level.gain_xp(120), 1);
         assert_eq!(
@@ -271,9 +273,8 @@ mod tests {
     fn a_fresh_draft_mirrors_the_confirmed_build() {
         let base = Attributes {
             putere: 5,
-            agilitate: 1,
             vitalitate: 7,
-            noroc: 1,
+            ..Attributes::default()
         };
         let draft = LevelUpDraft::new(base, 2);
         assert_eq!(draft.attributes(), base);

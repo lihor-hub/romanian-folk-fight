@@ -784,6 +784,7 @@ mod tests {
                 agilitate: 9,
                 vitalitate: 9,
                 noroc: 9,
+                ..Attributes::default()
             },
             appearance: PlayerAppearance::default(),
         });

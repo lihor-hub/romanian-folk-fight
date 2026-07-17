@@ -16,12 +16,19 @@ use crate::theme::{
     STAMINA_FILL, panel_bundle,
 };
 use crate::ui_widgets::focus::TabGroup;
-use crate::ui_widgets::{attribute_row::spawn_attribute_row, wide_button};
+use crate::ui_widgets::{
+    attribute_row::{ATTRIBUTE_CELL_WIDTH, spawn_attribute_row},
+    wide_button,
+};
 
 use super::{FightOutcome, Level, LevelUpDraft, Wallet, reset_run, top_up_pool, xp_to_next};
 
 /// Width of the XP progress bar.
 const XP_BAR_WIDTH: f32 = 300.0;
+
+/// Width of the level-up allocation grid: two attribute cells plus the 8px
+/// wrap gap (#128), forcing the eight cells into four two-cell rows.
+const ALLOCATION_GRID_WIDTH: f32 = 2.0 * ATTRIBUTE_CELL_WIDTH + 8.0;
 /// Height of the XP progress bar.
 const XP_BAR_HEIGHT: f32 = 12.0;
 
@@ -222,17 +229,32 @@ fn spawn_allocation_panel(
                 TextColor(CREAM),
                 AllocationLabel::Points,
             ));
-            for kind in AttributeKind::ALL {
-                spawn_attribute_row(
-                    panel,
-                    kind,
-                    draft.get(kind),
-                    AllocateAction::Decrease(kind),
-                    AllocateAction::Increase(kind),
-                    AllocationLabel::Value(kind),
-                    ui_font,
-                );
-            }
+            // #128: eight compact attribute cells, two per row (mirroring
+            // the creation deck's grid), so the level-up panel stays inside
+            // the scrollable result column instead of doubling in height.
+            panel
+                .spawn(Node {
+                    width: Val::Px(ALLOCATION_GRID_WIDTH),
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
+                    justify_content: JustifyContent::Center,
+                    column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(6.0),
+                    ..default()
+                })
+                .with_children(|grid| {
+                    for kind in AttributeKind::ALL {
+                        spawn_attribute_row(
+                            grid,
+                            kind,
+                            draft.get(kind),
+                            AllocateAction::Decrease(kind),
+                            AllocateAction::Increase(kind),
+                            AllocationLabel::Value(kind),
+                            ui_font,
+                        );
+                    }
+                });
             panel.spawn((wide_button("Confirmă", ui_font), AllocateAction::Confirm));
         });
 }
@@ -501,6 +523,10 @@ mod tests {
         agilitate: 2,
         vitalitate: 4,
         noroc: 3,
+        atac: 1,
+        aparare: 2,
+        carisma: 1,
+        magie: 0,
     };
 
     /// Headless app with the full fight loop: arena, combat, progression.
