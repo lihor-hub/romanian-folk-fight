@@ -24,7 +24,7 @@ sampler = "linear"
 attachment = "head"
 pivot = [9.04, 93.6]
 display = [54.58, 62.45]
-crop = "unknown"
+crop = "15,3,98,122"
 
 [[record]]
 id = "fighters.zmeu.runtime.torso"
@@ -40,7 +40,7 @@ sampler = "linear"
 attachment = "torso"
 pivot = [0.0, 17.56]
 display = [74.29, 111.89]
-crop = "unknown"
+crop = "277,3,185,221"
 
 [[record]]
 id = "fighters.zmeu.runtime.upper-arm-back"
@@ -56,7 +56,7 @@ sampler = "linear"
 attachment = "upper_arm_back"
 pivot = [-29.23, 40.76]
 display = [26.84, 62.09]
-crop = "unknown"
+crop = "9,110,96,152"
 
 [[record]]
 id = "fighters.zmeu.runtime.upper-arm-front"
@@ -72,7 +72,7 @@ sampler = "linear"
 attachment = "upper_arm_front"
 pivot = [30.69, 39.5]
 display = [26.84, 63.5]
-crop = "unknown"
+crop = "159,110,74,149"
 
 [[record]]
 id = "fighters.zmeu.runtime.forearm-back"
@@ -88,7 +88,7 @@ sampler = "linear"
 attachment = "forearm_back"
 pivot = [-40.92, 1.48]
 display = [21.95, 54.58]
-crop = "unknown"
+crop = "90,105,80,153"
 
 [[record]]
 id = "fighters.zmeu.runtime.forearm-front"
@@ -104,7 +104,7 @@ sampler = "linear"
 attachment = "forearm_front"
 pivot = [42.39, 0.22]
 display = [21.95, 56.02]
-crop = "unknown"
+crop = "224,103,80,158"
 
 [[record]]
 id = "fighters.zmeu.runtime.hand-back"
@@ -120,7 +120,7 @@ sampler = "linear"
 attachment = "hand_back"
 pivot = [-47.58, -32.76]
 display = [20.97, 19.66]
-crop = "unknown"
+crop = "319,216,57,52"
 
 [[record]]
 id = "fighters.zmeu.runtime.hand-front"
@@ -136,7 +136,7 @@ sampler = "linear"
 attachment = "hand_front"
 pivot = [49.06, -35.28]
 display = [20.97, 19.66]
-crop = "unknown"
+crop = "319,216,57,52"
 
 [[record]]
 id = "fighters.zmeu.runtime.thigh-back"
@@ -152,7 +152,7 @@ sampler = "linear"
 attachment = "thigh_back"
 pivot = [-17.69, -56.92]
 display = [28.7, 59.27]
-crop = "unknown"
+crop = "7,264,89,150"
 
 [[record]]
 id = "fighters.zmeu.runtime.thigh-front"
@@ -168,7 +168,7 @@ sampler = "linear"
 attachment = "thigh_front"
 pivot = [17.69, -56.92]
 display = [28.7, 59.27]
-crop = "unknown"
+crop = "162,270,73,145"
 
 [[record]]
 id = "fighters.zmeu.runtime.shin-back"
@@ -184,7 +184,7 @@ sampler = "linear"
 attachment = "shin_back"
 pivot = [-20.41, -105.76]
 display = [22.58, 52.67]
-crop = "unknown"
+crop = "311,278,84,138"
 
 [[record]]
 id = "fighters.zmeu.runtime.shin-front"
@@ -200,7 +200,7 @@ sampler = "linear"
 attachment = "shin_front"
 pivot = [20.41, -105.76]
 display = [22.58, 52.67]
-crop = "unknown"
+crop = "462,279,91,138"
 
 [[record]]
 id = "fighters.zmeu.runtime.foot-back"
@@ -216,7 +216,7 @@ sampler = "linear"
 attachment = "foot_back"
 pivot = [-11.29, -140.52]
 display = [48.69, 18.45]
-crop = "unknown"
+crop = "546,353,86,64"
 
 [[record]]
 id = "fighters.zmeu.runtime.foot-front"
@@ -232,4 +232,4 @@ sampler = "linear"
 attachment = "foot_front"
 pivot = [32.46, -140.52]
 display = [48.69, 18.45]
-crop = "unknown"
+crop = "546,353,86,64"

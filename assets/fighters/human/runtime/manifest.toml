@@ -24,7 +24,7 @@ sampler = "linear"
 attachment = "hair"
 pivot = [1.0, 71.0]
 display = [32.0, 20.0]
-crop = "unknown"
+crop = "500,22,74,92"
 
 [[record]]
 id = "fighters.human.runtime.head"
@@ -40,7 +40,7 @@ sampler = "linear"
 attachment = "head"
 pivot = [4.0, 60.0]
 display = [38.0, 42.0]
-crop = "unknown"
+crop = "173,24,70,92"
 
 [[record]]
 id = "fighters.human.runtime.torso"
@@ -56,7 +56,7 @@ sampler = "linear"
 attachment = "torso"
 pivot = [0.0, 6.0]
 display = [44.0, 74.0]
-crop = "unknown"
+crop = "34,122,127,173"
 
 [[record]]
 id = "fighters.human.runtime.upper-arm-back"
@@ -72,7 +72,7 @@ sampler = "linear"
 attachment = "upper_arm_back"
 pivot = [-20.0, 26.0]
 display = [15.0, 44.0]
-crop = "unknown"
+crop = "365,124,62,83"
 
 [[record]]
 id = "fighters.human.runtime.upper-arm-front"
@@ -88,7 +88,7 @@ sampler = "linear"
 attachment = "upper_arm_front"
 pivot = [21.0, 25.0]
 display = [15.0, 45.0]
-crop = "unknown"
+crop = "452,130,61,81"
 
 [[record]]
 id = "fighters.human.runtime.forearm-back"
@@ -104,7 +104,7 @@ sampler = "linear"
 attachment = "forearm_back"
 pivot = [-28.0, -2.0]
 display = [13.0, 38.0]
-crop = "unknown"
+crop = "363,212,60,89"
 
 [[record]]
 id = "fighters.human.runtime.forearm-front"
@@ -120,7 +120,7 @@ sampler = "linear"
 attachment = "forearm_front"
 pivot = [29.0, -3.0]
 display = [13.0, 39.0]
-crop = "unknown"
+crop = "450,215,64,88"
 
 [[record]]
 id = "fighters.human.runtime.hand-back"
@@ -136,7 +136,7 @@ sampler = "linear"
 attachment = "hand_back"
 pivot = [-32.0, -26.0]
 display = [13.0, 13.0]
-crop = "unknown"
+crop = "639,193,59,39"
 
 [[record]]
 id = "fighters.human.runtime.hand-front"
@@ -152,7 +152,7 @@ sampler = "linear"
 attachment = "hand_front"
 pivot = [33.0, -28.0]
 display = [13.0, 13.0]
-crop = "unknown"
+crop = "639,298,47,39"
 
 [[record]]
 id = "fighters.human.runtime.thigh-back"
@@ -168,7 +168,7 @@ sampler = "linear"
 attachment = "thigh_back"
 pivot = [-13.0, -42.0]
 display = [17.0, 42.0]
-crop = "unknown"
+crop = "37,299,89,169"
 
 [[record]]
 id = "fighters.human.runtime.thigh-front"
@@ -184,7 +184,7 @@ sampler = "linear"
 attachment = "thigh_front"
 pivot = [13.0, -42.0]
 display = [17.0, 42.0]
-crop = "unknown"
+crop = "248,313,103,150"
 
 [[record]]
 id = "fighters.human.runtime.shin-back"
@@ -200,7 +200,7 @@ sampler = "linear"
 attachment = "shin_back"
 pivot = [-15.0, -76.0]
 display = [14.0, 38.0]
-crop = "unknown"
+crop = "384,325,63,107"
 
 [[record]]
 id = "fighters.human.runtime.shin-front"
@@ -216,7 +216,7 @@ sampler = "linear"
 attachment = "shin_front"
 pivot = [15.0, -76.0]
 display = [14.0, 38.0]
-crop = "unknown"
+crop = "536,331,70,100"
 
 [[record]]
 id = "fighters.human.runtime.foot-back"
@@ -232,7 +232,7 @@ sampler = "linear"
 attachment = "foot_back"
 pivot = [-8.0, -102.0]
 display = [28.0, 12.0]
-crop = "unknown"
+crop = "366,453,63,35"
 
 [[record]]
 id = "fighters.human.runtime.foot-front"
@@ -248,4 +248,4 @@ sampler = "linear"
 attachment = "foot_front"
 pivot = [23.0, -102.0]
 display = [28.0, 12.0]
-crop = "unknown"
+crop = "625,446,71,44"

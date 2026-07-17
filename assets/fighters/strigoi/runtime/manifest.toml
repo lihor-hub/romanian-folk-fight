@@ -24,7 +24,7 @@ sampler = "linear"
 attachment = "head"
 pivot = [0.0, 72.0]
 display = [44.84, 51.24]
-crop = "unknown"
+crop = "174,17,128,157"
 
 [[record]]
 id = "fighters.strigoi.runtime.torso"
@@ -40,7 +40,7 @@ sampler = "linear"
 attachment = "torso"
 pivot = [0.0, 12.0]
 display = [31.68, 69.56]
-crop = "unknown"
+crop = "42,23,116,285"
 
 [[record]]
 id = "fighters.strigoi.runtime.upper-arm-back"
@@ -56,7 +56,7 @@ sampler = "linear"
 attachment = "upper_arm_back"
 pivot = [-16.4, 34.0]
 display = [12.9, 51.92]
-crop = "unknown"
+crop = "306,23,74,168"
 
 [[record]]
 id = "fighters.strigoi.runtime.upper-arm-front"
@@ -72,7 +72,7 @@ sampler = "linear"
 attachment = "upper_arm_front"
 pivot = [17.22, 33.0]
 display = [12.9, 53.1]
-crop = "unknown"
+crop = "392,25,56,172"
 
 [[record]]
 id = "fighters.strigoi.runtime.forearm-back"
@@ -88,7 +88,7 @@ sampler = "linear"
 attachment = "forearm_back"
 pivot = [-22.4, 2.0]
 display = [10.92, 46.36]
-crop = "unknown"
+crop = "484,30,47,173"
 
 [[record]]
 id = "fighters.strigoi.runtime.forearm-front"
@@ -104,7 +104,7 @@ sampler = "linear"
 attachment = "forearm_front"
 pivot = [23.2, 1.0]
 display = [10.92, 47.58]
-crop = "unknown"
+crop = "544,32,52,176"
 
 [[record]]
 id = "fighters.strigoi.runtime.hand-back"
@@ -120,7 +120,7 @@ sampler = "linear"
 attachment = "hand_back"
 pivot = [-25.6, -24.0]
 display = [11.7, 14.04]
-crop = "unknown"
+crop = "615,25,87,77"
 
 [[record]]
 id = "fighters.strigoi.runtime.hand-front"
@@ -136,7 +136,7 @@ sampler = "linear"
 attachment = "hand_front"
 pivot = [26.4, -26.0]
 display = [11.7, 14.04]
-crop = "unknown"
+crop = "626,113,83,75"
 
 [[record]]
 id = "fighters.strigoi.runtime.thigh-back"
@@ -152,7 +152,7 @@ sampler = "linear"
 attachment = "thigh_back"
 pivot = [-11.96, -44.0]
 display = [15.3, 45.36]
-crop = "unknown"
+crop = "268,320,63,158"
 
 [[record]]
 id = "fighters.strigoi.runtime.thigh-front"
@@ -168,7 +168,7 @@ sampler = "linear"
 attachment = "thigh_front"
 pivot = [11.96, -44.0]
 display = [15.3, 45.36]
-crop = "unknown"
+crop = "136,318,98,159"
 
 [[record]]
 id = "fighters.strigoi.runtime.shin-back"
@@ -184,7 +184,7 @@ sampler = "linear"
 attachment = "shin_back"
 pivot = [-13.5, -82.0]
 display = [12.04, 44.08]
-crop = "unknown"
+crop = "403,324,38,162"
 
 [[record]]
 id = "fighters.strigoi.runtime.shin-front"
@@ -200,7 +200,7 @@ sampler = "linear"
 attachment = "shin_front"
 pivot = [13.5, -82.0]
 display = [12.04, 44.08]
-crop = "unknown"
+crop = "461,326,49,160"
 
 [[record]]
 id = "fighters.strigoi.runtime.foot-back"
@@ -216,7 +216,7 @@ sampler = "linear"
 attachment = "foot_back"
 pivot = [-6.56, -110.0]
 display = [21.28, 10.8]
-crop = "unknown"
+crop = "536,400,41,86"
 
 [[record]]
 id = "fighters.strigoi.runtime.foot-front"
@@ -232,4 +232,4 @@ sampler = "linear"
 attachment = "foot_front"
 pivot = [18.86, -110.0]
 display = [21.28, 10.8]
-crop = "unknown"
+crop = "587,404,66,76"
