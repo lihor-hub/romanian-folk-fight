@@ -216,21 +216,35 @@ pub fn human_template_for(appearance: PlayerAppearance) -> CutoutRigTemplate {
     }
 }
 
+fn align_rig_joint_offsets(parts: &mut [CutoutPart]) {
+    let parent_pivots: HashMap<CutoutPartKind, Vec2> =
+        parts.iter().map(|p| (p.kind, p.pivot)).collect();
+    for part in parts.iter_mut() {
+        if let Some(parent_pivot) = parent_kind(part.kind).and_then(|k| parent_pivots.get(&k)) {
+            part.offset = *parent_pivot;
+        }
+    }
+}
+
 /// First enemy neutral pose. It reuses the same part categories with leaner,
 /// slightly taller proportions to prove non-player use of the path.
 pub fn enemy_template() -> CutoutRigTemplate {
+    let mut parts: Vec<CutoutPart> = human_parts(1.0).into_iter().map(strigoi_part).collect();
+    align_rig_joint_offsets(&mut parts);
     CutoutRigTemplate {
         template: CutoutTemplate::Enemy,
-        parts: human_parts(1.0).into_iter().map(strigoi_part).collect(),
+        parts,
     }
 }
 
 /// Larger boss-style neutral pose with broader proportions and a taller
 /// silhouette so major enemies read differently at a glance.
 pub fn boss_template() -> CutoutRigTemplate {
+    let mut parts: Vec<CutoutPart> = human_parts(1.26).into_iter().map(zmeu_part).collect();
+    align_rig_joint_offsets(&mut parts);
     CutoutRigTemplate {
         template: CutoutTemplate::Boss,
-        parts: human_parts(1.26).into_iter().map(zmeu_part).collect(),
+        parts,
     }
 }
 
@@ -755,53 +769,71 @@ fn strigoi_part(mut part: CutoutPart) -> CutoutPart {
             part.offset.y += 13.0;
             part.size.x *= 1.06;
             part.size.y *= 1.3;
+            part.pivot.x *= 1.06;
+            part.pivot.y *= 1.3;
         }
         CutoutPartKind::Torso => {
             part.offset.y += 6.0;
             part.size.x *= 0.72;
             part.size.y *= 0.94;
+            part.pivot.x *= 0.72;
+            part.pivot.y *= 0.94;
         }
         CutoutPartKind::Head => {
             part.offset.x -= 4.0;
             part.offset.y += 12.0;
             part.size.x *= 1.18;
             part.size.y *= 1.22;
+            part.pivot.x *= 1.18;
+            part.pivot.y *= 1.22;
         }
         CutoutPartKind::UpperArmBack | CutoutPartKind::UpperArmFront => {
             part.offset.x *= 0.82;
             part.offset.y += 8.0;
             part.size.x *= 0.86;
             part.size.y *= 1.18;
+            part.pivot.x *= 0.86;
+            part.pivot.y *= 1.18;
         }
         CutoutPartKind::ForearmBack | CutoutPartKind::ForearmFront => {
             part.offset.x *= 0.8;
             part.offset.y += 4.0;
             part.size.x *= 0.84;
             part.size.y *= 1.22;
+            part.pivot.x *= 0.84;
+            part.pivot.y *= 1.22;
         }
         CutoutPartKind::HandBack | CutoutPartKind::HandFront => {
             part.offset.x *= 0.8;
             part.offset.y += 2.0;
             part.size.x *= 0.9;
             part.size.y *= 1.08;
+            part.pivot.x *= 0.9;
+            part.pivot.y *= 1.08;
         }
         CutoutPartKind::ThighBack | CutoutPartKind::ThighFront => {
             part.offset.x *= 0.92;
             part.offset.y -= 2.0;
             part.size.x *= 0.9;
             part.size.y *= 1.08;
+            part.pivot.x *= 0.9;
+            part.pivot.y *= 1.08;
         }
         CutoutPartKind::ShinBack | CutoutPartKind::ShinFront => {
             part.offset.x *= 0.9;
             part.offset.y -= 6.0;
             part.size.x *= 0.86;
             part.size.y *= 1.16;
+            part.pivot.x *= 0.86;
+            part.pivot.y *= 1.16;
         }
         CutoutPartKind::FootBack | CutoutPartKind::FootFront => {
             part.offset.x *= 0.82;
             part.offset.y -= 8.0;
             part.size.x *= 0.76;
             part.size.y *= 0.9;
+            part.pivot.x *= 0.76;
+            part.pivot.y *= 0.9;
         }
     }
     part
@@ -818,52 +850,70 @@ fn zmeu_part(mut part: CutoutPart) -> CutoutPart {
             part.offset.y += 21.0;
             part.size.x *= 1.16;
             part.size.y *= 1.34;
+            part.pivot.x *= 1.16;
+            part.pivot.y *= 1.34;
         }
         CutoutPartKind::Torso => {
             part.offset.y += 10.0;
             part.size.x *= 1.34;
             part.size.y *= 1.2;
+            part.pivot.x *= 1.34;
+            part.pivot.y *= 1.2;
         }
         CutoutPartKind::Head => {
             part.offset.x += 4.0;
             part.offset.y += 18.0;
             part.size.x *= 1.14;
             part.size.y *= 1.18;
+            part.pivot.x *= 1.14;
+            part.pivot.y *= 1.18;
         }
         CutoutPartKind::UpperArmBack | CutoutPartKind::UpperArmFront => {
             part.offset.x *= 1.16;
             part.offset.y += 8.0;
             part.size.x *= 1.42;
             part.size.y *= 1.12;
+            part.pivot.x *= 1.42;
+            part.pivot.y *= 1.12;
         }
         CutoutPartKind::ForearmBack | CutoutPartKind::ForearmFront => {
             part.offset.x *= 1.16;
             part.offset.y += 4.0;
             part.size.x *= 1.34;
             part.size.y *= 1.14;
+            part.pivot.x *= 1.34;
+            part.pivot.y *= 1.14;
         }
         CutoutPartKind::HandBack | CutoutPartKind::HandFront => {
             part.offset.x *= 1.18;
             part.size.x *= 1.28;
             part.size.y *= 1.2;
+            part.pivot.x *= 1.28;
+            part.pivot.y *= 1.2;
         }
         CutoutPartKind::ThighBack | CutoutPartKind::ThighFront => {
             part.offset.x *= 1.08;
             part.offset.y -= 4.0;
             part.size.x *= 1.34;
             part.size.y *= 1.12;
+            part.pivot.x *= 1.34;
+            part.pivot.y *= 1.12;
         }
         CutoutPartKind::ShinBack | CutoutPartKind::ShinFront => {
             part.offset.x *= 1.08;
             part.offset.y -= 10.0;
             part.size.x *= 1.28;
             part.size.y *= 1.1;
+            part.pivot.x *= 1.28;
+            part.pivot.y *= 1.1;
         }
         CutoutPartKind::FootBack | CutoutPartKind::FootFront => {
             part.offset.x *= 1.12;
             part.offset.y -= 12.0;
             part.size.x *= 1.38;
             part.size.y *= 1.22;
+            part.pivot.x *= 1.38;
+            part.pivot.y *= 1.22;
         }
     }
     part
