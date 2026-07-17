@@ -1,25 +1,29 @@
-//! The `fight-palette-phone` scenario (#199, a child of #143): drives to a
-//! real fight through the #187 review seam (`src/review/mod.rs`) at a phone
-//! viewport (390x844, DPR 1) and proves the category-disclosure combat
-//! palette — at most four primary category controls, each opening exactly
-//! its descriptors' actions — lays out inside the letterboxed stage rect
-//! with every touch target at least 44x44 CSS px, in the closed state *and*
-//! every open-category state. Extends #168's harness per the documented
-//! extension pattern (see `web_smoke::mod`'s module docs): a new module here
-//! plus one match arm in `web_smoke::run_scenario`, reusing the review seam
-//! exactly the way `fight_palette_desktop`/`gold_journey` already do.
+//! The `fight-palette-phone` scenario (#199, a child of #143; extended by
+//! #276): drives to a real fight through the #187 review seam
+//! (`src/review/mod.rs`) at a phone viewport (390x844, DPR 1) and proves the
+//! category-disclosure combat palette — at most four primary category
+//! controls, each opening exactly its descriptors' actions — lands inside
+//! the real browser window with every touch target at least 44x44 CSS px
+//! *and never covers either fighter's readable body area or the combat log*,
+//! in the closed state *and* every open-category state. Extends #168's
+//! harness per the documented extension pattern (see `web_smoke::mod`'s
+//! module docs): a new module here plus one match arm in
+//! `web_smoke::run_scenario`, reusing the review seam exactly the way
+//! `fight_palette_desktop`/`gold_journey` already do.
 //!
 //! ## What this scenario checks that unit tests cannot
 //!
 //! `cargo test combat::action_palette --lib` proves the grouping,
 //! open/close/switch toggling, duel-state preservation, and the declared
-//! `Node` minimums headlessly. What only a real, freshly-launched browser
-//! proves: the **actual measured layout** — real font metrics (Romanian
-//! labels like "Mișcare" at real glyph widths), a real `taffy`/`bevy_ui`
-//! flex pass, a real 390x844 winit canvas — keeps at most four categories
-//! visible, every rendered target at ≥44 CSS px, and every open state's
-//! buttons entirely inside the stage rect, reachable through the same
-//! production path a player uses (menu -> creation -> a real fight start).
+//! `Node` minimums (including the #276 `phone_bar_bottom_offset` contract)
+//! headlessly. What only a real, freshly-launched browser proves: the
+//! **actual measured layout** — real font metrics (Romanian labels like
+//! "Mișcare" at real glyph widths), a real `taffy`/`bevy_ui` flex pass, a
+//! real 390x844 winit canvas — keeps at most four categories visible, every
+//! rendered target at ≥44 CSS px, and every open state's buttons entirely
+//! inside the real window *and* clear of the fighters/combat log, reachable
+//! through the same production path a player uses (menu -> creation -> a
+//! real fight start).
 //!
 //! ## Reading exact geometry facts instead of diffing screenshots
 //!
@@ -28,8 +32,11 @@
 //! below as plain structs, the same duplicated-string-literal convention the
 //! other scenarios use), extended for #199 with a `phone` object: visible
 //! category count, the open category id, the open action ids, every visible
-//! target's on-screen box, a fits-in-stage bit, and the minimum target
-//! dimension — all computed once in native Bevy UI space from real
+//! target's on-screen box, a fits-in-window bit, and the minimum target
+//! dimension — plus, since #276, whether any visible control intersects
+//! either fighter's deterministic readable-body-region proxy
+//! (`review::fighter_readable_rect`) or `hud::LogPanelRoot`'s rendered rect —
+//! all computed once in native Bevy UI space from real
 //! `ComputedNode`/`UiGlobalTransform` values. Categories are opened through
 //! the seam's `pressActionCategory` command, which presses the *real*
 //! `CategoryButton` entity (the same production toggle a tap runs), so the
@@ -221,16 +228,18 @@ struct TargetRect {
     height: f32,
 }
 
-/// Mirrors `crate::review::PhonePaletteSnapshot` (#199).
+/// Mirrors `crate::review::PhonePaletteSnapshot` (#199, extended by #276).
 #[derive(serde::Deserialize, Debug, Clone, PartialEq)]
 struct PhonePaletteSnapshot {
     visible_category_count: usize,
     open_category: Option<String>,
     open_action_ids: Vec<String>,
     targets: Vec<TargetRect>,
-    fits_in_stage: bool,
+    fits_in_window: bool,
     min_target_size: f32,
     overlaps_status_panels: bool,
+    overlaps_fighter_region: bool,
+    overlaps_log_panel: bool,
 }
 
 /// Mirrors `crate::review::PaletteSnapshot`.
@@ -692,13 +701,15 @@ fn write_artifacts(
                 .collect::<Vec<_>>()
                 .join("\n");
             format!(
-                "visible_category_count: {}\nopen_category: {:?}\nopen_action_ids: {:?}\nfits_in_stage: {}\nmin_target_size: {:.1} (floor {MIN_TOUCH_TARGET})\noverlaps_status_panels: {}\ntargets:\n{targets}\n",
+                "visible_category_count: {}\nopen_category: {:?}\nopen_action_ids: {:?}\nfits_in_window: {}\nmin_target_size: {:.1} (floor {MIN_TOUCH_TARGET})\noverlaps_status_panels: {}\noverlaps_fighter_region: {}\noverlaps_log_panel: {}\ntargets:\n{targets}\n",
                 phone.visible_category_count,
                 phone.open_category,
                 phone.open_action_ids,
-                phone.fits_in_stage,
+                phone.fits_in_window,
                 phone.min_target_size,
                 phone.overlaps_status_panels,
+                phone.overlaps_fighter_region,
+                phone.overlaps_log_panel,
             )
         }
         None => "phone: none (snapshot reported a desktop viewport?)\n".to_string(),
@@ -879,10 +890,10 @@ fn check_palette(
         }
     }
 
-    if !phone.fits_in_stage {
+    if !phone.fits_in_window {
         problems.push(
-            "at least one visible palette control's rendered box extends outside the \
-             letterboxed stage rect (see `review::publish_palette_state`)"
+            "at least one visible palette control's rendered box extends outside the real \
+             browser window (see `review::publish_palette_state`)"
                 .to_string(),
         );
     }
@@ -898,6 +909,21 @@ fn check_palette(
             "the palette covers a fighter status panel (nameplate/HP/stamina) -- #199 \
              requires the disclosure to reveal actions without covering required fighter/\
              status information (see `review::publish_palette_state`)"
+                .to_string(),
+        );
+    }
+    if phone.overlaps_fighter_region {
+        problems.push(
+            "the palette covers a fighter's readable body area (see \
+             `review::fighter_readable_rect`) -- #276 requires the closed palette and every \
+             open-category state to leave both fighters readable"
+                .to_string(),
+        );
+    }
+    if phone.overlaps_log_panel {
+        problems.push(
+            "the palette covers the combat log (`hud::LogPanelRoot`) -- #276 requires the \
+             closed palette and every open-category state to leave the combat log readable"
                 .to_string(),
         );
     }

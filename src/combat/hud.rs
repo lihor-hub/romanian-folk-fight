@@ -91,8 +91,13 @@ pub(super) struct ActionBarRoot;
 
 /// Marker for the combat-log panel, repositioned/resized under the mobile
 /// breakpoint so it doesn't overlap the taller 2×2 action grid.
+///
+/// `pub(crate)`, not `pub(super)`: the `review` feature's `fight-palette-phone`
+/// browser scenario (#276) reads this marker's real geometry to prove the
+/// phone palette never covers the combat log — the same visibility bump
+/// `FighterPanelRoot` already documents for the fighter status panels.
 #[derive(Component)]
-pub(super) struct LogPanelRoot;
+pub(crate) struct LogPanelRoot;
 
 /// The last [`LOG_CAPACITY`] combat-log lines, oldest first. Lives only while
 /// the fight screen is up.
@@ -214,6 +219,8 @@ pub(super) fn spawn_hud(
                 &panel_texture,
                 is_mobile,
                 &extra_descriptors,
+                &viewport,
+                &letterbox,
             );
         });
 }

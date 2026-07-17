@@ -70,19 +70,24 @@ pub(crate) fn world_point_for_screen_point(screen: Vec2, letterbox: LetterboxRec
 }
 
 /// The forward projection -- world space back to full-window logical screen
-/// space -- exact inverse of [`world_point_for_screen_point`]. Production
-/// code never needs this (a preview rig is only ever placed screen ->
-/// world); `creation`'s and `shop`'s tests use it to verify a rig's
-/// resulting `Transform` actually lands back inside the `PreviewStage` rect
-/// it was derived from (#123, #273).
+/// space -- exact inverse of [`world_point_for_screen_point`]. A plain
+/// (non-`review`) production build never needs this (a preview rig is only
+/// ever placed screen -> world); `creation`'s and `shop`'s tests use it to
+/// verify a rig's resulting `Transform` actually lands back inside the
+/// `PreviewStage` rect it was derived from (#123, #273). #276 adds a second,
+/// real (feature-gated) production caller: `review::publish_palette_state`
+/// projects the fixed `arena::PLAYER_ANCHOR`/`ENEMY_ANCHOR` world anchors
+/// through this to build its deterministic fighter-readable-region proxy for
+/// the `fight-palette-phone` scenario's obstruction check.
 ///
-/// `#[cfg(test)]` rather than plain `pub(crate)` since nothing outside a
-/// test ever needs the forward projection. Still reachable from
-/// `creation`'s and `shop`'s own `#[cfg(test)] mod tests`: `cfg(test)`
-/// applies to the whole crate for a given `cargo test` compilation, not
-/// per-module, so this item exists in the same build as every other
-/// module's test code.
-#[cfg(test)]
+/// `#[cfg(any(test, feature = "review"))]` rather than plain `pub(crate)`
+/// since nothing in an ordinary `cargo build`/`trunk build --release` needs
+/// the forward projection -- only tests and the review seam do. Still
+/// reachable from `creation`'s and `shop`'s own `#[cfg(test)] mod tests`:
+/// `cfg(test)` applies to the whole crate for a given `cargo test`
+/// compilation, not per-module, so this item exists in the same build as
+/// every other module's test code.
+#[cfg(any(test, feature = "review"))]
 pub(crate) fn screen_point_for_world_point(world: Vec2, letterbox: LetterboxRect) -> Vec2 {
     let zoom = letterbox_zoom(letterbox);
     letterbox.position
