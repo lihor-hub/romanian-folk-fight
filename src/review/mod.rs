@@ -437,6 +437,12 @@ struct CharacterPartSample {
 /// Exact review-facing proof for the shared creation/shop/combat rig.
 #[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 struct HybridCharacterSnapshot {
+    /// Current `GameState` debug name. Prevents a previous screen's storage
+    /// payload from satisfying the next screen's browser wait.
+    screen: String,
+    /// Full Bevy entity identity (index + generation) for the sampled root.
+    /// The generation makes the second `Fight` distinguishable from the first.
+    root_entity: String,
     /// Six required selections in schema order: body, face, hair, torso,
     /// legs, feet. Optional layers are deliberately outside this tracer bullet.
     selected_part_ids: Vec<String>,
@@ -447,7 +453,11 @@ struct HybridCharacterSnapshot {
     render_path: CharacterRenderPath,
 }
 
-fn hybrid_character_snapshot(parts: &[CharacterPartSample]) -> Option<HybridCharacterSnapshot> {
+fn hybrid_character_snapshot(
+    screen: &str,
+    root_entity: &str,
+    parts: &[CharacterPartSample],
+) -> Option<HybridCharacterSnapshot> {
     use CutoutPartKind::{FootFront, Hair, Head, ThighFront, Torso, UpperArmFront};
 
     let selected_part_ids = [UpperArmFront, Head, Hair, Torso, ThighFront, FootFront]
@@ -471,6 +481,8 @@ fn hybrid_character_snapshot(parts: &[CharacterPartSample]) -> Option<HybridChar
     };
 
     Some(HybridCharacterSnapshot {
+        screen: screen.to_owned(),
+        root_entity: root_entity.to_owned(),
         selected_part_ids,
         part_count: parts.len(),
         material_part_count,
@@ -529,10 +541,16 @@ fn publish_hybrid_character_state(
             },
         )
         .collect();
-    if let Some(snapshot) = hybrid_character_snapshot(&samples)
+    let screen = format!("{:?}", state.get());
+    let root_entity = format!("{root:?}");
+    if let Some(snapshot) = hybrid_character_snapshot(&screen, &root_entity, &samples)
         && let Ok(json) = serde_json::to_string(&snapshot)
     {
         publish_hybrid_character(&json);
+    } else {
+        // Never let a previous root's valid payload survive an incomplete or
+        // failed publish from the current root.
+        clear_hybrid_character();
     }
 }
 
@@ -1756,8 +1774,11 @@ mod tests {
     fn hybrid_character_snapshot_reports_exact_semantic_ids_and_promoted_materials() {
         let parts = representative_hybrid_part_samples(true);
 
-        let snapshot = hybrid_character_snapshot(&parts).expect("the complete rig snapshots");
+        let snapshot = hybrid_character_snapshot("CharacterCreation", "42v0", &parts)
+            .expect("the complete rig snapshots");
 
+        assert_eq!(snapshot.screen, "CharacterCreation");
+        assert_eq!(snapshot.root_entity, "42v0");
         assert_eq!(
             snapshot.selected_part_ids,
             vec![
@@ -1776,10 +1797,18 @@ mod tests {
 
     #[test]
     fn hybrid_character_snapshot_reports_fallback_without_changing_identity_or_silhouette() {
-        let hybrid = hybrid_character_snapshot(&representative_hybrid_part_samples(true))
-            .expect("the promoted rig snapshots");
-        let fallback = hybrid_character_snapshot(&representative_hybrid_part_samples(false))
-            .expect("the fallback rig snapshots");
+        let hybrid = hybrid_character_snapshot(
+            "CharacterCreation",
+            "42v0",
+            &representative_hybrid_part_samples(true),
+        )
+        .expect("the promoted rig snapshots");
+        let fallback = hybrid_character_snapshot(
+            "CharacterCreation",
+            "42v0",
+            &representative_hybrid_part_samples(false),
+        )
+        .expect("the fallback rig snapshots");
 
         assert_eq!(fallback.selected_part_ids, hybrid.selected_part_ids);
         assert_eq!(fallback.part_count, hybrid.part_count);
