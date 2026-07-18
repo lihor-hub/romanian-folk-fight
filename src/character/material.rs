@@ -40,7 +40,6 @@ pub struct HybridCharacterUniforms {
     palette_0: Vec4,
     palette_1: Vec4,
     palette_2: Vec4,
-    palette_3: Vec4,
     /// x: depth, y: highlight, z: shadow strength, w: palette count.
     settings: Vec4,
     /// x: horizontal UV mirror flag.
@@ -150,7 +149,6 @@ pub(crate) fn promote_ready_hybrid_materials(
                 palette_0: palette[0],
                 palette_1: palette[1],
                 palette_2: palette[2],
-                palette_3: palette[3],
                 settings: Vec4::new(
                     pending.resolved.depth_offset,
                     pending.resolved.highlight,
@@ -159,7 +157,7 @@ pub(crate) fn promote_ready_hybrid_materials(
                         .shadow
                         .as_ref()
                         .map_or(0.0, |shadow| shadow.strength),
-                    pending.resolved.palette.len().min(4) as f32,
+                    pending.resolved.palette.len().min(3) as f32,
                 ),
                 render_flags: Vec4::new(if pending.flip_x { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0),
             },
@@ -180,9 +178,9 @@ pub(crate) fn promote_ready_hybrid_materials(
     }
 }
 
-fn resolved_palette(regions: &[PaletteRegion], base_color: Color) -> [Vec4; 4] {
-    let mut colors = [color_vec4(base_color); 4];
-    for (target, region) in colors.iter_mut().zip(regions.iter().take(4)) {
+fn resolved_palette(regions: &[PaletteRegion], base_color: Color) -> [Vec4; 3] {
+    let mut colors = [color_vec4(base_color); 3];
+    for (target, region) in colors.iter_mut().zip(regions.iter().take(3)) {
         *target = match region {
             PaletteRegion::Skin | PaletteRegion::Hair | PaletteRegion::Cloth => {
                 color_vec4(base_color)
@@ -332,7 +330,6 @@ mod tests {
                 palette_0: Vec4::ZERO,
                 palette_1: Vec4::ZERO,
                 palette_2: Vec4::ZERO,
-                palette_3: Vec4::ZERO,
                 settings: Vec4::ZERO,
                 render_flags: Vec4::ZERO,
             },

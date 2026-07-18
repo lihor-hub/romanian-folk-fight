@@ -14,6 +14,10 @@ use super::{CharacterDefinition, PartId, PartSelections, SkeletonFamily};
 /// Only catalog schema understood by this foundation build.
 pub const CHARACTER_CATALOG_VERSION: u32 = 2;
 
+/// Material masks reserve alpha for the albedo silhouette, leaving RGB as the
+/// only semantic recolor channels.
+const MAX_MATERIAL_PALETTE_REGIONS: usize = 3;
+
 /// The semantic character region occupied by a catalog part.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -417,6 +421,14 @@ fn validate_material_content(part: &PartRecord) -> Result<(), CatalogError> {
         }
     }
 
+    if part.material.palette.len() > MAX_MATERIAL_PALETTE_REGIONS {
+        return Err(CatalogError::TooManyMaterialPaletteRegions {
+            part_id: part.id.clone(),
+            found: part.material.palette.len(),
+            supported: MAX_MATERIAL_PALETTE_REGIONS,
+        });
+    }
+
     validate_material_number(part, "depth_offset", part.material.depth_offset, -1.0..=1.0)?;
     validate_material_number(part, "highlight", part.material.highlight, 0.0..=1.0)?;
     Ok(())
@@ -592,6 +604,11 @@ pub enum CatalogError {
         part_id: PartId,
         setting: String,
     },
+    TooManyMaterialPaletteRegions {
+        part_id: PartId,
+        found: usize,
+        supported: usize,
+    },
     DuplicatePartId(PartId),
     MissingRequiredRegion(BodyRegion),
     MissingCompanionPart {
@@ -675,6 +692,14 @@ impl fmt::Display for CatalogError {
             Self::InvalidMaterialNumeric { part_id, setting } => write!(
                 formatter,
                 "part `{part_id}` material `{setting}` must be finite and within its supported range"
+            ),
+            Self::TooManyMaterialPaletteRegions {
+                part_id,
+                found,
+                supported,
+            } => write!(
+                formatter,
+                "part `{part_id}` material palette has {found} regions (maximum {supported}; mask alpha is reserved for the silhouette)"
             ),
             Self::DuplicatePartId(id) => write!(formatter, "duplicate character part ID `{id}`"),
             Self::MissingRequiredRegion(region) => {
@@ -885,6 +910,33 @@ mod tests {
             }
         );
         assert_eq!(catalog.validate(), Ok(()));
+    }
+
+    #[test]
+    fn catalog_rejects_a_palette_that_would_recolor_through_mask_alpha() {
+        let mut value: Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("human foundation fixture is valid JSON");
+        let part = value["parts"]
+            .as_array_mut()
+            .expect("fixture has parts")
+            .iter_mut()
+            .find(|part| part["id"] == "human.hair.long.v1")
+            .expect("fixture has long hair");
+        part["material"] = serde_json::json!({
+            "palette": ["hair", "cloth", "embroidery", "leather"]
+        });
+        let catalog = fixture_from(value);
+
+        assert_eq!(
+            catalog.validate(),
+            Err(CatalogError::TooManyMaterialPaletteRegions {
+                part_id: PartId::new("human.hair.long.v1").unwrap(),
+                found: 4,
+                supported: 3,
+            })
+        );
     }
 
     #[test]

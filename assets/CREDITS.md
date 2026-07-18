@@ -48,7 +48,9 @@ shop, and arena flows without introducing a new production generator pipeline.
 These technical maps are deterministically derived from the corresponding
 runtime albedo by `scripts/generate-human-material-channels.py`; they preserve
 the source dimensions and alpha silhouette exactly. The cultural and lighting
-reference prompt/source is recorded in `.superpowers/sdd/task-3-report.md`.
+reference prompt/source, SHA-256, rights record, and repository-size exclusion
+decision are preserved in
+`docs/art-references/known-good-human-material-reference.md`.
 
 | File | Depicts | Source | License |
 | --- | --- | --- | --- |

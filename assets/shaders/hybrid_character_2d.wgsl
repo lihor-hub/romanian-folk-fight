@@ -5,7 +5,6 @@ struct HybridCharacterUniforms {
     palette_0: vec4<f32>,
     palette_1: vec4<f32>,
     palette_2: vec4<f32>,
-    palette_3: vec4<f32>,
     // x: depth offset, y: highlight, z: contact-shadow strength,
     // w: active palette-channel count.
     settings: vec4<f32>,
@@ -39,9 +38,6 @@ fn apply_palette(base: vec3<f32>, mask: vec4<f32>, count: f32) -> vec3<f32> {
     }
     if count >= 3.0 {
         color = mix(color, material.palette_2.rgb, clamp(mask.b, 0.0, 1.0));
-    }
-    if count >= 4.0 {
-        color = mix(color, material.palette_3.rgb, clamp(mask.a, 0.0, 1.0));
     }
     return color;
 }

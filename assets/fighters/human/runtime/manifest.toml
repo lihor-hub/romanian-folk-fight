@@ -253,9 +253,10 @@ crop = "625,446,71,44"
 # Deterministic material channels derived from the authoritative albedos by
 # scripts/generate-human-material-channels.py. Each channel preserves its
 # albedo counterpart's dimensions, alpha silhouette, attachment, and pivot.
-# Cultural/material reference: the Task 3 prompt/source recorded in
-# .superpowers/sdd/task-3-report.md (Romanian linen ie, ițari, opinci, braided
-# hair, and restrained upper-left lighting). It is not runtime art.
+# Cultural/material reference: the tracked prompt/source/SHA and rights record
+# in docs/art-references/known-good-human-material-reference.md (Romanian linen
+# ie, ițari, opinci, braided hair, and restrained upper-left lighting). It is
+# not runtime art.
 
 [[record]]
 id = "fighters.human.runtime.hair-mask"
