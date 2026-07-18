@@ -12,7 +12,7 @@ use serde::Deserialize;
 use super::{CharacterDefinition, PartId, PartSelections, SkeletonFamily};
 
 /// Only catalog schema understood by this foundation build.
-pub const CHARACTER_CATALOG_VERSION: u32 = 1;
+pub const CHARACTER_CATALOG_VERSION: u32 = 2;
 
 /// The semantic character region occupied by a catalog part.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
@@ -39,6 +39,40 @@ pub struct AttachmentMetadata {
     pub draw_layer: i32,
 }
 
+/// Semantic material inputs attached to a character part's required albedo.
+///
+/// The catalog deliberately names only asset channels and authored semantic
+/// controls. Renderer implementation details remain Rust-owned so catalog
+/// data can evolve without exposing shader configuration as authoring API.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialMetadata {
+    #[serde(default)]
+    pub mask_path: Option<String>,
+    #[serde(default)]
+    pub normal_path: Option<String>,
+    #[serde(default)]
+    pub shadow_path: Option<String>,
+    #[serde(default)]
+    pub palette: Vec<PaletteRegion>,
+    #[serde(default)]
+    pub depth_offset: Option<f32>,
+    #[serde(default)]
+    pub highlight: Option<f32>,
+}
+
+/// The closed semantic regions a recolorable material mask may expose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaletteRegion {
+    Skin,
+    Hair,
+    Cloth,
+    Embroidery,
+    Leather,
+    Metal,
+}
+
 /// One independently selectable character part from an authored catalog.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +83,8 @@ pub struct PartRecord {
     pub skeletons: Vec<SkeletonFamily>,
     pub cultural_tags: Vec<String>,
     pub attachment: AttachmentMetadata,
+    #[serde(default)]
+    pub material: MaterialMetadata,
     #[serde(default)]
     pub exclusions: Vec<PartId>,
     #[serde(default)]
@@ -359,6 +395,60 @@ fn validate_part_content(part: &PartRecord) -> Result<(), CatalogError> {
             actual: part.attachment.point.clone(),
         });
     }
+    validate_material_content(part)?;
+    Ok(())
+}
+
+fn validate_material_content(part: &PartRecord) -> Result<(), CatalogError> {
+    for (channel, asset_path) in [
+        ("mask_path", part.material.mask_path.as_deref()),
+        ("normal_path", part.material.normal_path.as_deref()),
+        ("shadow_path", part.material.shadow_path.as_deref()),
+    ] {
+        let Some(asset_path) = asset_path else {
+            continue;
+        };
+        if !is_human_material_channel_path(asset_path) {
+            return Err(CatalogError::InvalidMaterialChannelPath {
+                part_id: part.id.clone(),
+                channel: channel.to_owned(),
+                asset_path: asset_path.to_owned(),
+            });
+        }
+    }
+
+    validate_material_number(part, "depth_offset", part.material.depth_offset, -1.0..=1.0)?;
+    validate_material_number(part, "highlight", part.material.highlight, 0.0..=1.0)?;
+    Ok(())
+}
+
+/// Keeps runtime catalog data inside the human runtime asset namespace without
+/// coupling the game crate to individual sidecar records. Asset CI owns the
+/// stronger registration and rig-attachment checks, so new authored channels
+/// can be added with their sidecar records without a Rust code change.
+fn is_human_material_channel_path(path: &str) -> bool {
+    let Some(file_name) = path.strip_prefix("fighters/human/runtime/") else {
+        return false;
+    };
+    !file_name.is_empty()
+        && file_name.ends_with(".png")
+        && file_name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
+        })
+}
+
+fn validate_material_number(
+    part: &PartRecord,
+    setting: &str,
+    value: Option<f32>,
+    range: std::ops::RangeInclusive<f32>,
+) -> Result<(), CatalogError> {
+    if value.is_some_and(|value| !value.is_finite() || !range.contains(&value)) {
+        return Err(CatalogError::InvalidMaterialNumeric {
+            part_id: part.id.clone(),
+            setting: setting.to_owned(),
+        });
+    }
     Ok(())
 }
 
@@ -493,6 +583,15 @@ pub enum CatalogError {
         expected: String,
         actual: String,
     },
+    InvalidMaterialChannelPath {
+        part_id: PartId,
+        channel: String,
+        asset_path: String,
+    },
+    InvalidMaterialNumeric {
+        part_id: PartId,
+        setting: String,
+    },
     DuplicatePartId(PartId),
     MissingRequiredRegion(BodyRegion),
     MissingCompanionPart {
@@ -565,6 +664,18 @@ impl fmt::Display for CatalogError {
                 formatter,
                 "part `{part_id}` asset `{asset_path}` is registered for `{expected}`, not `{actual}`"
             ),
+            Self::InvalidMaterialChannelPath {
+                part_id,
+                channel,
+                asset_path,
+            } => write!(
+                formatter,
+                "part `{part_id}` material `{channel}` must be a human runtime PNG path, not `{asset_path}`"
+            ),
+            Self::InvalidMaterialNumeric { part_id, setting } => write!(
+                formatter,
+                "part `{part_id}` material `{setting}` must be finite and within its supported range"
+            ),
             Self::DuplicatePartId(id) => write!(formatter, "duplicate character part ID `{id}`"),
             Self::MissingRequiredRegion(region) => {
                 write!(
@@ -630,7 +741,10 @@ mod tests {
         PlayerAppearance, SkeletonFamily,
     };
 
-    use super::{BodyRegion, CatalogError, CharacterCatalog};
+    use super::{
+        BodyRegion, CHARACTER_CATALOG_VERSION, CatalogError, CharacterCatalog, MaterialMetadata,
+        PaletteRegion, validate_part_content,
+    };
 
     fn fixture() -> CharacterCatalog {
         CharacterCatalog::from_json(include_str!(
@@ -682,13 +796,13 @@ mod tests {
             "../../assets/fighters/catalog/human-foundation.json"
         ))
         .expect("human foundation fixture is valid JSON");
-        value["version"] = serde_json::json!(2);
+        value["version"] = serde_json::json!(CHARACTER_CATALOG_VERSION + 1);
 
         assert_eq!(
             CharacterCatalog::from_json(&value.to_string()).expect_err("future schema is rejected"),
             CatalogError::UnsupportedCatalogVersion {
-                found: 2,
-                supported: 1,
+                found: CHARACTER_CATALOG_VERSION + 1,
+                supported: CHARACTER_CATALOG_VERSION,
             }
         );
     }
@@ -728,6 +842,115 @@ mod tests {
             Err(CatalogError::UnregisteredAssetPath {
                 part_id: PartId::new("human.hair.long.v1").unwrap(),
                 asset_path: "fighters/human/runtime/missing.png".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn catalog_accepts_typed_optional_material_metadata() {
+        let mut value: Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("human foundation fixture is valid JSON");
+        let part = value["parts"]
+            .as_array_mut()
+            .expect("fixture has parts")
+            .iter_mut()
+            .find(|part| part["id"] == "human.hair.long.v1")
+            .expect("fixture has long hair");
+        part["material"] = serde_json::json!({
+            "mask_path": "fighters/human/runtime/hair.png",
+            "normal_path": "fighters/human/runtime/hair.png",
+            "shadow_path": "fighters/human/runtime/hair.png",
+            "palette": ["hair"],
+            "depth_offset": 0.25,
+            "highlight": 0.75
+        });
+
+        let catalog = fixture_from(value);
+        let material = &catalog
+            .part(&PartId::new("human.hair.long.v1").unwrap())
+            .expect("fixture has long hair")
+            .material;
+
+        assert_eq!(
+            material,
+            &MaterialMetadata {
+                mask_path: Some("fighters/human/runtime/hair.png".to_owned()),
+                normal_path: Some("fighters/human/runtime/hair.png".to_owned()),
+                shadow_path: Some("fighters/human/runtime/hair.png".to_owned()),
+                palette: vec![PaletteRegion::Hair],
+                depth_offset: Some(0.25),
+                highlight: Some(0.75),
+            }
+        );
+        assert_eq!(catalog.validate(), Ok(()));
+    }
+
+    #[test]
+    fn catalog_rejects_a_material_channel_outside_the_runtime_directory() {
+        let mut value: Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("human foundation fixture is valid JSON");
+        let part = value["parts"]
+            .as_array_mut()
+            .expect("fixture has parts")
+            .iter_mut()
+            .find(|part| part["id"] == "human.hair.long.v1")
+            .expect("fixture has long hair");
+        part["material"] = serde_json::json!({
+            "mask_path": "fighters/human/source/hair.png"
+        });
+        let catalog = fixture_from(value);
+
+        assert_eq!(
+            catalog.validate(),
+            Err(CatalogError::InvalidMaterialChannelPath {
+                part_id: PartId::new("human.hair.long.v1").unwrap(),
+                channel: "mask_path".to_owned(),
+                asset_path: "fighters/human/source/hair.png".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn catalog_rejects_out_of_range_material_numeric_settings() {
+        let mut value: Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("human foundation fixture is valid JSON");
+        let part = value["parts"]
+            .as_array_mut()
+            .expect("fixture has parts")
+            .iter_mut()
+            .find(|part| part["id"] == "human.hair.long.v1")
+            .expect("fixture has long hair");
+        part["material"] = serde_json::json!({ "depth_offset": 1.01 });
+        let catalog = fixture_from(value);
+
+        assert_eq!(
+            catalog.validate(),
+            Err(CatalogError::InvalidMaterialNumeric {
+                part_id: PartId::new("human.hair.long.v1").unwrap(),
+                setting: "depth_offset".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn catalog_rejects_non_finite_material_numeric_settings() {
+        let mut part = fixture()
+            .part(&PartId::new("human.hair.long.v1").unwrap())
+            .expect("fixture has long hair")
+            .clone();
+        part.material.highlight = Some(f32::NAN);
+
+        assert_eq!(
+            validate_part_content(&part),
+            Err(CatalogError::InvalidMaterialNumeric {
+                part_id: PartId::new("human.hair.long.v1").unwrap(),
+                setting: "highlight".to_owned(),
             })
         );
     }

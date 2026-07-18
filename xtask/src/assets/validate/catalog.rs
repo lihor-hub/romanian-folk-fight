@@ -10,7 +10,7 @@ use super::super::diagnostics::Diagnostic;
 use super::super::schema::Status;
 
 const CATALOG_PATH: &str = "fighters/catalog/human-foundation.json";
-const CATALOG_VERSION: u32 = 1;
+const CATALOG_VERSION: u32 = 2;
 
 #[derive(Deserialize)]
 struct CatalogDocument {

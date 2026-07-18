@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "parts": [
     {
       "id": "human.body.foundation.v1",
@@ -8,6 +8,7 @@
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "foundation"],
       "attachment": { "point": "upper_arm_front", "pivot": [21.0, 25.0], "draw_layer": 0 },
+      "material": {},
       "exclusions": [],
       "companions": []
     },
@@ -18,6 +19,7 @@
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "foundation"],
       "attachment": { "point": "head", "pivot": [4.0, 60.0], "draw_layer": 1 },
+      "material": {},
       "exclusions": [],
       "companions": []
     },
@@ -28,6 +30,7 @@
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "braided"],
       "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
+      "material": {},
       "exclusions": [],
       "companions": []
     },
@@ -38,6 +41,7 @@
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "long_hair"],
       "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
+      "material": {},
       "exclusions": [],
       "companions": []
     },
@@ -48,6 +52,7 @@
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "short_hair"],
       "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
+      "material": {},
       "exclusions": [],
       "companions": []
     },
@@ -58,6 +63,7 @@
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "tied_hair"],
       "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
+      "material": {},
       "exclusions": [],
       "companions": []
     },
@@ -68,6 +74,7 @@
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "linen"],
       "attachment": { "point": "torso", "pivot": [0.0, 6.0], "draw_layer": 3 },
+      "material": {},
       "exclusions": [],
       "companions": []
     },
@@ -78,6 +85,7 @@
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "itari"],
       "attachment": { "point": "thigh_front", "pivot": [13.0, -42.0], "draw_layer": 0 },
+      "material": {},
       "exclusions": [],
       "companions": []
     },
@@ -88,6 +96,7 @@
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "opinci"],
       "attachment": { "point": "foot_front", "pivot": [23.0, -102.0], "draw_layer": 0 },
+      "material": {},
       "exclusions": [],
       "companions": []
     }

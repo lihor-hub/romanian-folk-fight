@@ -8,7 +8,8 @@ pub mod stats;
 
 pub use catalog::{
     AttachmentMetadata, BodyRegion, CHARACTER_CATALOG_VERSION, CatalogError, CharacterCatalog,
-    PartRecord, ResolvedCharacter, bundled_human_catalog, load_human_catalog,
+    MaterialMetadata, PaletteRegion, PartRecord, ResolvedCharacter, bundled_human_catalog,
+    load_human_catalog,
 };
 pub use definition::{
     CHARACTER_DEFINITION_VERSION, CharacterDefinition, CulturalProfile, PartId, PartIdError,
