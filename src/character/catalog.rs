@@ -3,11 +3,16 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
+    sync::OnceLock,
 };
 
+use bevy::prelude::Resource;
 use serde::Deserialize;
 
 use super::{CharacterDefinition, PartId, PartSelections, SkeletonFamily};
+
+/// Only catalog schema understood by this foundation build.
+pub const CHARACTER_CATALOG_VERSION: u32 = 1;
 
 /// The semantic character region occupied by a catalog part.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
@@ -60,13 +65,29 @@ struct CatalogDocument {
 }
 
 /// A validated lookup table for character parts and a safe human fallback.
-#[derive(Debug, Clone)]
+#[derive(Resource, Debug, Clone)]
 pub struct CharacterCatalog {
     version: u32,
     parts: HashMap<PartId, PartRecord>,
     duplicate_ids: Vec<PartId>,
     known_good_human: PartSelections,
     known_good_human_cultural_tags: Vec<String>,
+}
+
+/// Single parsed and validated catalog instance shared by generation,
+/// rendering, and the ECS resource registered by [`super::CharacterPlugin`].
+pub fn bundled_human_catalog() -> Result<&'static CharacterCatalog, CatalogError> {
+    static CATALOG: OnceLock<Result<CharacterCatalog, CatalogError>> = OnceLock::new();
+    match CATALOG.get_or_init(|| {
+        let catalog = CharacterCatalog::from_json(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))?;
+        catalog.validate()?;
+        Ok(catalog)
+    }) {
+        Ok(catalog) => Ok(catalog),
+        Err(error) => Err(error.clone()),
+    }
 }
 
 impl CharacterCatalog {
@@ -77,6 +98,12 @@ impl CharacterCatalog {
     pub fn from_json(json: &str) -> Result<Self, CatalogError> {
         let document: CatalogDocument = serde_json::from_str(json)
             .map_err(|error| CatalogError::InvalidJson(error.to_string()))?;
+        if document.version != CHARACTER_CATALOG_VERSION {
+            return Err(CatalogError::UnsupportedCatalogVersion {
+                found: document.version,
+                supported: CHARACTER_CATALOG_VERSION,
+            });
+        }
         let mut parts = HashMap::with_capacity(document.parts.len());
         let mut duplicate_ids = Vec::new();
 
@@ -155,6 +182,7 @@ impl CharacterCatalog {
         }
 
         for part in self.parts.values() {
+            validate_part_content(part)?;
             for companion in &part.companions {
                 if !self.parts.contains_key(companion) {
                     return Err(CatalogError::MissingCompanionPart {
@@ -186,6 +214,12 @@ impl CharacterCatalog {
         &self,
         definition: &CharacterDefinition,
     ) -> Result<ResolvedCharacter, CatalogError> {
+        if definition.version != super::CHARACTER_DEFINITION_VERSION {
+            return Err(CatalogError::UnsupportedDefinitionVersion {
+                found: definition.version,
+                supported: super::CHARACTER_DEFINITION_VERSION,
+            });
+        }
         self.validate()?;
 
         let parts = self.resolve_parts(
@@ -198,6 +232,29 @@ impl CharacterCatalog {
             definition: definition.clone(),
             parts,
         })
+    }
+
+    /// Resolves only the catalog-owned known-good selection. This deliberately
+    /// skips unrelated records after the primary catalog validation fails,
+    /// while still validating every selected fallback record's content and
+    /// compatibility before it reaches the renderer.
+    pub fn resolve_known_good_human(&self) -> Result<ResolvedCharacter, CatalogError> {
+        let definition = CharacterDefinition {
+            version: super::CHARACTER_DEFINITION_VERSION,
+            seed: None,
+            skeleton: SkeletonFamily::Human,
+            culture: super::CulturalProfile {
+                tags: self.known_good_human_cultural_tags.clone(),
+            },
+            parts: self.known_good_human.clone(),
+            appearance: super::PlayerAppearance::default(),
+        };
+        let parts = self.resolve_parts(
+            &definition.parts,
+            definition.skeleton,
+            &definition.culture.tags,
+        )?;
+        Ok(ResolvedCharacter { definition, parts })
     }
 
     fn resolve_parts(
@@ -217,6 +274,7 @@ impl CharacterCatalog {
             let part = self
                 .part(id)
                 .ok_or_else(|| CatalogError::UnknownPart(id.clone()))?;
+            validate_part_content(part)?;
             if part.region != expected_region {
                 return Err(CatalogError::WrongRegion {
                     part_id: id.clone(),
@@ -272,6 +330,92 @@ impl CharacterCatalog {
     ];
 }
 
+fn validate_part_content(part: &PartRecord) -> Result<(), CatalogError> {
+    let Some(asset_attachment) = runtime_asset_attachment(&part.asset_path) else {
+        return Err(CatalogError::UnregisteredAssetPath {
+            part_id: part.id.clone(),
+            asset_path: part.asset_path.clone(),
+        });
+    };
+    if !attachment_compatible_with_region(part.region, &part.attachment.point) {
+        return Err(CatalogError::IncompatibleAttachmentPoint {
+            part_id: part.id.clone(),
+            region: part.region,
+            point: part.attachment.point.clone(),
+        });
+    }
+    if asset_attachment != part.attachment.point {
+        return Err(CatalogError::AssetAttachmentMismatch {
+            part_id: part.id.clone(),
+            asset_path: part.asset_path.clone(),
+            expected: asset_attachment.to_owned(),
+            actual: part.attachment.point.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn attachment_compatible_with_region(region: BodyRegion, point: &str) -> bool {
+    match region {
+        BodyRegion::Body => matches!(
+            point,
+            "upper_arm_back"
+                | "forearm_back"
+                | "hand_back"
+                | "upper_arm_front"
+                | "forearm_front"
+                | "hand_front"
+        ),
+        BodyRegion::Face | BodyRegion::FacialHair => point == "head",
+        BodyRegion::Hair => point == "hair",
+        BodyRegion::Torso | BodyRegion::Waist => point == "torso",
+        BodyRegion::Legs => matches!(
+            point,
+            "thigh_back" | "shin_back" | "thigh_front" | "shin_front"
+        ),
+        BodyRegion::Feet => matches!(point, "foot_back" | "foot_front"),
+        BodyRegion::Accessory => matches!(
+            point,
+            "hair"
+                | "head"
+                | "torso"
+                | "upper_arm_back"
+                | "forearm_back"
+                | "hand_back"
+                | "thigh_back"
+                | "shin_back"
+                | "foot_back"
+                | "upper_arm_front"
+                | "forearm_front"
+                | "hand_front"
+                | "thigh_front"
+                | "shin_front"
+                | "foot_front"
+        ),
+    }
+}
+
+fn runtime_asset_attachment(path: &str) -> Option<&'static str> {
+    Some(match path {
+        "fighters/human/runtime/hair.png" => "hair",
+        "fighters/human/runtime/head.png" => "head",
+        "fighters/human/runtime/torso.png" => "torso",
+        "fighters/human/runtime/upper_arm_back.png" => "upper_arm_back",
+        "fighters/human/runtime/forearm_back.png" => "forearm_back",
+        "fighters/human/runtime/hand_back.png" => "hand_back",
+        "fighters/human/runtime/thigh_back.png" => "thigh_back",
+        "fighters/human/runtime/shin_back.png" => "shin_back",
+        "fighters/human/runtime/foot_back.png" => "foot_back",
+        "fighters/human/runtime/upper_arm_front.png" => "upper_arm_front",
+        "fighters/human/runtime/forearm_front.png" => "forearm_front",
+        "fighters/human/runtime/hand_front.png" => "hand_front",
+        "fighters/human/runtime/thigh_front.png" => "thigh_front",
+        "fighters/human/runtime/shin_front.png" => "shin_front",
+        "fighters/human/runtime/foot_front.png" => "foot_front",
+        _ => return None,
+    })
+}
+
 fn selected_parts(selections: &PartSelections) -> Vec<(&PartId, BodyRegion)> {
     let mut parts = vec![
         (&selections.body, BodyRegion::Body),
@@ -319,6 +463,29 @@ impl ResolvedCharacter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CatalogError {
     InvalidJson(String),
+    UnsupportedCatalogVersion {
+        found: u32,
+        supported: u32,
+    },
+    UnsupportedDefinitionVersion {
+        found: u32,
+        supported: u32,
+    },
+    UnregisteredAssetPath {
+        part_id: PartId,
+        asset_path: String,
+    },
+    IncompatibleAttachmentPoint {
+        part_id: PartId,
+        region: BodyRegion,
+        point: String,
+    },
+    AssetAttachmentMismatch {
+        part_id: PartId,
+        asset_path: String,
+        expected: String,
+        actual: String,
+    },
     DuplicatePartId(PartId),
     MissingRequiredRegion(BodyRegion),
     MissingCompanionPart {
@@ -359,6 +526,38 @@ impl fmt::Display for CatalogError {
             Self::InvalidJson(error) => {
                 write!(formatter, "invalid character catalog JSON: {error}")
             }
+            Self::UnsupportedCatalogVersion { found, supported } => write!(
+                formatter,
+                "unsupported character catalog version {found} (expected {supported})"
+            ),
+            Self::UnsupportedDefinitionVersion { found, supported } => write!(
+                formatter,
+                "unsupported character definition version {found} (expected {supported})"
+            ),
+            Self::UnregisteredAssetPath {
+                part_id,
+                asset_path,
+            } => write!(
+                formatter,
+                "part `{part_id}` references unregistered runtime asset `{asset_path}`"
+            ),
+            Self::IncompatibleAttachmentPoint {
+                part_id,
+                region,
+                point,
+            } => write!(
+                formatter,
+                "part `{part_id}` in `{region:?}` cannot attach at `{point}`"
+            ),
+            Self::AssetAttachmentMismatch {
+                part_id,
+                asset_path,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "part `{part_id}` asset `{asset_path}` is registered for `{expected}`, not `{actual}`"
+            ),
             Self::DuplicatePartId(id) => write!(formatter, "duplicate character part ID `{id}`"),
             Self::MissingRequiredRegion(region) => {
                 write!(
@@ -468,6 +667,103 @@ mod tests {
                 PartId::new("human.body.foundation.v1").unwrap()
             ))
         );
+    }
+
+    #[test]
+    fn catalog_rejects_an_unsupported_future_schema_version() {
+        let mut value: Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("human foundation fixture is valid JSON");
+        value["version"] = serde_json::json!(2);
+
+        assert_eq!(
+            CharacterCatalog::from_json(&value.to_string()).expect_err("future schema is rejected"),
+            CatalogError::UnsupportedCatalogVersion {
+                found: 2,
+                supported: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn resolution_rejects_an_unsupported_character_definition_version() {
+        let catalog = fixture();
+        let mut definition = CharacterDefinition::legacy_human(PlayerAppearance::default());
+        definition.version = CHARACTER_DEFINITION_VERSION + 1;
+
+        assert_eq!(
+            catalog.resolve(&definition),
+            Err(CatalogError::UnsupportedDefinitionVersion {
+                found: CHARACTER_DEFINITION_VERSION + 1,
+                supported: CHARACTER_DEFINITION_VERSION,
+            })
+        );
+    }
+
+    #[test]
+    fn catalog_rejects_an_asset_path_that_is_not_runtime_registered() {
+        let mut value: Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("human foundation fixture is valid JSON");
+        let part = value["parts"]
+            .as_array_mut()
+            .expect("fixture has parts")
+            .iter_mut()
+            .find(|part| part["id"] == "human.hair.long.v1")
+            .expect("fixture has long hair");
+        part["asset_path"] = serde_json::json!("fighters/human/runtime/missing.png");
+        let catalog = fixture_from(value);
+
+        assert_eq!(
+            catalog.validate(),
+            Err(CatalogError::UnregisteredAssetPath {
+                part_id: PartId::new("human.hair.long.v1").unwrap(),
+                asset_path: "fighters/human/runtime/missing.png".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn catalog_rejects_an_attachment_point_incompatible_with_its_region() {
+        let mut value: Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("human foundation fixture is valid JSON");
+        let part = value["parts"]
+            .as_array_mut()
+            .expect("fixture has parts")
+            .iter_mut()
+            .find(|part| part["id"] == "human.hair.long.v1")
+            .expect("fixture has long hair");
+        part["attachment"]["point"] = serde_json::json!("torso");
+        let catalog = fixture_from(value);
+
+        assert_eq!(
+            catalog.validate(),
+            Err(CatalogError::IncompatibleAttachmentPoint {
+                part_id: PartId::new("human.hair.long.v1").unwrap(),
+                region: BodyRegion::Hair,
+                point: "torso".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn every_bundled_catalog_asset_exists_on_disk() {
+        let catalog = fixture();
+        for record in catalog.parts.values() {
+            assert!(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("assets")
+                    .join(&record.asset_path)
+                    .is_file(),
+                "{} must exist for {}",
+                record.asset_path,
+                record.id
+            );
+        }
     }
 
     #[test]
@@ -610,6 +906,6 @@ mod tests {
 
         let resolved = catalog.resolve(&definition).unwrap();
         assert_eq!(resolved.definition(), &definition);
-        assert_eq!(resolved.parts().len(), 7);
+        assert_eq!(resolved.parts().len(), 6);
     }
 }

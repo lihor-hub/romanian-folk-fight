@@ -138,7 +138,11 @@ impl CharacterDefinition {
                 torso: legacy_id("human.torso.linen.v1"),
                 legs: legacy_id("human.legs.itari.v1"),
                 feet: legacy_id("human.feet.opinci.v1"),
-                waist: Some(legacy_id("human.waist.chimir.v1")),
+                // The foundation renderer has no independent waist layer yet.
+                // Keep the optional schema slot empty until a selected chimir
+                // can affect visible output instead of claiming an identity
+                // that the compatibility rig silently ignores.
+                waist: None,
                 accessories: Vec::new(),
             },
             appearance,

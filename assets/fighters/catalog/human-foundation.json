@@ -4,10 +4,10 @@
     {
       "id": "human.body.foundation.v1",
       "region": "body",
-      "asset_path": "fighters/human/runtime/torso.png",
+      "asset_path": "fighters/human/runtime/upper_arm_front.png",
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "foundation"],
-      "attachment": { "point": "torso", "pivot": [0.0, 6.0], "draw_layer": 0 },
+      "attachment": { "point": "upper_arm_front", "pivot": [21.0, 25.0], "draw_layer": 0 },
       "exclusions": [],
       "companions": []
     },
@@ -87,17 +87,7 @@
       "asset_path": "fighters/human/runtime/foot_front.png",
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "opinci"],
-      "attachment": { "point": "foot_front", "pivot": [8.0, -102.0], "draw_layer": 0 },
-      "exclusions": [],
-      "companions": []
-    },
-    {
-      "id": "human.waist.chimir.v1",
-      "region": "waist",
-      "asset_path": "fighters/human/runtime/torso.png",
-      "skeletons": ["human"],
-      "cultural_tags": ["romanian", "chimir"],
-      "attachment": { "point": "torso", "pivot": [0.0, 6.0], "draw_layer": 4 },
+      "attachment": { "point": "foot_front", "pivot": [23.0, -102.0], "draw_layer": 0 },
       "exclusions": [],
       "companions": []
     }
@@ -110,7 +100,7 @@
     "torso": "human.torso.linen.v1",
     "legs": "human.legs.itari.v1",
     "feet": "human.feet.opinci.v1",
-    "waist": "human.waist.chimir.v1",
+    "waist": null,
     "accessories": []
   },
   "known_good_human_cultural_tags": ["romanian"]

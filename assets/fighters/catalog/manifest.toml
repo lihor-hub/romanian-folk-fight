@@ -1,7 +1,8 @@
 # The character catalog is runtime-readable metadata, not a media asset. Its
-# referenced PNGs remain owned by their existing human runtime sidecar.
+# referenced PNGs remain owned by their existing human runtime sidecar and are
+# cross-checked by the catalog-aware `cargo xtask assets check` pass.
 version = 1
 
 [[ignore]]
 path = "human-foundation.json"
-reason = "Runtime-readable character catalog metadata; the sidecar schema only records media/document assets, while this JSON's referenced human runtime PNGs retain their existing records."
+reason = "Runtime-readable character catalog metadata; media coverage remains with each referenced PNG's owning runtime record, and the catalog-aware validator cross-checks those references."

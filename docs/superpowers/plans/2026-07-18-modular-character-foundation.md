@@ -173,15 +173,10 @@ git commit -m "feat: register the human character catalog"
 
 Prove identical inputs produce byte-for-byte equal definitions, different seeds vary at least one unlocked choice, locked signature parts never change, and incompatible cultural tags are never selected.
 
-```rust
-#[test]
-fn named_profile_keeps_signature_chimir() {
-    for seed in 0..64 {
-        let hero = generate_character(seed, &haiduc_profile(), &catalog()).unwrap();
-        assert_eq!(hero.parts.waist.as_deref(), Some("human.waist.chimir.v1"));
-    }
-}
-```
+The initial profile locks only parts the foundation renderer actually projects.
+Optional waist identity remains absent until a dedicated waist layer is wired;
+tests assert that the representative profile does not claim an invisible
+chimir selection.
 
 - [ ] **Step 2: Verify RED**
 

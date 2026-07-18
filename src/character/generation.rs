@@ -114,19 +114,7 @@ impl From<CatalogError> for GenerationError {
 /// This adapter is deliberately separate from [`generate_character`]:
 /// generation never substitutes a fallback for an invalid catalog or profile.
 pub fn fallback_human(catalog: &CharacterCatalog) -> Result<CharacterDefinition, GenerationError> {
-    let definition = CharacterDefinition {
-        version: CHARACTER_DEFINITION_VERSION,
-        seed: None,
-        skeleton: SkeletonFamily::Human,
-        culture: CulturalProfile {
-            tags: catalog.known_good_human_cultural_tags().to_vec(),
-        },
-        parts: catalog.known_good_human().clone(),
-        appearance: PlayerAppearance::default(),
-    };
-
-    catalog.resolve(&definition)?;
-    Ok(definition)
+    Ok(catalog.resolve_known_good_human()?.definition().clone())
 }
 
 /// Generates a stable human definition for one seed and authored profile.
@@ -363,14 +351,6 @@ mod tests {
         )
     }
 
-    fn haiduc_profile() -> GenerationProfile {
-        let mut profile = human_profile();
-        profile
-            .slots
-            .push(fixed(BodyRegion::Waist, "human.waist.chimir.v1"));
-        profile
-    }
-
     #[test]
     fn identical_inputs_produce_byte_for_byte_equal_definitions() {
         let catalog = catalog();
@@ -419,12 +399,12 @@ mod tests {
     }
 
     #[test]
-    fn named_profile_keeps_signature_chimir() {
+    fn omitted_optional_waist_stays_empty_until_the_renderer_supports_it() {
         let catalog = catalog();
 
         for seed in 0..64 {
-            let hero = generate_character(seed, &haiduc_profile(), &catalog).unwrap();
-            assert_eq!(hero.parts.waist.as_deref(), Some("human.waist.chimir.v1"));
+            let hero = generate_character(seed, &human_profile(), &catalog).unwrap();
+            assert_eq!(hero.parts.waist, None);
         }
     }
 

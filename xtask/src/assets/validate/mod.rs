@@ -15,6 +15,7 @@
 //!   uses to exclude `#[cfg(test)]`-only string literals.
 
 pub mod bounds;
+pub mod catalog;
 pub mod image_checks;
 pub mod refs;
 mod rust_scan;
@@ -34,6 +35,7 @@ use super::diagnostics::Diagnostic;
 pub fn run(workspace_root: &Path, assets_root: &Path, aggregate: &Aggregate) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     diagnostics.extend(refs::check(workspace_root, aggregate));
+    diagnostics.extend(catalog::check(assets_root, aggregate));
     diagnostics.extend(bounds::check(&aggregate.records));
     diagnostics.extend(image_checks::check(assets_root, &aggregate.records));
     diagnostics

@@ -3,14 +3,13 @@
 //! the first production-intent pixel-art body parts and starter gear into the
 //! runtime while keeping the ECS surface compact.
 
-use std::{collections::HashMap, sync::OnceLock};
+use std::collections::HashMap;
 
 use bevy::prelude::*;
 
 use crate::character::{
-    AccentColor, BodyBuild, CHARACTER_DEFINITION_VERSION, CatalogError, CharacterCatalog,
-    CharacterDefinition, CulturalProfile, HairStyle, PartId, PartRecord, PlayerAppearance,
-    ResolvedCharacter, SkeletonFamily, SkinTone,
+    AccentColor, BodyBuild, CatalogError, CharacterCatalog, CharacterDefinition, HairStyle, PartId,
+    PartRecord, PlayerAppearance, ResolvedCharacter, SkinTone, bundled_human_catalog,
 };
 use crate::items::{Equipment, GearAttachment, GearMotion, ItemId, ItemVisual, Slot, item_visual};
 
@@ -236,18 +235,6 @@ pub fn resolve_human_character(
     bundled_human_catalog()?.resolve(definition)
 }
 
-fn bundled_human_catalog() -> Result<&'static CharacterCatalog, CatalogError> {
-    static CATALOG: OnceLock<Result<CharacterCatalog, CatalogError>> = OnceLock::new();
-    match CATALOG.get_or_init(|| {
-        CharacterCatalog::from_json(include_str!(
-            "../assets/fighters/catalog/human-foundation.json"
-        ))
-    }) {
-        Ok(catalog) => Ok(catalog),
-        Err(error) => Err(error.clone()),
-    }
-}
-
 /// Resolves a persisted identity for rendering, substituting only the
 /// catalog's explicit versioned known-good human when that identity is no
 /// longer resolvable. The supplied definition is borrowed and never mutated;
@@ -256,6 +243,13 @@ pub fn resolve_human_character_or_known_good(
     definition: &CharacterDefinition,
 ) -> Result<ResolvedCharacter, CatalogError> {
     let catalog = bundled_human_catalog()?;
+    resolve_human_character_or_known_good_in(catalog, definition)
+}
+
+fn resolve_human_character_or_known_good_in(
+    catalog: &CharacterCatalog,
+    definition: &CharacterDefinition,
+) -> Result<ResolvedCharacter, CatalogError> {
     match catalog.resolve(definition) {
         Ok(character) => Ok(character),
         Err(original_error) => {
@@ -264,23 +258,15 @@ pub fn resolve_human_character_or_known_good(
                  catalog version {} known-good human without changing the persisted identity",
                 catalog.version()
             );
-            let fallback = CharacterDefinition {
-                version: CHARACTER_DEFINITION_VERSION,
-                seed: None,
-                skeleton: SkeletonFamily::Human,
-                culture: CulturalProfile {
-                    tags: catalog.known_good_human_cultural_tags().to_vec(),
-                },
-                parts: catalog.known_good_human().clone(),
-                appearance: PlayerAppearance::default(),
-            };
-            catalog.resolve(&fallback).map_err(|fallback_error| {
-                error!(
-                    "bundled known-good human also failed after `{original_error}`: \
+            catalog
+                .resolve_known_good_human()
+                .map_err(|fallback_error| {
+                    error!(
+                        "bundled known-good human also failed after `{original_error}`: \
                      {fallback_error}"
-                );
-                fallback_error
-            })
+                    );
+                    fallback_error
+                })
         }
     }
 }
@@ -294,7 +280,11 @@ pub fn resolve_human_character_or_known_good(
 /// colors, and fallback art stay intact; a catalog asset replaces fallback
 /// art only where its attachment point names that exact cutout region.
 pub fn rig_template_for(character: &ResolvedCharacter) -> CutoutRigTemplate {
-    let mut template = human_template_for(character.definition().appearance);
+    let mut appearance = character.definition().appearance;
+    if let Some(hair) = hair_style_for_id(&character.definition().parts.hair) {
+        appearance.hair = hair;
+    }
+    let mut template = human_template_for(appearance);
     for part in &mut template.parts {
         let Some(record) = selected_record_for_kind(character, part.kind) else {
             continue;
@@ -305,6 +295,16 @@ pub fn rig_template_for(character: &ResolvedCharacter) -> CutoutRigTemplate {
         }
     }
     template
+}
+
+fn hair_style_for_id(id: &PartId) -> Option<HairStyle> {
+    Some(match id.as_str() {
+        "human.hair.braided.v1" => HairStyle::Braided,
+        "human.hair.long.v1" => HairStyle::Long,
+        "human.hair.short.v1" => HairStyle::Short,
+        "human.hair.tied.v1" => HairStyle::Tied,
+        _ => return None,
+    })
 }
 
 fn selected_record_for_kind(
@@ -1496,6 +1496,46 @@ mod tests {
     }
 
     #[test]
+    fn seeded_hair_ids_change_rendered_hair_while_locked_parts_stay_stable() {
+        use crate::roster::{CampaignSeed, LadderProgress};
+
+        let first = LadderProgress(0)
+            .seeded_opponent(CampaignSeed(0))
+            .expect("the first encounter is generated")
+            .expect("the bundled profile resolves");
+        let alternate = LadderProgress(0)
+            .seeded_opponent(CampaignSeed(1))
+            .expect("the first encounter is generated")
+            .expect("the bundled profile resolves");
+        assert_ne!(first.definition.parts.hair, alternate.definition.parts.hair);
+        assert_eq!(first.definition.parts.body, alternate.definition.parts.body);
+        assert_eq!(first.definition.parts.face, alternate.definition.parts.face);
+        assert_eq!(
+            first.definition.parts.torso,
+            alternate.definition.parts.torso
+        );
+        assert_eq!(first.definition.parts.legs, alternate.definition.parts.legs);
+        assert_eq!(first.definition.parts.feet, alternate.definition.parts.feet);
+
+        let rendered_hair = |definition: &CharacterDefinition| {
+            let resolved = resolve_human_character(definition)
+                .expect("seeded definition resolves against the bundled catalog");
+            let hair = rig_template_for(&resolved)
+                .parts
+                .into_iter()
+                .find(|part| part.kind == CutoutPartKind::Hair)
+                .expect("human rig renders hair");
+            (hair.offset, hair.size, hair.color)
+        };
+
+        assert_ne!(
+            rendered_hair(&first.definition),
+            rendered_hair(&alternate.definition),
+            "different resolved hair IDs must produce different visible output"
+        );
+    }
+
+    #[test]
     fn valid_definition_is_unchanged_by_the_runtime_fallback_policy() {
         let definition = CharacterDefinition::legacy_human(PlayerAppearance {
             skin_tone: SkinTone::Deep,
@@ -1510,6 +1550,62 @@ mod tests {
 
         assert_eq!(runtime, strict);
         assert_eq!(definition, saved_definition);
+    }
+
+    #[test]
+    fn unsupported_future_definition_uses_the_versioned_known_good_runtime_fallback() {
+        let mut definition = CharacterDefinition::legacy_human(PlayerAppearance::default());
+        definition.version = crate::character::CHARACTER_DEFINITION_VERSION + 1;
+
+        assert_eq!(
+            resolve_human_character(&definition),
+            Err(CatalogError::UnsupportedDefinitionVersion {
+                found: crate::character::CHARACTER_DEFINITION_VERSION + 1,
+                supported: crate::character::CHARACTER_DEFINITION_VERSION,
+            })
+        );
+        let fallback = resolve_human_character_or_known_good(&definition)
+            .expect("unsupported runtime definitions render the versioned known-good human");
+        assert_eq!(
+            fallback.definition().version,
+            crate::character::CHARACTER_DEFINITION_VERSION
+        );
+        assert_eq!(
+            fallback.definition().parts,
+            bundled_human_catalog()
+                .expect("bundled catalog loads")
+                .known_good_human()
+                .clone()
+        );
+    }
+
+    #[test]
+    fn invalid_selected_catalog_content_activates_the_known_good_runtime_fallback() {
+        let mut value: serde_json::Value = serde_json::from_str(include_str!(
+            "../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("bundled catalog is valid JSON");
+        let long_hair = value["parts"]
+            .as_array_mut()
+            .expect("catalog has parts")
+            .iter_mut()
+            .find(|part| part["id"] == "human.hair.long.v1")
+            .expect("catalog has long hair");
+        long_hair["asset_path"] = serde_json::json!("fighters/human/runtime/not-registered.png");
+        let catalog = CharacterCatalog::from_json(&value.to_string())
+            .expect("content errors are reported by validation, not JSON parsing");
+        let definition = CharacterDefinition::legacy_human(PlayerAppearance {
+            hair: HairStyle::Long,
+            ..PlayerAppearance::default()
+        });
+
+        assert!(catalog.resolve(&definition).is_err());
+        let fallback = resolve_human_character_or_known_good_in(&catalog, &definition)
+            .expect("an invalid selected record falls back to the independent known-good slice");
+        assert_eq!(
+            fallback.definition().parts.hair.as_str(),
+            "human.hair.braided.v1"
+        );
     }
 
     #[test]

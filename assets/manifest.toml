@@ -3,7 +3,8 @@
 # directly in `assets/` itself (currently just CREDITS.md); every
 # subdirectory owns its own `manifest.toml` beside the files it describes,
 # including metadata-only catalog directories that explicitly ignore their
-# runtime-readable JSON while their referenced media remains separately owned.
+# runtime-readable JSON for media coverage while `assets check` validates its
+# references against the separately owned runtime records.
 version = 1
 
 [[ignore]]
