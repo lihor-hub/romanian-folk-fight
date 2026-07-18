@@ -15,10 +15,10 @@ for this project. The accepted albedos, deterministic derivatives, and tracked
 contact source use “Same as project assets unless superseded.” Cultural research
 guided the grammar only; no museum image or other game's pixels were copied.
 
-- Human master: `/Users/ioachimlihor/.codex/generated_images/019f701f-492d-70e1-9c8a-e64740c1d407/exec-0249e3ae-514e-4c04-aef9-9721358f2ddf.png`
-- Human SHA-256: `8518d470aae529898a79ed22303cb97b4d358b13fa7bd80088dfac2c0d7334d7`
-- Equipment master: `/Users/ioachimlihor/.codex/generated_images/019f701f-492d-70e1-9c8a-e64740c1d407/exec-51bc0f86-e059-429c-89ba-56447e74e048.png`
-- Equipment SHA-256: `84b35457846ed8b7e8707e2aedf135cb2a94b3c4b900648307c7215b26f8e0a9`
+- Original human generation object: `exec-0249e3ae-514e-4c04-aef9-9721358f2ddf.png`,
+  SHA-256 `8518d470aae529898a79ed22303cb97b4d358b13fa7bd80088dfac2c0d7334d7`.
+- Original equipment generation object: `exec-51bc0f86-e059-429c-89ba-56447e74e048.png`,
+  SHA-256 `84b35457846ed8b7e8707e2aedf135cb2a94b3c4b900648307c7215b26f8e0a9`.
 
 The exact human and equipment prompts are preserved verbatim under “Exact
 human prompt” and “Exact equipment prompt” in
@@ -27,11 +27,12 @@ also links the Romanian National Heritage Institute altiță record and two
 INP/cIMeC port-popular collection records used for ie/altiță, ițari, cioareci,
 opinci, cojoc, and căciulă reference.
 
-The installed imagegen `remove_chroma_key.py` helper ran in built-in mode with
-border auto-key, soft matte, thresholds 12/220, and despill. Detected keys were
-`#04f807` (human) and `#04f804` (equipment). The tracked 128-colour contact
-source is 340 KB, below the 1 MB hook, and remains visually useful. Runtime
-extraction still verifies and uses the full-resolution originals.
+The repository now tracks authoritative full-resolution 192-colour human and
+equipment chroma masters. Their SHA-256 values are
+`8e2ecfcabb1d7e6dc3187b1418abae0fd701c428365b40b2100d63863514d1f7` and
+`009efe3fdea822943fde9e87950fd6a1d154dc199714bb562d75c7f8873e1467`.
+The extraction script embeds chroma-key algorithm v1: border-median auto-key,
+soft matte thresholds 12/220, dominance alpha, noise floor 8, and despill.
 
 ## Extraction map
 
@@ -132,3 +133,28 @@ character-definition version, non-human art, creation behavior, seeded
 generation, review telemetry, or browser baselines changed. The untracked
 `.superpowers/brainstorm/` directory predates this task and is excluded from
 the commit.
+
+## Review-fix addendum
+
+The clean-clone reproducibility review is resolved. The authoritative
+`human-chroma-master.png` (690,586 bytes) and
+`equipment-chroma-master.png` (612,400 bytes) are tracked at their original
+1536×1024 and 1717×916 dimensions, each below the 1 MB hook. Extraction
+defaults are repo-relative, have no home-directory/helper dependency, and
+`--check` uses only tracked inputs. Runtime `source_sheet` references now point
+to the appropriate human/equipment master record and every new albedo/derived
+map records the authoritative-master crop rectangle.
+
+An independent catalog regression addresses `human.hair.scurt.v1` directly,
+outside both look arrays, and checks its region, layer count, attachment, asset
+path, and production content validation. Gallery documentation now states the
+actual shared contract: runtime and gallery mirror sprite pixels together with
+transforms/pivots. The regenerated runtime pixels come solely from the tracked
+quantized masters.
+
+Review-fix verification: offline extraction `--check` passed; catalog tests
+passed 25/25; gallery tests passed 33/33; asset validation covered 308/308
+files cleanly; asset review generated 304 pages; fmt and clippy with denied
+warnings passed. Visual inspection of the regenerated authoritative contact
+sheet and both accepted torso albedos confirmed intact silhouettes, restrained
+embroidery, nearest-neighbor detail, and clean chroma separation.

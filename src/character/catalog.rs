@@ -1031,6 +1031,23 @@ mod tests {
     }
 
     #[test]
+    fn bundled_catalog_contains_exact_short_hair_id() {
+        let catalog = fixture();
+        let short_hair = catalog
+            .part(&id("human.hair.scurt.v1"))
+            .expect("exact short-hair production ID is independently addressable");
+
+        assert_eq!(short_hair.region, BodyRegion::Hair);
+        validate_part_content(short_hair).expect("short-hair bundle is production-valid");
+        assert_eq!(short_hair.layers.len(), 1);
+        assert_eq!(short_hair.layers[0].attachment.point, "hair");
+        assert_eq!(
+            short_hair.layers[0].asset_path,
+            "fighters/human/runtime/shared/hair_scurt.png"
+        );
+    }
+
+    #[test]
     fn catalog_rejects_v2_schema() {
         let mut value: Value = serde_json::from_str(include_str!(
             "../../assets/fighters/catalog/human-foundation.json"

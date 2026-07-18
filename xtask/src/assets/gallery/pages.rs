@@ -349,10 +349,10 @@ pub fn render_part_page(
         "horizontally flipped",
         true,
     ));
-    body.push_str("</div>\n<p class=\"caption\">This is a pixel-flipped preview for spotting asymmetric detail (text, off-center motifs). \
-The live rig does not flip a part's own pixels when mirroring a whole fighter -- it only repositions parts \
-(negates <code>pivot.x</code>; see <code>src/cutout.rs</code>'s <code>part_transform</code>). See the linked \
-composition page(s) below for the true in-rig mirrored placement.</p>\n</section>\n");
+    body.push_str("</div>\n<p class=\"caption\">This pixel-flipped preview matches the artwork-facing change used by the live rig. \
+When mirroring a whole fighter, runtime and gallery both flip each part's pixels and mirror its transform/pivot \
+(including negated <code>pivot.x</code>; see <code>src/cutout.rs</code>'s <code>part_sprite</code> and \
+<code>part_transform</code>). See the linked composition page(s) below for the complete mirrored placement.</p>\n</section>\n");
 
     // --- Pivot / attachment diagram ---
     body.push_str("<section>\n<h2>Pivot / attachment guide</h2>\n");

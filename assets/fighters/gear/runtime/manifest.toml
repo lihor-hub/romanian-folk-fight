@@ -6,9 +6,9 @@
 # sidecars, these are not at risk of drifting out of sync by construction --
 # a future value change there still requires a human to update this sidecar
 # alongside it, though; `cargo xtask assets check` does not cross-reference
-# the two. `crop` is "unknown" for the same reason documented in
-# `fighters/human/runtime/manifest.toml`. Two-part attachments (feet) list
-# both attachment points comma-separated.
+# the two. New Romanian paper-doll records use exact authoritative-master
+# crop rectangles; legacy records retain `crop = "unknown"`. Two-part
+# attachments (feet) list both attachment points comma-separated.
 version = 1
 
 [[record]]
@@ -18,14 +18,14 @@ kind = "image"
 category = "gear-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-equipment-master"
 license = "Same as project assets unless superseded"
 dimensions = [36, 272]
 sampler = "nearest"
 attachment = "hand_front"
 pivot = [-2.0, 42.0]
 display = [18.0, 136.0]
-crop = "unknown"
+crop = "83,98,136,731"
 
 [[record]]
 id = "fighters.gear.runtime.topor-de-padurar"
@@ -34,14 +34,14 @@ kind = "image"
 category = "gear-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-equipment-master"
 license = "Same as project assets unless superseded"
 dimensions = [84, 164]
 sampler = "nearest"
 attachment = "hand_front"
 pivot = [8.0, 20.0]
 display = [42.0, 82.0]
-crop = "unknown"
+crop = "326,221,193,517"
 
 [[record]]
 id = "fighters.gear.runtime.palos"
@@ -114,14 +114,14 @@ kind = "image"
 category = "gear-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-equipment-master"
 license = "Same as project assets unless superseded"
 dimensions = [108, 144]
 sampler = "nearest"
 attachment = "torso"
 pivot = [0.0, 2.0]
 display = [54.0, 72.0]
-crop = "unknown"
+crop = "566,211,376,535"
 
 [[record]]
 id = "fighters.gear.runtime.camasa-de-zale"
@@ -146,14 +146,14 @@ kind = "image"
 category = "gear-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-equipment-master"
 license = "Same as project assets unless superseded"
 dimensions = [80, 60]
 sampler = "nearest"
 attachment = "head"
 pivot = [0.0, 18.0]
 display = [40.0, 30.0]
-crop = "unknown"
+crop = "998,290,300,346"
 
 [[record]]
 id = "fighters.gear.runtime.coif-de-ostean"
@@ -178,14 +178,14 @@ kind = "image"
 category = "gear-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-equipment-master"
 license = "Same as project assets unless superseded"
 dimensions = [60, 36]
 sampler = "nearest"
 attachment = "foot_back,foot_front"
 pivot = [0.0, -2.0]
 display = [30.0, 18.0]
-crop = "unknown"
+crop = "1353,512,348,226"
 
 [[record]]
 id = "fighters.gear.runtime.cizme-de-voinic"

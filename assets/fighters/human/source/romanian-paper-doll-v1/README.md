@@ -2,11 +2,13 @@
 
 This directory is the auditable source record for the Haiduc and Cioban
 production-intent paper-doll looks and the five replacement equipment assets.
-The tracked PNG is a 128-colour, nearest-scaled contact sheet of both original
-chroma masters. At 340 KB it stays below the repository's 1 MB hook while
-remaining useful for visual comparison. Runtime crops are reproduced from the
-full-resolution originals by `scripts/extract-romanian-paper-doll-v1.py`; the
-contact sheet is not silently substituted for those originals.
+The tracked `human-chroma-master.png` and `equipment-chroma-master.png` files
+are authoritative, full-resolution, 192-colour versions of the generated
+chroma masters. Each stays below the repository's 1 MB hook without changing
+dimensions or crop coordinates. The smaller `romanian-paper-doll-v1.png` is a
+derived contact sheet for visual comparison only. Runtime crops are reproduced
+offline from the two authoritative tracked masters by
+`scripts/extract-romanian-paper-doll-v1.py`.
 
 These designs are a pan-Romanian folkloric remix for a fantasy fighting game,
 not a claim that one exact historical or regional costume combined every shown
@@ -21,23 +23,27 @@ generated pixels.
 
 ## Source and rights
 
-- Mode: OpenAI built-in image generation, followed by the installed imagegen
-  chroma-key helper and deterministic local curation.
+- Mode: OpenAI built-in image generation, followed by deterministic 192-colour
+  master quantization and the repository-owned chroma-key algorithm v1.
 - Rights: both masters were generated for this project. The accepted albedos,
   their deterministic technical maps, and the tracked contact sheet use the
   repository asset wording, “Same as project assets unless superseded.”
-- Human master:
-  `/Users/ioachimlihor/.codex/generated_images/019f701f-492d-70e1-9c8a-e64740c1d407/exec-0249e3ae-514e-4c04-aef9-9721358f2ddf.png`
-  (`8518d470aae529898a79ed22303cb97b4d358b13fa7bd80088dfac2c0d7334d7`).
-- Equipment master:
-  `/Users/ioachimlihor/.codex/generated_images/019f701f-492d-70e1-9c8a-e64740c1d407/exec-51bc0f86-e059-429c-89ba-56447e74e048.png`
-  (`84b35457846ed8b7e8707e2aedf135cb2a94b3c4b900648307c7215b26f8e0a9`).
+- Original human generation object: `exec-0249e3ae-514e-4c04-aef9-9721358f2ddf.png`,
+  SHA-256 `8518d470aae529898a79ed22303cb97b4d358b13fa7bd80088dfac2c0d7334d7`.
+  Tracked authoritative quantized master: `human-chroma-master.png`, SHA-256
+  `8e2ecfcabb1d7e6dc3187b1418abae0fd701c428365b40b2100d63863514d1f7`.
+- Original equipment generation object: `exec-51bc0f86-e059-429c-89ba-56447e74e048.png`,
+  SHA-256 `84b35457846ed8b7e8707e2aedf135cb2a94b3c4b900648307c7215b26f8e0a9`.
+  Tracked authoritative quantized master: `equipment-chroma-master.png`, SHA-256
+  `009efe3fdea822943fde9e87950fd6a1d154dc199714bb562d75c7f8873e1467`.
 
-The extraction script verifies both SHA-256 values before writing any output.
-It runs the installed `remove_chroma_key.py` helper with border auto-key,
-soft matte, thresholds 12/220, and despill. `--check` then proves the 34
+The extraction script verifies both tracked-master SHA-256 values before
+writing any output. Its embedded chroma-key algorithm v1 uses a six-pixel
+border median, soft matte thresholds 12/220, green-dominance alpha, an alpha
+noise floor of 8, and despill. `--check` then proves the 34
 accepted albedos, 102 exact-alpha technical maps, three generated manifests,
-and tracked source contact sheet are byte-identical.
+and tracked source contact sheet are byte-identical using only clean-clone
+inputs.
 
 ## Exact human prompt
 
@@ -72,14 +78,15 @@ Constraints: culturally Romanian folk equipment, practical handmade wood/wool/le
 ## Extraction and rig contract
 
 `PARTS` in the extraction script is the exact accepted map. It records each
-full-resolution crop rectangle, output size, mask semantics, and any curated
+authoritative-master crop rectangle, output size, mask semantics, and any curated
 face/hair treatment. The source model drew some requested arms and legs as
 whole assemblies. The script therefore splits only two coherent arm chains
 per look at overlapping embroidered-cuff seams and only two coherent leg
 chains at overlapping knee seams. Third sleeve/hand candidates, extra opinci,
 the frontal shoe, and repeated feet are deliberately rejected.
 
-All runtime art faces right. The engine alone mirrors it. Albedos use the
+All runtime art faces right. Runtime and gallery both mirror the sprite pixels
+and the associated transforms/pivots for the opposite facing. Albedos use the
 existing attachment pivots and display sizes at a consistent two source pixels
 per displayed pixel; nearest sampling preserves the charcoal outline and motif
 clusters. Lighting is shallow and fixed from the upper left.

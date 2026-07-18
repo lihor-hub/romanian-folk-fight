@@ -8,14 +8,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [30, 88]
 sampler = "nearest"
 attachment = "upper_arm_back"
 pivot = [-20.0, 26.0]
 display = [15.0, 44.0]
-crop = "unknown"
+crop = "608,80,83,125"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.upper-arm-back-mask"
@@ -31,7 +31,7 @@ sampler = "nearest"
 attachment = "upper_arm_back"
 pivot = [-20.0, 26.0]
 display = [15.0, 44.0]
-crop = "unknown"
+crop = "608,80,83,125"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.upper-arm-back-normal"
@@ -47,7 +47,7 @@ sampler = "nearest"
 attachment = "upper_arm_back"
 pivot = [-20.0, 26.0]
 display = [15.0, 44.0]
-crop = "unknown"
+crop = "608,80,83,125"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.upper-arm-back-shadow"
@@ -63,7 +63,7 @@ sampler = "nearest"
 attachment = "upper_arm_back"
 pivot = [-20.0, 26.0]
 display = [15.0, 44.0]
-crop = "unknown"
+crop = "608,80,83,125"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.forearm-back"
@@ -72,14 +72,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [26, 76]
 sampler = "nearest"
 attachment = "forearm_back"
 pivot = [-28.0, -2.0]
 display = [13.0, 38.0]
-crop = "unknown"
+crop = "608,170,83,134"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.forearm-back-mask"
@@ -95,7 +95,7 @@ sampler = "nearest"
 attachment = "forearm_back"
 pivot = [-28.0, -2.0]
 display = [13.0, 38.0]
-crop = "unknown"
+crop = "608,170,83,134"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.forearm-back-normal"
@@ -111,7 +111,7 @@ sampler = "nearest"
 attachment = "forearm_back"
 pivot = [-28.0, -2.0]
 display = [13.0, 38.0]
-crop = "unknown"
+crop = "608,170,83,134"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.forearm-back-shadow"
@@ -127,7 +127,7 @@ sampler = "nearest"
 attachment = "forearm_back"
 pivot = [-28.0, -2.0]
 display = [13.0, 38.0]
-crop = "unknown"
+crop = "608,170,83,134"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.hand-back"
@@ -136,14 +136,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [26, 26]
 sampler = "nearest"
 attachment = "hand_back"
 pivot = [-32.0, -26.0]
 display = [13.0, 13.0]
-crop = "unknown"
+crop = "890,84,44,55"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.hand-back-mask"
@@ -159,7 +159,7 @@ sampler = "nearest"
 attachment = "hand_back"
 pivot = [-32.0, -26.0]
 display = [13.0, 13.0]
-crop = "unknown"
+crop = "890,84,44,55"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.hand-back-normal"
@@ -175,7 +175,7 @@ sampler = "nearest"
 attachment = "hand_back"
 pivot = [-32.0, -26.0]
 display = [13.0, 13.0]
-crop = "unknown"
+crop = "890,84,44,55"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.hand-back-shadow"
@@ -191,7 +191,7 @@ sampler = "nearest"
 attachment = "hand_back"
 pivot = [-32.0, -26.0]
 display = [13.0, 13.0]
-crop = "unknown"
+crop = "890,84,44,55"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.upper-arm-front"
@@ -200,14 +200,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [30, 88]
 sampler = "nearest"
 attachment = "upper_arm_front"
 pivot = [21.0, 25.0]
 display = [15.0, 45.0]
-crop = "unknown"
+crop = "707,82,82,123"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.upper-arm-front-mask"
@@ -223,7 +223,7 @@ sampler = "nearest"
 attachment = "upper_arm_front"
 pivot = [21.0, 25.0]
 display = [15.0, 45.0]
-crop = "unknown"
+crop = "707,82,82,123"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.upper-arm-front-normal"
@@ -239,7 +239,7 @@ sampler = "nearest"
 attachment = "upper_arm_front"
 pivot = [21.0, 25.0]
 display = [15.0, 45.0]
-crop = "unknown"
+crop = "707,82,82,123"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.upper-arm-front-shadow"
@@ -255,7 +255,7 @@ sampler = "nearest"
 attachment = "upper_arm_front"
 pivot = [21.0, 25.0]
 display = [15.0, 45.0]
-crop = "unknown"
+crop = "707,82,82,123"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.forearm-front"
@@ -264,14 +264,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [26, 76]
 sampler = "nearest"
 attachment = "forearm_front"
 pivot = [29.0, -3.0]
 display = [13.0, 39.0]
-crop = "unknown"
+crop = "707,172,82,133"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.forearm-front-mask"
@@ -287,7 +287,7 @@ sampler = "nearest"
 attachment = "forearm_front"
 pivot = [29.0, -3.0]
 display = [13.0, 39.0]
-crop = "unknown"
+crop = "707,172,82,133"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.forearm-front-normal"
@@ -303,7 +303,7 @@ sampler = "nearest"
 attachment = "forearm_front"
 pivot = [29.0, -3.0]
 display = [13.0, 39.0]
-crop = "unknown"
+crop = "707,172,82,133"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.forearm-front-shadow"
@@ -319,7 +319,7 @@ sampler = "nearest"
 attachment = "forearm_front"
 pivot = [29.0, -3.0]
 display = [13.0, 39.0]
-crop = "unknown"
+crop = "707,172,82,133"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.hand-front"
@@ -328,14 +328,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [26, 26]
 sampler = "nearest"
 attachment = "hand_front"
 pivot = [33.0, -28.0]
 display = [13.0, 13.0]
-crop = "unknown"
+crop = "895,155,43,63"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.hand-front-mask"
@@ -351,7 +351,7 @@ sampler = "nearest"
 attachment = "hand_front"
 pivot = [33.0, -28.0]
 display = [13.0, 13.0]
-crop = "unknown"
+crop = "895,155,43,63"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.hand-front-normal"
@@ -367,7 +367,7 @@ sampler = "nearest"
 attachment = "hand_front"
 pivot = [33.0, -28.0]
 display = [13.0, 13.0]
-crop = "unknown"
+crop = "895,155,43,63"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.hand-front-shadow"
@@ -383,7 +383,7 @@ sampler = "nearest"
 attachment = "hand_front"
 pivot = [33.0, -28.0]
 display = [13.0, 13.0]
-crop = "unknown"
+crop = "895,155,43,63"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.head"
@@ -392,14 +392,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [76, 84]
 sampler = "nearest"
 attachment = "head"
 pivot = [4.0, 60.0]
 display = [38.0, 42.0]
-crop = "unknown"
+crop = "71,67,146,247"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.head-mask"
@@ -415,7 +415,7 @@ sampler = "nearest"
 attachment = "head"
 pivot = [4.0, 60.0]
 display = [38.0, 42.0]
-crop = "unknown"
+crop = "71,67,146,247"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.head-normal"
@@ -431,7 +431,7 @@ sampler = "nearest"
 attachment = "head"
 pivot = [4.0, 60.0]
 display = [38.0, 42.0]
-crop = "unknown"
+crop = "71,67,146,247"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.head-shadow"
@@ -447,7 +447,7 @@ sampler = "nearest"
 attachment = "head"
 pivot = [4.0, 60.0]
 display = [38.0, 42.0]
-crop = "unknown"
+crop = "71,67,146,247"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.hair"
@@ -456,14 +456,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [64, 40]
 sampler = "nearest"
 attachment = "hair"
 pivot = [1.0, 71.0]
 display = [32.0, 20.0]
-crop = "unknown"
+crop = "240,67,118,260"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.hair-mask"
@@ -479,7 +479,7 @@ sampler = "nearest"
 attachment = "hair"
 pivot = [1.0, 71.0]
 display = [32.0, 20.0]
-crop = "unknown"
+crop = "240,67,118,260"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.hair-normal"
@@ -495,7 +495,7 @@ sampler = "nearest"
 attachment = "hair"
 pivot = [1.0, 71.0]
 display = [32.0, 20.0]
-crop = "unknown"
+crop = "240,67,118,260"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.hair-shadow"
@@ -511,7 +511,7 @@ sampler = "nearest"
 attachment = "hair"
 pivot = [1.0, 71.0]
 display = [32.0, 20.0]
-crop = "unknown"
+crop = "240,67,118,260"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.torso"
@@ -520,14 +520,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [88, 148]
 sampler = "nearest"
 attachment = "torso"
 pivot = [0.0, 6.0]
 display = [44.0, 74.0]
-crop = "unknown"
+crop = "381,72,214,261"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.torso-mask"
@@ -543,7 +543,7 @@ sampler = "nearest"
 attachment = "torso"
 pivot = [0.0, 6.0]
 display = [44.0, 74.0]
-crop = "unknown"
+crop = "381,72,214,261"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.torso-normal"
@@ -559,7 +559,7 @@ sampler = "nearest"
 attachment = "torso"
 pivot = [0.0, 6.0]
 display = [44.0, 74.0]
-crop = "unknown"
+crop = "381,72,214,261"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.torso-shadow"
@@ -575,7 +575,7 @@ sampler = "nearest"
 attachment = "torso"
 pivot = [0.0, 6.0]
 display = [44.0, 74.0]
-crop = "unknown"
+crop = "381,72,214,261"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.thigh-back"
@@ -584,14 +584,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [34, 84]
 sampler = "nearest"
 attachment = "thigh_back"
 pivot = [-13.0, -42.0]
 display = [17.0, 42.0]
-crop = "unknown"
+crop = "984,72,102,153"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.thigh-back-mask"
@@ -607,7 +607,7 @@ sampler = "nearest"
 attachment = "thigh_back"
 pivot = [-13.0, -42.0]
 display = [17.0, 42.0]
-crop = "unknown"
+crop = "984,72,102,153"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.thigh-back-normal"
@@ -623,7 +623,7 @@ sampler = "nearest"
 attachment = "thigh_back"
 pivot = [-13.0, -42.0]
 display = [17.0, 42.0]
-crop = "unknown"
+crop = "984,72,102,153"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.thigh-back-shadow"
@@ -639,7 +639,7 @@ sampler = "nearest"
 attachment = "thigh_back"
 pivot = [-13.0, -42.0]
 display = [17.0, 42.0]
-crop = "unknown"
+crop = "984,72,102,153"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.shin-back"
@@ -648,14 +648,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [28, 76]
 sampler = "nearest"
 attachment = "shin_back"
 pivot = [-15.0, -76.0]
 display = [14.0, 38.0]
-crop = "unknown"
+crop = "1229,185,83,167"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.shin-back-mask"
@@ -671,7 +671,7 @@ sampler = "nearest"
 attachment = "shin_back"
 pivot = [-15.0, -76.0]
 display = [14.0, 38.0]
-crop = "unknown"
+crop = "1229,185,83,167"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.shin-back-normal"
@@ -687,7 +687,7 @@ sampler = "nearest"
 attachment = "shin_back"
 pivot = [-15.0, -76.0]
 display = [14.0, 38.0]
-crop = "unknown"
+crop = "1229,185,83,167"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.shin-back-shadow"
@@ -703,7 +703,7 @@ sampler = "nearest"
 attachment = "shin_back"
 pivot = [-15.0, -76.0]
 display = [14.0, 38.0]
-crop = "unknown"
+crop = "1229,185,83,167"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.thigh-front"
@@ -712,14 +712,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [34, 84]
 sampler = "nearest"
 attachment = "thigh_front"
 pivot = [13.0, -42.0]
 display = [17.0, 42.0]
-crop = "unknown"
+crop = "1102,72,101,153"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.thigh-front-mask"
@@ -735,7 +735,7 @@ sampler = "nearest"
 attachment = "thigh_front"
 pivot = [13.0, -42.0]
 display = [17.0, 42.0]
-crop = "unknown"
+crop = "1102,72,101,153"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.thigh-front-normal"
@@ -751,7 +751,7 @@ sampler = "nearest"
 attachment = "thigh_front"
 pivot = [13.0, -42.0]
 display = [17.0, 42.0]
-crop = "unknown"
+crop = "1102,72,101,153"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.thigh-front-shadow"
@@ -767,7 +767,7 @@ sampler = "nearest"
 attachment = "thigh_front"
 pivot = [13.0, -42.0]
 display = [17.0, 42.0]
-crop = "unknown"
+crop = "1102,72,101,153"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.shin-front"
@@ -776,14 +776,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [28, 76]
 sampler = "nearest"
 attachment = "shin_front"
 pivot = [15.0, -76.0]
 display = [14.0, 38.0]
-crop = "unknown"
+crop = "1343,185,81,167"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.shin-front-mask"
@@ -799,7 +799,7 @@ sampler = "nearest"
 attachment = "shin_front"
 pivot = [15.0, -76.0]
 display = [14.0, 38.0]
-crop = "unknown"
+crop = "1343,185,81,167"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.shin-front-normal"
@@ -815,7 +815,7 @@ sampler = "nearest"
 attachment = "shin_front"
 pivot = [15.0, -76.0]
 display = [14.0, 38.0]
-crop = "unknown"
+crop = "1343,185,81,167"
 
 [[record]]
 id = "fighters.human.runtime.haiduc.shin-front-shadow"
@@ -831,4 +831,4 @@ sampler = "nearest"
 attachment = "shin_front"
 pivot = [15.0, -76.0]
 display = [14.0, 38.0]
-crop = "unknown"
+crop = "1343,185,81,167"

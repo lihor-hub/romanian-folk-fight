@@ -3,7 +3,7 @@
 
 The two OpenAI built-in image-generation outputs are chroma-key production
 masters, not attachment-ready geometry.  This script verifies their exact
-SHA-256 hashes, runs the installed imagegen chroma-key helper, extracts only
+SHA-256 hashes, applies its versioned chroma-key algorithm, extracts only
 the accepted drawings, splits complete sleeve/leg drawings at deliberate
 overlap seams, scales every attachment to the established rig pixel density,
 and derives mask/normal/shadow maps from the accepted albedo alpha.
@@ -19,29 +19,24 @@ import argparse
 import hashlib
 import io
 import math
-import os
-import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from statistics import median
 
 from PIL import Image, ImageChops, ImageDraw
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_HUMAN = Path(
-    "/Users/ioachimlihor/.codex/generated_images/"
-    "019f701f-492d-70e1-9c8a-e64740c1d407/"
-    "exec-0249e3ae-514e-4c04-aef9-9721358f2ddf.png"
-)
-DEFAULT_EQUIPMENT = Path(
-    "/Users/ioachimlihor/.codex/generated_images/"
-    "019f701f-492d-70e1-9c8a-e64740c1d407/"
-    "exec-51bc0f86-e059-429c-89ba-56447e74e048.png"
-)
+SOURCE_DIR = ROOT / "assets/fighters/human/source/romanian-paper-doll-v1"
+DEFAULT_HUMAN = SOURCE_DIR / "human-chroma-master.png"
+DEFAULT_EQUIPMENT = SOURCE_DIR / "equipment-chroma-master.png"
 SOURCE_SHA256 = {
-    "human": "8518d470aae529898a79ed22303cb97b4d358b13fa7bd80088dfac2c0d7334d7",
-    "equipment": "84b35457846ed8b7e8707e2aedf135cb2a94b3c4b900648307c7215b26f8e0a9",
+    "human": "8e2ecfcabb1d7e6dc3187b1418abae0fd701c428365b40b2100d63863514d1f7",
+    "equipment": "009efe3fdea822943fde9e87950fd6a1d154dc199714bb562d75c7f8873e1467",
+}
+SOURCE_IDS = {
+    "human": "fighters.human.source.romanian-paper-doll-v1-human-master",
+    "equipment": "fighters.human.source.romanian-paper-doll-v1-equipment-master",
 }
 MASK_WEIGHT = 200
 RIG = {
@@ -123,26 +118,68 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def remove_chroma(source: Path, output: Path, helper: Path) -> None:
-    subprocess.run(
-        [
-            "python3",
-            os.fspath(helper),
-            "--input",
-            os.fspath(source),
-            "--out",
-            os.fspath(output),
-            "--auto-key",
-            "border",
-            "--soft-matte",
-            "--transparent-threshold",
-            "12",
-            "--opaque-threshold",
-            "220",
-            "--despill",
-        ],
-        check=True,
-    )
+def clamp_channel(value: float) -> int:
+    return max(0, min(255, round(value)))
+
+
+def border_key(image: Image.Image) -> tuple[int, int, int]:
+    """Return the per-channel median of the six-pixel border (algorithm v1)."""
+    rgb = image.convert("RGB")
+    pixels = rgb.load()
+    band = max(1, min(rgb.width, rgb.height, 6))
+    samples = []
+    for y in range(rgb.height):
+        for x in range(rgb.width):
+            if x < band or x >= rgb.width - band or y < band or y >= rgb.height - band:
+                samples.append(pixels[x, y])
+    return tuple(round(median(channel)) for channel in zip(*samples))
+
+
+def remove_chroma(source: Path) -> Image.Image:
+    """Apply imagegen's border/soft-matte/despill recipe, frozen here as v1."""
+    image = Image.open(source).convert("RGBA")
+    key = border_key(image)
+    spill_channels = [index for index, value in enumerate(key) if value >= max(key) - 16 and value >= 128]
+    pixels = image.load()
+    for y in range(image.height):
+        for x in range(image.width):
+            red, green, blue, source_alpha = pixels[x, y]
+            rgb = (red, green, blue)
+            distance = max(abs(rgb[index] - key[index]) for index in range(3))
+            non_spill = [index for index in range(3) if index not in spill_channels]
+            key_strength = min(rgb[index] for index in spill_channels) if spill_channels else 0
+            non_key_strength = max((rgb[index] for index in non_spill), default=0)
+            dominance = key_strength - non_key_strength
+            key_like = distance <= 32 or dominance >= 16
+            if key_like:
+                if distance <= 12:
+                    matte_alpha = 0
+                elif distance >= 220:
+                    matte_alpha = 255
+                else:
+                    ratio = (distance - 12) / (220 - 12)
+                    matte_alpha = clamp_channel(255 * ratio * ratio * (3 - 2 * ratio))
+                dominance_alpha = 255
+                if dominance > 0:
+                    denominator = max(1, max(key) - non_key_strength)
+                    dominance_alpha = clamp_channel((1 - min(1, dominance / denominator)) * 255)
+                output_alpha = min(matte_alpha, dominance_alpha)
+            else:
+                output_alpha = 255
+            output_alpha = round(output_alpha * source_alpha / 255)
+            if 0 < output_alpha <= 8:
+                output_alpha = 0
+            if output_alpha == 0:
+                pixels[x, y] = (0, 0, 0, 0)
+            elif key_like and output_alpha < 252 and spill_channels:
+                channels = [red, green, blue]
+                cap = max((channels[index] for index in non_spill), default=0) - 1
+                for index in spill_channels:
+                    channels[index] = min(channels[index], max(0, cap))
+                pixels[x, y] = (*channels, output_alpha)
+            else:
+                pixels[x, y] = (red, green, blue, output_alpha)
+    return image
 
 
 def treatment_mask(size: tuple[int, int], treatment: str) -> Image.Image | None:
@@ -342,7 +379,7 @@ def human_manifest(role: str) -> bytes:
                         else 'provenance = "deterministic-technical-map-from-accepted-albedo"'
                     ),
                     (
-                        'source_sheet = "fighters.human.source.romanian-paper-doll-v1"'
+                        f'source_sheet = "{SOURCE_IDS[part.source]}"'
                         if not suffix
                         else 'generator = "scripts/extract-romanian-paper-doll-v1.py"'
                     ),
@@ -352,7 +389,7 @@ def human_manifest(role: str) -> bytes:
                     f'attachment = "{attachment}"',
                     f"pivot = {toml_array(pivot)}",
                     f"display = {toml_array(display)}",
-                    'crop = "unknown"',
+                    f'crop = "{part.box[0]},{part.box[1]},{part.box[2] - part.box[0]},{part.box[3] - part.box[1]}"',
                     "",
                 ]
             )
@@ -361,69 +398,57 @@ def human_manifest(role: str) -> bytes:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--human-source", type=Path, default=DEFAULT_HUMAN)
-    parser.add_argument("--equipment-source", type=Path, default=DEFAULT_EQUIPMENT)
-    parser.add_argument(
-        "--helper",
-        type=Path,
-        default=Path.home() / ".codex/skills/.system/imagegen/scripts/remove_chroma_key.py",
-    )
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
 
-    for name, path in (("human", args.human_source), ("equipment", args.equipment_source)):
+    source_paths = {"human": DEFAULT_HUMAN, "equipment": DEFAULT_EQUIPMENT}
+    for name, path in source_paths.items():
         actual = sha256(path)
         if actual != SOURCE_SHA256[name]:
             raise SystemExit(f"{name} source SHA-256 mismatch: {actual}")
 
     mismatches: list[str] = []
-    with tempfile.TemporaryDirectory(prefix="romanian-paper-doll-v1-") as temporary:
-        temporary_path = Path(temporary)
-        alpha_paths = {
-            "human": temporary_path / "human-alpha.png",
-            "equipment": temporary_path / "equipment-alpha.png",
+    sources = {
+        name: remove_chroma(path) for name, path in source_paths.items()
+    }
+
+    for part in PARTS:
+        albedo = accepted_albedo(sources[part.source], part)
+        generated = {
+            "": albedo,
+            "_mask": build_mask(albedo, part.regions),
+            "_normal": build_normal(albedo),
+            "_shadow": build_shadow(albedo),
         }
-        remove_chroma(args.human_source, alpha_paths["human"], args.helper)
-        remove_chroma(args.equipment_source, alpha_paths["equipment"], args.helper)
-        sources = {name: Image.open(path).convert("RGBA") for name, path in alpha_paths.items()}
-
-        for part in PARTS:
-            albedo = accepted_albedo(sources[part.source], part)
-            generated = {
-                "": albedo,
-                "_mask": build_mask(albedo, part.regions),
-                "_normal": build_normal(albedo),
-                "_shadow": build_shadow(albedo),
-            }
-            for suffix, image in generated.items():
-                path = output_path(part, suffix)
-                expected = png_bytes(image)
-                if args.check:
-                    if not path.exists() or path.read_bytes() != expected:
-                        mismatches.append(path.relative_to(ROOT).as_posix())
-                else:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_bytes(expected)
-
-        tracked_source = ROOT / "assets/fighters/human/source/romanian-paper-doll-v1/romanian-paper-doll-v1.png"
-        expected_source = png_bytes(source_sheet(
-            Image.open(args.human_source), Image.open(args.equipment_source)
-        ))
-        if args.check:
-            if not tracked_source.exists() or tracked_source.read_bytes() != expected_source:
-                mismatches.append(tracked_source.relative_to(ROOT).as_posix())
-        else:
-            tracked_source.parent.mkdir(parents=True, exist_ok=True)
-            tracked_source.write_bytes(expected_source)
-
-        for role in ("shared", "haiduc", "cioban"):
-            manifest = ROOT / f"assets/fighters/human/runtime/{role}/manifest.toml"
-            expected_manifest = human_manifest(role)
+        for suffix, image in generated.items():
+            path = output_path(part, suffix)
+            expected = png_bytes(image)
             if args.check:
-                if not manifest.exists() or manifest.read_bytes() != expected_manifest:
-                    mismatches.append(manifest.relative_to(ROOT).as_posix())
+                if not path.exists() or path.read_bytes() != expected:
+                    mismatches.append(path.relative_to(ROOT).as_posix())
             else:
-                manifest.write_bytes(expected_manifest)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(expected)
+
+    tracked_source = SOURCE_DIR / "romanian-paper-doll-v1.png"
+    expected_source = png_bytes(source_sheet(
+        Image.open(source_paths["human"]), Image.open(source_paths["equipment"])
+    ))
+    if args.check:
+        if not tracked_source.exists() or tracked_source.read_bytes() != expected_source:
+            mismatches.append(tracked_source.relative_to(ROOT).as_posix())
+    else:
+        tracked_source.parent.mkdir(parents=True, exist_ok=True)
+        tracked_source.write_bytes(expected_source)
+
+    for role in ("shared", "haiduc", "cioban"):
+        manifest = ROOT / f"assets/fighters/human/runtime/{role}/manifest.toml"
+        expected_manifest = human_manifest(role)
+        if args.check:
+            if not manifest.exists() or manifest.read_bytes() != expected_manifest:
+                mismatches.append(manifest.relative_to(ROOT).as_posix())
+        else:
+            manifest.write_bytes(expected_manifest)
 
     if mismatches:
         for path in mismatches:

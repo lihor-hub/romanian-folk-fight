@@ -8,14 +8,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [56, 24]
 sampler = "nearest"
 attachment = "foot_back"
 pivot = [-8.0, -102.0]
 display = [28.0, 12.0]
-crop = "unknown"
+crop = "410,779,92,124"
 
 [[record]]
 id = "fighters.human.runtime.shared.foot-back-mask"
@@ -31,7 +31,7 @@ sampler = "nearest"
 attachment = "foot_back"
 pivot = [-8.0, -102.0]
 display = [28.0, 12.0]
-crop = "unknown"
+crop = "410,779,92,124"
 
 [[record]]
 id = "fighters.human.runtime.shared.foot-back-normal"
@@ -47,7 +47,7 @@ sampler = "nearest"
 attachment = "foot_back"
 pivot = [-8.0, -102.0]
 display = [28.0, 12.0]
-crop = "unknown"
+crop = "410,779,92,124"
 
 [[record]]
 id = "fighters.human.runtime.shared.foot-back-shadow"
@@ -63,7 +63,7 @@ sampler = "nearest"
 attachment = "foot_back"
 pivot = [-8.0, -102.0]
 display = [28.0, 12.0]
-crop = "unknown"
+crop = "410,779,92,124"
 
 [[record]]
 id = "fighters.human.runtime.shared.foot-front"
@@ -72,14 +72,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [56, 24]
 sampler = "nearest"
 attachment = "foot_front"
 pivot = [23.0, -102.0]
 display = [28.0, 12.0]
-crop = "unknown"
+crop = "539,776,99,128"
 
 [[record]]
 id = "fighters.human.runtime.shared.foot-front-mask"
@@ -95,7 +95,7 @@ sampler = "nearest"
 attachment = "foot_front"
 pivot = [23.0, -102.0]
 display = [28.0, 12.0]
-crop = "unknown"
+crop = "539,776,99,128"
 
 [[record]]
 id = "fighters.human.runtime.shared.foot-front-normal"
@@ -111,7 +111,7 @@ sampler = "nearest"
 attachment = "foot_front"
 pivot = [23.0, -102.0]
 display = [28.0, 12.0]
-crop = "unknown"
+crop = "539,776,99,128"
 
 [[record]]
 id = "fighters.human.runtime.shared.foot-front-shadow"
@@ -127,7 +127,7 @@ sampler = "nearest"
 attachment = "foot_front"
 pivot = [23.0, -102.0]
 display = [28.0, 12.0]
-crop = "unknown"
+crop = "539,776,99,128"
 
 [[record]]
 id = "fighters.human.runtime.shared.hair-scurt"
@@ -136,14 +136,14 @@ kind = "image"
 category = "fighter-runtime-part"
 status = "runtime"
 provenance = "cropped-from-openai-generated-source-sheet"
-source_sheet = "fighters.human.source.romanian-paper-doll-v1"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-human-master"
 license = "Same as project assets unless superseded"
 dimensions = [64, 40]
 sampler = "nearest"
 attachment = "hair"
 pivot = [1.0, 71.0]
 display = [32.0, 20.0]
-crop = "unknown"
+crop = "101,743,115,82"
 
 [[record]]
 id = "fighters.human.runtime.shared.hair-scurt-mask"
@@ -159,7 +159,7 @@ sampler = "nearest"
 attachment = "hair"
 pivot = [1.0, 71.0]
 display = [32.0, 20.0]
-crop = "unknown"
+crop = "101,743,115,82"
 
 [[record]]
 id = "fighters.human.runtime.shared.hair-scurt-normal"
@@ -175,7 +175,7 @@ sampler = "nearest"
 attachment = "hair"
 pivot = [1.0, 71.0]
 display = [32.0, 20.0]
-crop = "unknown"
+crop = "101,743,115,82"
 
 [[record]]
 id = "fighters.human.runtime.shared.hair-scurt-shadow"
@@ -191,4 +191,4 @@ sampler = "nearest"
 attachment = "hair"
 pivot = [1.0, 71.0]
 display = [32.0, 20.0]
-crop = "unknown"
+crop = "101,743,115,82"
