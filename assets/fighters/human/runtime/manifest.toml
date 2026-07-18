@@ -249,3 +249,730 @@ attachment = "foot_front"
 pivot = [23.0, -102.0]
 display = [28.0, 12.0]
 crop = "625,446,71,44"
+
+# Deterministic material channels derived from the authoritative albedos by
+# scripts/generate-human-material-channels.py. Each channel preserves its
+# albedo counterpart's dimensions, alpha silhouette, attachment, and pivot.
+# Cultural/material reference: the Task 3 prompt/source recorded in
+# .superpowers/sdd/task-3-report.md (Romanian linen ie, ițari, opinci, braided
+# hair, and restrained upper-left lighting). It is not runtime art.
+
+[[record]]
+id = "fighters.human.runtime.hair-mask"
+path = "hair_mask.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [74, 92]
+sampler = "nearest"
+attachment = "hair"
+pivot = [1.0, 71.0]
+display = [32.0, 20.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.hair-normal"
+path = "hair_normal.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [74, 92]
+sampler = "nearest"
+attachment = "hair"
+pivot = [1.0, 71.0]
+display = [32.0, 20.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.hair-shadow"
+path = "hair_shadow.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [74, 92]
+sampler = "nearest"
+attachment = "hair"
+pivot = [1.0, 71.0]
+display = [32.0, 20.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.head-mask"
+path = "head_mask.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [70, 92]
+sampler = "nearest"
+attachment = "head"
+pivot = [4.0, 60.0]
+display = [38.0, 42.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.head-normal"
+path = "head_normal.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [70, 92]
+sampler = "nearest"
+attachment = "head"
+pivot = [4.0, 60.0]
+display = [38.0, 42.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.head-shadow"
+path = "head_shadow.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [70, 92]
+sampler = "nearest"
+attachment = "head"
+pivot = [4.0, 60.0]
+display = [38.0, 42.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.torso-mask"
+path = "torso_mask.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [127, 173]
+sampler = "nearest"
+attachment = "torso"
+pivot = [0.0, 6.0]
+display = [44.0, 74.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.torso-normal"
+path = "torso_normal.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [127, 173]
+sampler = "nearest"
+attachment = "torso"
+pivot = [0.0, 6.0]
+display = [44.0, 74.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.torso-shadow"
+path = "torso_shadow.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [127, 173]
+sampler = "nearest"
+attachment = "torso"
+pivot = [0.0, 6.0]
+display = [44.0, 74.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.upper-arm-back-mask"
+path = "upper_arm_back_mask.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [62, 83]
+sampler = "nearest"
+attachment = "upper_arm_back"
+pivot = [-20.0, 26.0]
+display = [15.0, 44.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.upper-arm-back-normal"
+path = "upper_arm_back_normal.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [62, 83]
+sampler = "nearest"
+attachment = "upper_arm_back"
+pivot = [-20.0, 26.0]
+display = [15.0, 44.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.upper-arm-back-shadow"
+path = "upper_arm_back_shadow.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [62, 83]
+sampler = "nearest"
+attachment = "upper_arm_back"
+pivot = [-20.0, 26.0]
+display = [15.0, 44.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.upper-arm-front-mask"
+path = "upper_arm_front_mask.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [61, 81]
+sampler = "nearest"
+attachment = "upper_arm_front"
+pivot = [21.0, 25.0]
+display = [15.0, 45.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.upper-arm-front-normal"
+path = "upper_arm_front_normal.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [61, 81]
+sampler = "nearest"
+attachment = "upper_arm_front"
+pivot = [21.0, 25.0]
+display = [15.0, 45.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.upper-arm-front-shadow"
+path = "upper_arm_front_shadow.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [61, 81]
+sampler = "nearest"
+attachment = "upper_arm_front"
+pivot = [21.0, 25.0]
+display = [15.0, 45.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.forearm-back-mask"
+path = "forearm_back_mask.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [60, 89]
+sampler = "nearest"
+attachment = "forearm_back"
+pivot = [-28.0, -2.0]
+display = [13.0, 38.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.forearm-back-normal"
+path = "forearm_back_normal.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [60, 89]
+sampler = "nearest"
+attachment = "forearm_back"
+pivot = [-28.0, -2.0]
+display = [13.0, 38.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.forearm-back-shadow"
+path = "forearm_back_shadow.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [60, 89]
+sampler = "nearest"
+attachment = "forearm_back"
+pivot = [-28.0, -2.0]
+display = [13.0, 38.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.forearm-front-mask"
+path = "forearm_front_mask.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [64, 88]
+sampler = "nearest"
+attachment = "forearm_front"
+pivot = [29.0, -3.0]
+display = [13.0, 39.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.forearm-front-normal"
+path = "forearm_front_normal.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [64, 88]
+sampler = "nearest"
+attachment = "forearm_front"
+pivot = [29.0, -3.0]
+display = [13.0, 39.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.forearm-front-shadow"
+path = "forearm_front_shadow.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [64, 88]
+sampler = "nearest"
+attachment = "forearm_front"
+pivot = [29.0, -3.0]
+display = [13.0, 39.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.hand-back-mask"
+path = "hand_back_mask.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [59, 39]
+sampler = "nearest"
+attachment = "hand_back"
+pivot = [-32.0, -26.0]
+display = [13.0, 13.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.hand-back-normal"
+path = "hand_back_normal.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [59, 39]
+sampler = "nearest"
+attachment = "hand_back"
+pivot = [-32.0, -26.0]
+display = [13.0, 13.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.hand-back-shadow"
+path = "hand_back_shadow.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [59, 39]
+sampler = "nearest"
+attachment = "hand_back"
+pivot = [-32.0, -26.0]
+display = [13.0, 13.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.hand-front-mask"
+path = "hand_front_mask.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [47, 39]
+sampler = "nearest"
+attachment = "hand_front"
+pivot = [33.0, -28.0]
+display = [13.0, 13.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.hand-front-normal"
+path = "hand_front_normal.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [47, 39]
+sampler = "nearest"
+attachment = "hand_front"
+pivot = [33.0, -28.0]
+display = [13.0, 13.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.hand-front-shadow"
+path = "hand_front_shadow.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [47, 39]
+sampler = "nearest"
+attachment = "hand_front"
+pivot = [33.0, -28.0]
+display = [13.0, 13.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.thigh-back-mask"
+path = "thigh_back_mask.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [89, 169]
+sampler = "nearest"
+attachment = "thigh_back"
+pivot = [-13.0, -42.0]
+display = [17.0, 42.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.thigh-back-normal"
+path = "thigh_back_normal.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [89, 169]
+sampler = "nearest"
+attachment = "thigh_back"
+pivot = [-13.0, -42.0]
+display = [17.0, 42.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.thigh-back-shadow"
+path = "thigh_back_shadow.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [89, 169]
+sampler = "nearest"
+attachment = "thigh_back"
+pivot = [-13.0, -42.0]
+display = [17.0, 42.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.thigh-front-mask"
+path = "thigh_front_mask.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [103, 150]
+sampler = "nearest"
+attachment = "thigh_front"
+pivot = [13.0, -42.0]
+display = [17.0, 42.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.thigh-front-normal"
+path = "thigh_front_normal.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [103, 150]
+sampler = "nearest"
+attachment = "thigh_front"
+pivot = [13.0, -42.0]
+display = [17.0, 42.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.thigh-front-shadow"
+path = "thigh_front_shadow.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [103, 150]
+sampler = "nearest"
+attachment = "thigh_front"
+pivot = [13.0, -42.0]
+display = [17.0, 42.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.shin-back-mask"
+path = "shin_back_mask.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [63, 107]
+sampler = "nearest"
+attachment = "shin_back"
+pivot = [-15.0, -76.0]
+display = [14.0, 38.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.shin-back-normal"
+path = "shin_back_normal.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [63, 107]
+sampler = "nearest"
+attachment = "shin_back"
+pivot = [-15.0, -76.0]
+display = [14.0, 38.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.shin-back-shadow"
+path = "shin_back_shadow.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [63, 107]
+sampler = "nearest"
+attachment = "shin_back"
+pivot = [-15.0, -76.0]
+display = [14.0, 38.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.shin-front-mask"
+path = "shin_front_mask.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [70, 100]
+sampler = "nearest"
+attachment = "shin_front"
+pivot = [15.0, -76.0]
+display = [14.0, 38.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.shin-front-normal"
+path = "shin_front_normal.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [70, 100]
+sampler = "nearest"
+attachment = "shin_front"
+pivot = [15.0, -76.0]
+display = [14.0, 38.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.shin-front-shadow"
+path = "shin_front_shadow.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [70, 100]
+sampler = "nearest"
+attachment = "shin_front"
+pivot = [15.0, -76.0]
+display = [14.0, 38.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.foot-back-mask"
+path = "foot_back_mask.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [63, 35]
+sampler = "nearest"
+attachment = "foot_back"
+pivot = [-8.0, -102.0]
+display = [28.0, 12.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.foot-back-normal"
+path = "foot_back_normal.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [63, 35]
+sampler = "nearest"
+attachment = "foot_back"
+pivot = [-8.0, -102.0]
+display = [28.0, 12.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.foot-back-shadow"
+path = "foot_back_shadow.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [63, 35]
+sampler = "nearest"
+attachment = "foot_back"
+pivot = [-8.0, -102.0]
+display = [28.0, 12.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.foot-front-mask"
+path = "foot_front_mask.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [71, 44]
+sampler = "nearest"
+attachment = "foot_front"
+pivot = [23.0, -102.0]
+display = [28.0, 12.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.foot-front-normal"
+path = "foot_front_normal.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [71, 44]
+sampler = "nearest"
+attachment = "foot_front"
+pivot = [23.0, -102.0]
+display = [28.0, 12.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.human.runtime.foot-front-shadow"
+path = "foot_front_shadow.png"
+kind = "image"
+category = "fighter-runtime-part"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-human-material-channels.py"
+license = "Same as project assets unless superseded"
+dimensions = [71, 44]
+sampler = "nearest"
+attachment = "foot_front"
+pivot = [23.0, -102.0]
+display = [28.0, 12.0]
+crop = "unknown"

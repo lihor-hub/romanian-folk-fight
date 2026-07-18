@@ -79,8 +79,10 @@ pub fn fighter_identities(records: &[&ResolvedRecord]) -> Vec<String> {
     identities.into_iter().collect()
 }
 
-/// Every `fighter-runtime-part` record belonging to `identity`, sorted by
-/// anatomical draw order (ties broken by id for determinism).
+/// Every albedo `fighter-runtime-part` record belonging to `identity`, sorted
+/// by anatomical draw order (ties broken by id for determinism). Companion
+/// material channels retain their individual gallery pages but are not body
+/// layers in the composed rig.
 pub fn identity_parts<'a>(
     records: &[&'a ResolvedRecord],
     identity: &str,
@@ -91,6 +93,7 @@ pub fn identity_parts<'a>(
         .filter(|r| {
             r.record.category == Category::FighterRuntimePart
                 && id_segment(&r.record.id, 1) == Some(identity)
+                && !is_material_channel_id(&r.record.id)
         })
         .collect();
     parts.sort_by_key(|r| {
@@ -103,6 +106,31 @@ pub fn identity_parts<'a>(
         (order, r.record.id.clone())
     });
     parts
+}
+
+/// Companion technical maps for `identity`. These are reviewed with the same
+/// pivot/facing page as their albedo but never enter a fighter composition.
+pub fn identity_material_channels<'a>(
+    records: &[&'a ResolvedRecord],
+    identity: &str,
+) -> Vec<&'a ResolvedRecord> {
+    let mut channels: Vec<&ResolvedRecord> = records
+        .iter()
+        .copied()
+        .filter(|r| {
+            r.record.category == Category::FighterRuntimePart
+                && id_segment(&r.record.id, 1) == Some(identity)
+                && is_material_channel_id(&r.record.id)
+        })
+        .collect();
+    channels.sort_by(|a, b| a.record.id.cmp(&b.record.id));
+    channels
+}
+
+fn is_material_channel_id(id: &str) -> bool {
+    ["-mask", "-normal", "-shadow"]
+        .iter()
+        .any(|suffix| id.ends_with(suffix))
 }
 
 /// Every gear record that can be composed onto the representative rig: a
@@ -305,6 +333,31 @@ mod tests {
         let sorted = identity_parts(&refs, "human");
         assert_eq!(sorted[0].record.id, "fighters.human.runtime.torso");
         assert_eq!(sorted[1].record.id, "fighters.human.runtime.head");
+    }
+
+    #[test]
+    fn identity_parts_excludes_material_channels_from_the_composed_rig() {
+        let mut head = record(
+            "fighters.human.runtime.head",
+            Category::FighterRuntimePart,
+            Status::Runtime,
+        );
+        head.record.attachment = Some("head".to_string());
+        let mut mask = record(
+            "fighters.human.runtime.head-mask",
+            Category::FighterRuntimePart,
+            Status::Runtime,
+        );
+        mask.record.attachment = Some("head".to_string());
+        let refs = vec![&head, &mask];
+
+        let composed = identity_parts(&refs, "human");
+        let channels = identity_material_channels(&refs, "human");
+
+        assert_eq!(composed.len(), 1);
+        assert_eq!(composed[0].record.id, "fighters.human.runtime.head");
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].record.id, "fighters.human.runtime.head-mask");
     }
 
     #[test]

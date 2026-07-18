@@ -1,0 +1,6 @@
+# Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs.
+version = 1
+
+[[ignore]]
+path = "hybrid_character_2d.wgsl"
+reason = "Runtime WGSL source tracked and compiled as code; sidecar schema v1 has no shader kind/category, so media-record fields and image integrity checks do not apply."
