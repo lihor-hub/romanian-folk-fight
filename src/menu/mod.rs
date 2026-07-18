@@ -826,6 +826,8 @@ mod tests {
             &OwnedItems(HashSet::from([ItemId::ToporDePadurar])),
             &PlayerEquipment(equipment),
             &LadderProgress(4),
+            crate::roster::CampaignSeed::default(),
+            None,
             resume_destination,
         )
         .to_json()

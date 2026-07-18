@@ -9,10 +9,11 @@
 pub mod animation;
 pub mod fx;
 
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 
 use crate::character::{
-    Attributes, CharacterDefinition, EnemyFighter, PlayerFighter, spawn_fighter,
+    Attributes, CatalogError, CharacterCatalog, CharacterDefinition, EnemyFighter, GenerationError,
+    PlayerFighter, bundled_human_catalog, fallback_human, spawn_fighter,
 };
 use crate::combat::AiProfile;
 use crate::core::{GameState, despawn_screen};
@@ -23,7 +24,7 @@ use crate::cutout::{
     spawn_cutout_rig_with_accent, spawn_gear_attachment_layers,
 };
 use crate::items::{Equipment, GearMotion};
-use crate::roster::{Boss, CampaignSeed, LadderProgress, Opponent};
+use crate::roster::{Boss, CampaignSeed, LadderProgress, Opponent, PreparedEncounter};
 use crate::theme::GROUND_COLOR;
 use animation::{AnimationSet, FighterClip, FighterSpriteSheets};
 use fx::{ArenaBackgrounds, background_tier, spawn_background};
@@ -48,6 +49,13 @@ const FIGHTER_Y: f32 = GROUND_TOP_Y + FIGHTER_SIZE.y / 2.0;
 pub const PLAYER_ANCHOR: Transform = Transform::from_xyz(-220.0, FIGHTER_Y, 0.0);
 /// Where the opponent stands, facing left; mirrors [`PLAYER_ANCHOR`].
 pub const ENEMY_ANCHOR: Transform = Transform::from_xyz(220.0, FIGHTER_Y, 0.0);
+
+#[derive(SystemParam)]
+struct EncounterResources<'w> {
+    ladder: Option<Res<'w, LadderProgress>>,
+    campaign_seed: Option<Res<'w, CampaignSeed>>,
+    prepared: Option<Res<'w, PreparedEncounter>>,
+}
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ArenaSet {
@@ -87,7 +95,7 @@ impl Plugin for ArenaPlugin {
 fn spawn_arena(
     commands: Commands,
     player: Option<Res<PlayerCharacter>>,
-    encounter: (Option<Res<LadderProgress>>, Option<Res<CampaignSeed>>),
+    encounter: EncounterResources,
     sheets: Res<FighterSpriteSheets>,
     backgrounds: Res<ArenaBackgrounds>,
     asset_server: Option<Res<AssetServer>>,
@@ -105,8 +113,12 @@ fn spawn_arena(
     spawn_scene(
         commands,
         &player,
-        encounter.0,
-        encounter.1.map(|seed| *seed).unwrap_or_default(),
+        encounter.ladder,
+        encounter
+            .campaign_seed
+            .map(|seed| *seed)
+            .unwrap_or_default(),
+        encounter.prepared.as_deref(),
         &backgrounds,
         asset_server.as_deref(),
     );
@@ -117,7 +129,7 @@ fn spawn_arena(
 fn spawn_arena_when_ready(
     commands: Commands,
     player: Option<Res<PlayerCharacter>>,
-    encounter: (Option<Res<LadderProgress>>, Option<Res<CampaignSeed>>),
+    encounter: EncounterResources,
     sheets: Res<FighterSpriteSheets>,
     backgrounds: Res<ArenaBackgrounds>,
     asset_server: Option<Res<AssetServer>>,
@@ -132,8 +144,12 @@ fn spawn_arena_when_ready(
     spawn_scene(
         commands,
         &player,
-        encounter.0,
-        encounter.1.map(|seed| *seed).unwrap_or_default(),
+        encounter.ladder,
+        encounter
+            .campaign_seed
+            .map(|seed| *seed)
+            .unwrap_or_default(),
+        encounter.prepared.as_deref(),
         &backgrounds,
         asset_server.as_deref(),
     );
@@ -147,23 +163,22 @@ fn spawn_scene(
     player: &PlayerCharacter,
     ladder: Option<Res<LadderProgress>>,
     campaign_seed: CampaignSeed,
+    prepared_encounter: Option<&PreparedEncounter>,
     backgrounds: &ArenaBackgrounds,
     asset_server: Option<&AssetServer>,
 ) {
     let ladder = ladder.map(|ladder| *ladder).unwrap_or_default();
     let opponent = ladder.opponent();
-    let seeded_opponent = match ladder.seeded_opponent(campaign_seed) {
-        Some(Ok(generated)) => Some(generated),
-        Some(Err(error)) => {
-            warn!(
-                "could not generate seeded opponent {} ({error}); preserving the authored \
-                 template path",
-                opponent.name
-            );
-            None
-        }
-        None => None,
-    };
+    let seeded_visual = prepared_encounter
+        .filter(|prepared| {
+            ladder.0.is_multiple_of(crate::roster::LADDER.len())
+                && prepared.0.encounter_id == crate::roster::HOT_DE_CODRU_ENCOUNTER_ID
+        })
+        .map(|prepared| SeededEncounterVisual::Generated(prepared.0.clone()))
+        .unwrap_or_else(|| match ladder.seeded_opponent(campaign_seed) {
+            Some(generated) => seeded_encounter_visual(generated, bundled_human_catalog()),
+            None => SeededEncounterVisual::Legacy,
+        });
     spawn_background(&mut commands, backgrounds, background_tier(ladder));
     spawn_scenery(&mut commands);
     let player_fighter = spawn_arena_fighter(
@@ -189,10 +204,13 @@ fn spawn_scene(
             },
         ),
         ENEMY_ANCHOR,
-        seeded_opponent
-            .as_ref()
-            .map(|generated| ArenaRig::Character(&generated.definition))
-            .unwrap_or_else(|| ArenaRig::Template(opponent_template(opponent))),
+        match &seeded_visual {
+            SeededEncounterVisual::Generated(generated) => {
+                ArenaRig::Character(&generated.definition)
+            }
+            SeededEncounterVisual::KnownGood(definition) => ArenaRig::Character(definition),
+            SeededEncounterVisual::Legacy => ArenaRig::Template(opponent_template(opponent)),
+        },
         true,
         asset_server,
         Some(opponent.accent_hue),
@@ -202,13 +220,48 @@ fn spawn_scene(
         equipment.equip(id);
     }
     commands.entity(enemy).insert(equipment);
-    if let Some(generated) = seeded_opponent {
+    if let SeededEncounterVisual::Generated(generated) = seeded_visual {
         commands.entity(enemy).insert(generated);
     }
     if opponent.is_boss {
         commands.entity(enemy).insert(Boss {
             intro_line: opponent.intro_line,
         });
+    }
+}
+
+enum SeededEncounterVisual {
+    Generated(crate::roster::SeededOpponent),
+    KnownGood(CharacterDefinition),
+    Legacy,
+}
+
+fn seeded_encounter_visual(
+    generated: Result<crate::roster::SeededOpponent, GenerationError>,
+    catalog: Result<&CharacterCatalog, CatalogError>,
+) -> SeededEncounterVisual {
+    match generated {
+        Ok(generated) => SeededEncounterVisual::Generated(generated),
+        Err(generation_error) => {
+            warn!(
+                "could not generate seeded opponent ({generation_error}); trying the versioned \
+                 known-good modular human"
+            );
+            let fallback = match catalog {
+                Ok(catalog) => fallback_human(catalog).map_err(|error| error.to_string()),
+                Err(error) => Err(error.to_string()),
+            };
+            match fallback {
+                Ok(definition) => SeededEncounterVisual::KnownGood(definition),
+                Err(fallback_error) => {
+                    error!(
+                        "known-good modular human also failed ({fallback_error}); using the legacy \
+                         authored opponent template"
+                    );
+                    SeededEncounterVisual::Legacy
+                }
+            }
+        }
     }
 }
 
@@ -514,7 +567,7 @@ mod tests {
         gear_sprite, human_template, human_template_for,
     };
     use crate::items::{ItemId, Slot, item_visual};
-    use crate::roster::{CampaignSeed, LADDER, SeededOpponent};
+    use crate::roster::{CampaignSeed, LADDER, PreparedEncounter, SeededOpponent};
     use bevy::state::app::StatesPlugin;
 
     const PLAYER_ATTRIBUTES: Attributes = Attributes {
@@ -1041,6 +1094,52 @@ mod tests {
                 .is_err(),
             "Solomonar keeps the existing human template path"
         );
+    }
+
+    #[test]
+    fn arena_uses_the_prepared_persisted_encounter_instead_of_regenerating_it() {
+        let mut persisted = LadderProgress(0)
+            .seeded_opponent(CampaignSeed::default())
+            .expect("the representative encounter is generated")
+            .expect("the bundled profile resolves");
+        persisted.definition.parts.hair =
+            crate::character::PartId::new("human.hair.long.v1").expect("catalog ID is valid");
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, ArenaPlugin));
+        app.insert_resource(player_character());
+        app.insert_resource(LadderProgress(0));
+        app.insert_resource(CampaignSeed::default());
+        app.insert_resource(PreparedEncounter(persisted.clone()));
+        app.update();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Fight);
+        app.update();
+
+        let combat_identity = app
+            .world_mut()
+            .query_filtered::<&SeededOpponent, With<EnemyFighter>>()
+            .single(app.world())
+            .expect("the seeded enemy carries its exact combat identity");
+        assert_eq!(combat_identity, &persisted);
+    }
+
+    #[test]
+    fn generation_error_uses_known_good_modular_human_before_legacy_template() {
+        let catalog =
+            crate::character::bundled_human_catalog().expect("bundled catalog is available");
+        let choice = seeded_encounter_visual(
+            Err(crate::character::GenerationError::MissingRequiredSlot {
+                region: crate::character::BodyRegion::Hair,
+            }),
+            Ok(catalog),
+        );
+
+        let SeededEncounterVisual::KnownGood(definition) = choice else {
+            panic!("GenerationError must choose the shared known-good modular human first");
+        };
+        assert_eq!(definition.parts, catalog.known_good_human().clone());
     }
 
     /// The enemy's `(FighterName, Attributes, Equipment, Option<Boss>)`.
