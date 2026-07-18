@@ -490,9 +490,10 @@ fn facing_canvas(
     for layer in ordered {
         let href = asset_href_resolved(layer.record);
         let sampler_cls = sampler_class(layer.record.record.sampler);
+        let mirror_cls = if mirrored { " mirrored" } else { "" };
         let b: Box2D = canvas.place(layer.placement, mirrored);
         inner.push_str(&format!(
-            "<img src=\"{href}\" class=\"{sampler_cls}\" style=\"left:{:.1}px;top:{:.1}px;width:{:.1}px;height:{:.1}px;z-index:{};\" alt=\"{}\">\n",
+            "<img src=\"{href}\" class=\"{sampler_cls}{mirror_cls}\" style=\"left:{:.1}px;top:{:.1}px;width:{:.1}px;height:{:.1}px;z-index:{};\" alt=\"{}\">\n",
             b.left, b.top, b.width, b.height, layer.z, escape_html(&layer.record.record.id),
         ));
     }
@@ -809,6 +810,8 @@ mod tests {
         );
         assert!(html.contains("normal facing"));
         assert!(html.contains("mirrored facing"));
+        assert!(html.contains("scaleX(-1)"));
+        assert!(html.contains("class=\"smooth mirrored\""));
         assert!(html.contains("fighters.human.runtime.head"));
     }
 }

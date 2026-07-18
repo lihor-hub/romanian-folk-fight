@@ -516,8 +516,11 @@ fn is_human_material_channel_path(path: &str) -> bool {
     };
     !file_name.is_empty()
         && file_name.ends_with(".png")
+        && file_name
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
         && file_name.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.' | '/')
         })
 }
 
@@ -578,21 +581,51 @@ fn attachment_compatible_with_region(region: BodyRegion, point: &str) -> bool {
 
 fn runtime_asset_attachment(path: &str) -> Option<&'static str> {
     Some(match path {
-        "fighters/human/runtime/hair.png" => "hair",
-        "fighters/human/runtime/head.png" => "head",
-        "fighters/human/runtime/torso.png" => "torso",
-        "fighters/human/runtime/upper_arm_back.png" => "upper_arm_back",
-        "fighters/human/runtime/forearm_back.png" => "forearm_back",
-        "fighters/human/runtime/hand_back.png" => "hand_back",
-        "fighters/human/runtime/thigh_back.png" => "thigh_back",
-        "fighters/human/runtime/shin_back.png" => "shin_back",
-        "fighters/human/runtime/foot_back.png" => "foot_back",
-        "fighters/human/runtime/upper_arm_front.png" => "upper_arm_front",
-        "fighters/human/runtime/forearm_front.png" => "forearm_front",
-        "fighters/human/runtime/hand_front.png" => "hand_front",
-        "fighters/human/runtime/thigh_front.png" => "thigh_front",
-        "fighters/human/runtime/shin_front.png" => "shin_front",
-        "fighters/human/runtime/foot_front.png" => "foot_front",
+        "fighters/human/runtime/hair.png"
+        | "fighters/human/runtime/haiduc/hair.png"
+        | "fighters/human/runtime/cioban/hair.png"
+        | "fighters/human/runtime/shared/hair_scurt.png" => "hair",
+        "fighters/human/runtime/head.png"
+        | "fighters/human/runtime/haiduc/head.png"
+        | "fighters/human/runtime/cioban/head.png" => "head",
+        "fighters/human/runtime/torso.png"
+        | "fighters/human/runtime/haiduc/torso.png"
+        | "fighters/human/runtime/cioban/torso.png" => "torso",
+        "fighters/human/runtime/upper_arm_back.png"
+        | "fighters/human/runtime/haiduc/upper_arm_back.png"
+        | "fighters/human/runtime/cioban/upper_arm_back.png" => "upper_arm_back",
+        "fighters/human/runtime/forearm_back.png"
+        | "fighters/human/runtime/haiduc/forearm_back.png"
+        | "fighters/human/runtime/cioban/forearm_back.png" => "forearm_back",
+        "fighters/human/runtime/hand_back.png"
+        | "fighters/human/runtime/haiduc/hand_back.png"
+        | "fighters/human/runtime/cioban/hand_back.png" => "hand_back",
+        "fighters/human/runtime/thigh_back.png"
+        | "fighters/human/runtime/haiduc/thigh_back.png"
+        | "fighters/human/runtime/cioban/thigh_back.png" => "thigh_back",
+        "fighters/human/runtime/shin_back.png"
+        | "fighters/human/runtime/haiduc/shin_back.png"
+        | "fighters/human/runtime/cioban/shin_back.png" => "shin_back",
+        "fighters/human/runtime/foot_back.png" | "fighters/human/runtime/shared/foot_back.png" => {
+            "foot_back"
+        }
+        "fighters/human/runtime/upper_arm_front.png"
+        | "fighters/human/runtime/haiduc/upper_arm_front.png"
+        | "fighters/human/runtime/cioban/upper_arm_front.png" => "upper_arm_front",
+        "fighters/human/runtime/forearm_front.png"
+        | "fighters/human/runtime/haiduc/forearm_front.png"
+        | "fighters/human/runtime/cioban/forearm_front.png" => "forearm_front",
+        "fighters/human/runtime/hand_front.png"
+        | "fighters/human/runtime/haiduc/hand_front.png"
+        | "fighters/human/runtime/cioban/hand_front.png" => "hand_front",
+        "fighters/human/runtime/thigh_front.png"
+        | "fighters/human/runtime/haiduc/thigh_front.png"
+        | "fighters/human/runtime/cioban/thigh_front.png" => "thigh_front",
+        "fighters/human/runtime/shin_front.png"
+        | "fighters/human/runtime/haiduc/shin_front.png"
+        | "fighters/human/runtime/cioban/shin_front.png" => "shin_front",
+        "fighters/human/runtime/foot_front.png"
+        | "fighters/human/runtime/shared/foot_front.png" => "foot_front",
         _ => return None,
     })
 }
@@ -869,7 +902,7 @@ mod tests {
     use serde_json::Value;
 
     use crate::character::{
-        CHARACTER_DEFINITION_VERSION, CharacterDefinition, CulturalProfile, PartId,
+        CHARACTER_DEFINITION_VERSION, CharacterDefinition, CulturalProfile, PartId, PartSelections,
         PlayerAppearance, SkeletonFamily,
     };
 
@@ -896,6 +929,24 @@ mod tests {
         "foot_front",
     ];
 
+    const HAIDUC_LOOK: [&str; 6] = [
+        "human.body.zvelt.v1",
+        "human.face.haiduc.v1",
+        "human.hair.plete.v1",
+        "human.torso.ie_altita.v1",
+        "human.legs.itari.v1",
+        "human.feet.opinci.v1",
+    ];
+
+    const CIOBAN_LOOK: [&str; 6] = [
+        "human.body.vanjos.v1",
+        "human.face.cioban.v1",
+        "human.hair.prins.v1",
+        "human.torso.camasa_ciobaneasca.v1",
+        "human.legs.cioareci.v1",
+        "human.feet.opinci.v1",
+    ];
+
     fn id(value: &str) -> PartId {
         PartId::new(value).expect("test ID is valid")
     }
@@ -909,18 +960,6 @@ mod tests {
 
     fn fixture_from(value: Value) -> CharacterCatalog {
         CharacterCatalog::from_json(&value.to_string()).expect("fixture remains valid JSON")
-    }
-
-    fn fixture_without(id: &str) -> CharacterCatalog {
-        let mut value: Value = serde_json::from_str(include_str!(
-            "../../assets/fighters/catalog/human-foundation.json"
-        ))
-        .expect("human foundation fixture is valid JSON");
-        value["parts"]
-            .as_array_mut()
-            .expect("fixture has parts")
-            .retain(|part| part["id"] != id);
-        fixture_from(value)
     }
 
     fn fixture_with_layer_removed(part_id: &str, attachment: &str) -> CharacterCatalog {
@@ -938,6 +977,57 @@ mod tests {
             .expect("part has layers")
             .retain(|layer| layer["attachment"]["point"] != attachment);
         fixture_from(value)
+    }
+
+    fn definition_for(parts: [&str; 6], role: &str) -> CharacterDefinition {
+        CharacterDefinition {
+            version: CHARACTER_DEFINITION_VERSION,
+            seed: None,
+            skeleton: SkeletonFamily::Human,
+            culture: CulturalProfile {
+                tags: vec!["romanian".to_owned(), role.to_owned()],
+            },
+            parts: PartSelections {
+                body: id(parts[0]),
+                face: id(parts[1]),
+                hair: id(parts[2]),
+                facial_hair: None,
+                torso: id(parts[3]),
+                legs: id(parts[4]),
+                feet: id(parts[5]),
+                waist: None,
+                accessories: Vec::new(),
+            },
+            appearance: PlayerAppearance::default(),
+        }
+    }
+
+    #[test]
+    fn bundled_catalog_resolves_complete_haiduc_and_cioban_looks() {
+        let catalog = fixture();
+        catalog
+            .validate()
+            .expect("bundled production catalog validates");
+
+        for (role, selected_ids) in [("haiduc", HAIDUC_LOOK), ("cioban", CIOBAN_LOOK)] {
+            for stable_id in selected_ids {
+                let record = catalog
+                    .part(&id(stable_id))
+                    .unwrap_or_else(|| panic!("missing production part {stable_id}"));
+                validate_part_content(record)
+                    .unwrap_or_else(|error| panic!("invalid bundle {stable_id}: {error}"));
+            }
+
+            let resolved = catalog
+                .resolve(&definition_for(selected_ids, role))
+                .unwrap_or_else(|error| panic!("{role} look must resolve: {error}"));
+            let resolved_ids = resolved
+                .parts()
+                .keys()
+                .map(PartId::as_str)
+                .collect::<HashSet<_>>();
+            assert_eq!(resolved_ids, selected_ids.into_iter().collect());
+        }
     }
 
     #[test]
@@ -1299,7 +1389,15 @@ mod tests {
 
     #[test]
     fn human_catalog_rejects_a_missing_torso() {
-        let catalog = fixture_without("human.torso.linen.v1");
+        let mut value: Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("human foundation fixture is valid JSON");
+        value["parts"]
+            .as_array_mut()
+            .expect("fixture has parts")
+            .retain(|part| part["region"] != "torso");
+        let catalog = fixture_from(value);
 
         assert_eq!(
             catalog.validate(),
