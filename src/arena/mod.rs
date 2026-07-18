@@ -573,7 +573,10 @@ mod tests {
         gear_sprite, human_template,
     };
     use crate::items::{ItemId, Slot, item_visual};
-    use crate::roster::{CampaignSeed, LADDER, PreparedEncounter, SeededOpponent};
+    use crate::roster::{
+        ALTERNATE_UNLOCKED_HAIR_CAMPAIGN_SEED, CampaignSeed, LADDER, PreparedEncounter,
+        SeededOpponent,
+    };
     use bevy::state::app::StatesPlugin;
 
     const PLAYER_ATTRIBUTES: Attributes = Attributes {
@@ -1054,7 +1057,10 @@ mod tests {
 
         let mut first_entry = test_app_at_with_campaign_seed(LadderProgress(0), 0);
         let mut repeated_entry = test_app_at_with_campaign_seed(LadderProgress(0), 0);
-        let mut alternate_entry = test_app_at_with_campaign_seed(LadderProgress(0), 1);
+        let mut alternate_entry = test_app_at_with_campaign_seed(
+            LadderProgress(0),
+            ALTERNATE_UNLOCKED_HAIR_CAMPAIGN_SEED,
+        );
 
         let first = generated(&mut first_entry);
         let repeated = generated(&mut repeated_entry);

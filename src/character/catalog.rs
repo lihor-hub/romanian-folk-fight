@@ -229,6 +229,11 @@ impl CharacterCatalog {
         self.parts.get(id)
     }
 
+    /// Every validated authored record, for renderer-owned asset preloading.
+    pub(crate) fn records(&self) -> impl Iterator<Item = &PartRecord> {
+        self.parts.values()
+    }
+
     /// Returns every part compatible with the requested semantic slot,
     /// skeleton, and cultural profile.
     ///

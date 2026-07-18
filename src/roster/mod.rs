@@ -40,6 +40,11 @@ const LAP_BONUS_PERCENT: u32 = 20;
 /// or combat-RNG behavior.
 pub const DEFAULT_CAMPAIGN_SEED: u64 = 0;
 
+/// Test fixture that changes the first generated human's unlocked hair while
+/// preserving every locked choice in the current bundled catalog.
+#[cfg(test)]
+pub(crate) const ALTERNATE_UNLOCKED_HAIR_CAMPAIGN_SEED: u64 = 26;
+
 /// Stable authored identity of the first generated-human tracer bullet.
 /// This deliberately does not reuse the display name: copy changes and the
 /// Romanian lap suffix must not silently reroll the fighter.

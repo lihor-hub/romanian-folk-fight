@@ -9,8 +9,9 @@ use bevy::{
     shader::ShaderRef,
     sprite_render::{AlphaMode2d, Material2d},
 };
+use std::collections::{BTreeMap, BTreeSet};
 
-use super::{PaletteRegion, PartId, PartLayerRecord};
+use super::{CharacterCatalog, PaletteRegion, PartId, PartLayerRecord};
 
 const HYBRID_CHARACTER_SHADER: &str = "shaders/hybrid_character_2d.wgsl";
 
@@ -86,6 +87,78 @@ pub(crate) struct PendingHybridCharacterMaterial {
     pub size: Vec2,
     pub color: Color,
     pub flip_x: bool,
+}
+
+/// Strong handles for every catalog-backed character image. Keeping these
+/// alive prevents a wardrobe swap from dropping the final handle while a
+/// differently configured channel load is still being resolved.
+#[derive(Resource, Default)]
+pub(crate) struct HybridCharacterImagePreloads(Vec<Handle<Image>>);
+
+pub(crate) fn preload_catalog_hybrid_images(
+    asset_server: Option<Res<AssetServer>>,
+    catalog: Option<Res<CharacterCatalog>>,
+    mut preloads: ResMut<HybridCharacterImagePreloads>,
+) {
+    let (Some(asset_server), Some(catalog)) = (asset_server, catalog) else {
+        return;
+    };
+    let manifest = match catalog_hybrid_image_preloads(&catalog) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            preloads.0.clear();
+            error!("character material preload rejected: {error}");
+            return;
+        }
+    };
+    preloads.0 = manifest
+        .into_iter()
+        .map(|(path, linear)| {
+            if linear {
+                load_linear_image(&asset_server, &path)
+            } else {
+                asset_server.load(path)
+            }
+        })
+        .collect();
+}
+
+fn catalog_hybrid_image_preloads(
+    catalog: &CharacterCatalog,
+) -> Result<BTreeSet<(String, bool)>, String> {
+    let mut paths = Vec::new();
+    for layer in catalog.records().flat_map(|part| &part.layers) {
+        paths.push((layer.asset_path.clone(), false));
+        for path in [
+            layer.material.mask_path.as_ref(),
+            layer.material.normal_path.as_ref(),
+            layer.material.shadow_path.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            paths.push((path.clone(), true));
+        }
+    }
+    validated_hybrid_image_preloads(paths)
+}
+
+fn validated_hybrid_image_preloads(
+    paths: impl IntoIterator<Item = (String, bool)>,
+) -> Result<BTreeSet<(String, bool)>, String> {
+    let mut color_spaces = BTreeMap::new();
+    let mut manifest = BTreeSet::new();
+    for (path, linear) in paths {
+        if let Some(previous) = color_spaces.insert(path.clone(), linear)
+            && previous != linear
+        {
+            return Err(format!(
+                "image {path:?} is configured as both sRGB albedo and linear material data"
+            ));
+        }
+        manifest.insert((path, linear));
+    }
+    Ok(manifest)
 }
 
 pub(crate) fn pending_hybrid_material_for(
@@ -239,7 +312,10 @@ fn bounded_or_default(value: Option<f32>, default: f32, min: f32, max: f32) -> f
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::character::{AttachmentMetadata, MaterialMetadata};
+    use crate::{
+        character::{AttachmentMetadata, MaterialMetadata, bundled_human_catalog},
+        creation::{CharacterDraft, HeroChoice, HeroPreset},
+    };
 
     fn layer_with(material: MaterialMetadata) -> (PartId, PartLayerRecord) {
         (
@@ -423,6 +499,78 @@ mod tests {
             app.world()
                 .get::<PendingHybridCharacterMaterial>(entity)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn catalog_preload_manifest_retains_every_cioban_material_channel() {
+        let catalog = bundled_human_catalog().expect("bundled catalog parses");
+        let mut draft = CharacterDraft::default_with_catalog(catalog).expect("default draft");
+        draft
+            .select_choice(HeroChoice::Preset(HeroPreset::Ciobanul), catalog)
+            .expect("Cioban preset resolves");
+        let resolved = catalog
+            .resolve(draft.definition())
+            .expect("Cioban resolves");
+        let manifest = catalog_hybrid_image_preloads(catalog).expect("catalog roles are disjoint");
+
+        for layer in resolved.parts().values().flat_map(|part| &part.layers) {
+            assert!(
+                manifest.contains(&(layer.asset_path.clone(), false)),
+                "missing retained sRGB albedo preload for {}",
+                layer.asset_path
+            );
+            for path in [
+                layer.material.mask_path.as_ref(),
+                layer.material.normal_path.as_ref(),
+                layer.material.shadow_path.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                assert!(
+                    manifest.contains(&(path.clone(), true)),
+                    "missing retained linear preload for {path}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn startup_preloader_keeps_strong_handles_for_the_complete_manifest() {
+        let catalog = bundled_human_catalog().expect("bundled catalog parses");
+        let expected = catalog_hybrid_image_preloads(catalog)
+            .expect("catalog roles are disjoint")
+            .len();
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<Image>()
+            .insert_resource(catalog.clone())
+            .init_resource::<HybridCharacterImagePreloads>()
+            .add_systems(Startup, preload_catalog_hybrid_images);
+
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<HybridCharacterImagePreloads>()
+                .0
+                .len(),
+            expected,
+            "every catalog image load must retain its strong handle for wardrobe swaps"
+        );
+    }
+
+    #[test]
+    fn preload_manifest_rejects_one_path_in_two_color_spaces() {
+        let result = validated_hybrid_image_preloads([
+            ("fighters/shared.png".to_owned(), false),
+            ("fighters/shared.png".to_owned(), true),
+        ]);
+
+        assert!(
+            result.is_err(),
+            "one Bevy asset path cannot safely identify both an sRGB albedo and a linear data texture"
         );
     }
 }

@@ -12,8 +12,9 @@ use crate::character::{
     AccentColor, BodyBuild, CatalogError, CharacterCatalog, CharacterDefinition, HairStyle, PartId,
     PartRecord, PlayerAppearance, ResolvedCharacter, SkinTone, bundled_human_catalog,
     material::{
-        HybridCharacterMaterial, PendingHybridCharacterMaterial, ResolvedPartMaterial,
-        pending_hybrid_material_for, promote_ready_hybrid_materials, resolve_material_for_layer,
+        HybridCharacterImagePreloads, HybridCharacterMaterial, PendingHybridCharacterMaterial,
+        ResolvedPartMaterial, pending_hybrid_material_for, preload_catalog_hybrid_images,
+        promote_ready_hybrid_materials, resolve_material_for_layer,
     },
 };
 use crate::items::{Equipment, GearAttachment, GearMotion, ItemId, ItemVisual, Slot, item_visual};
@@ -31,7 +32,9 @@ impl Plugin for CutoutRigPlugin {
         if app.world().contains_resource::<AssetServer>() {
             app.add_plugins(Material2dPlugin::<HybridCharacterMaterial>::default());
         }
-        app.add_systems(Update, promote_ready_hybrid_materials);
+        app.init_resource::<HybridCharacterImagePreloads>()
+            .add_systems(Startup, preload_catalog_hybrid_images)
+            .add_systems(Update, promote_ready_hybrid_materials);
     }
 }
 
@@ -1705,14 +1708,14 @@ mod tests {
 
     #[test]
     fn seeded_hair_ids_change_rendered_hair_while_locked_parts_stay_stable() {
-        use crate::roster::{CampaignSeed, LadderProgress};
+        use crate::roster::{ALTERNATE_UNLOCKED_HAIR_CAMPAIGN_SEED, CampaignSeed, LadderProgress};
 
         let first = LadderProgress(0)
             .seeded_opponent(CampaignSeed(0))
             .expect("the first encounter is generated")
             .expect("the bundled profile resolves");
         let alternate = LadderProgress(0)
-            .seeded_opponent(CampaignSeed(1))
+            .seeded_opponent(CampaignSeed(ALTERNATE_UNLOCKED_HAIR_CAMPAIGN_SEED))
             .expect("the first encounter is generated")
             .expect("the bundled profile resolves");
         assert_ne!(first.definition.parts.hair, alternate.definition.parts.hair);
@@ -1733,7 +1736,12 @@ mod tests {
                 .into_iter()
                 .find(|part| part.kind == CutoutPartKind::Hair)
                 .expect("human rig renders hair");
-            (hair.offset, hair.size, hair.color)
+            (
+                hair.offset,
+                hair.size,
+                hair.color,
+                hair.material.map(|material| material.albedo_path),
+            )
         };
 
         assert_ne!(

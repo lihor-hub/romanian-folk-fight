@@ -113,7 +113,7 @@ use crate::core::{
     GameState, LetterboxRect, ViewportInfo, WorldCamera, logical_node_rect,
     screen_point_for_world_point,
 };
-use crate::creation::{CharacterDraft, CreationAction, HeroChoice, HeroPreset};
+use crate::creation::{CharacterDraft, CreationAction, HeroChoice, HeroPreset, PlayerCharacter};
 use crate::cutout::{CutoutPartKind, CutoutPartMarker, CutoutRig, cutout_rig_owner};
 use crate::items::ItemId;
 use crate::menu::{DisabledButton, MenuAction};
@@ -188,6 +188,11 @@ pub const REVIEW_ENCOUNTER_KEY: &str = "rff_review_encounter_v1";
 /// hybrid-material browser scenario reads semantic ECS facts here instead of
 /// trying to infer identity or material promotion from screenshot pixels.
 pub const REVIEW_HYBRID_CHARACTER_KEY: &str = "rff_review_hybrid_character_v1";
+/// Reload-persistent, cross-scene identity proof for #323's authored
+/// Romanian paper-doll library. Unlike the current-screen hybrid snapshot,
+/// this payload accumulates creation, shop, restored-shop, and arena facts so
+/// one browser journey can compare exact provenance across a real page reload.
+pub const REVIEW_PAPER_DOLL_KEY: &str = "rff_review_paper_doll_v1";
 
 /// One command the harness can queue through [`REVIEW_COMMAND_KEY`]. Plain
 /// JSON via `serde`, tagged by `cmd` so the wire format is a flat, readable
@@ -341,9 +346,11 @@ impl Plugin for ReviewPlugin {
                     publish_accessibility_state,
                     publish_encounter_identity_state,
                     publish_hybrid_character_state,
+                    publish_paper_doll_state,
                     autoplay_player_turn,
                 ),
             );
+        app.init_resource::<PaperDollReviewState>();
     }
 }
 
@@ -366,26 +373,29 @@ struct GeneratedOpponentSnapshot {
 }
 
 fn generated_opponent_snapshot(generated: &SeededOpponent) -> GeneratedOpponentSnapshot {
-    let parts = &generated.definition.parts;
-    let mut resolved_part_ids = vec![
+    GeneratedOpponentSnapshot {
+        encounter_id: generated.encounter_id.to_owned(),
+        seed: generated.seed,
+        resolved_part_ids: resolved_part_ids(&generated.definition),
+    }
+}
+
+fn resolved_part_ids(definition: &crate::character::CharacterDefinition) -> Vec<String> {
+    let parts = &definition.parts;
+    let mut ids = vec![
         parts.body.to_string(),
         parts.face.to_string(),
         parts.hair.to_string(),
     ];
-    resolved_part_ids.extend(parts.facial_hair.iter().map(ToString::to_string));
-    resolved_part_ids.extend([
+    ids.extend(parts.facial_hair.iter().map(ToString::to_string));
+    ids.extend([
         parts.torso.to_string(),
         parts.legs.to_string(),
         parts.feet.to_string(),
     ]);
-    resolved_part_ids.extend(parts.waist.iter().map(ToString::to_string));
-    resolved_part_ids.extend(parts.accessories.iter().map(ToString::to_string));
-
-    GeneratedOpponentSnapshot {
-        encounter_id: generated.encounter_id.to_owned(),
-        seed: generated.seed,
-        resolved_part_ids,
-    }
+    ids.extend(parts.waist.iter().map(ToString::to_string));
+    ids.extend(parts.accessories.iter().map(ToString::to_string));
+    ids
 }
 
 #[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
@@ -551,6 +561,267 @@ fn publish_hybrid_character_state(
         // Never let a previous root's valid payload survive an incomplete or
         // failed publish from the current root.
         clear_hybrid_character();
+    }
+}
+
+const PAPER_DOLL_RIG_ORDER: [CutoutPartKind; 15] = [
+    CutoutPartKind::UpperArmBack,
+    CutoutPartKind::ForearmBack,
+    CutoutPartKind::HandBack,
+    CutoutPartKind::ThighBack,
+    CutoutPartKind::ShinBack,
+    CutoutPartKind::FootBack,
+    CutoutPartKind::Torso,
+    CutoutPartKind::Hair,
+    CutoutPartKind::Head,
+    CutoutPartKind::UpperArmFront,
+    CutoutPartKind::ForearmFront,
+    CutoutPartKind::HandFront,
+    CutoutPartKind::ThighFront,
+    CutoutPartKind::ShinFront,
+    CutoutPartKind::FootFront,
+];
+
+/// One exact identity rendered by one fresh scene root. `screen` and
+/// `root_entity` are part of the fact rather than surrounding metadata so a
+/// stale creation/shop payload can never satisfy a later browser wait.
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq, Eq)]
+struct PaperDollIdentityFact {
+    screen: String,
+    root_entity: String,
+    seed: Option<u64>,
+    resolved_part_ids: Vec<String>,
+    rig_source_ids: Vec<String>,
+    part_count: usize,
+    hybrid_part_count: usize,
+    fallback_part_count: usize,
+}
+
+fn paper_doll_identity_fact(
+    definition: &crate::character::CharacterDefinition,
+    screen: &str,
+    root_entity: &str,
+    parts: &[CharacterPartSample],
+) -> Option<PaperDollIdentityFact> {
+    if parts.len() != PAPER_DOLL_RIG_ORDER.len() {
+        return None;
+    }
+    let rig_source_ids = PAPER_DOLL_RIG_ORDER
+        .into_iter()
+        .map(|kind| {
+            let mut matches = parts.iter().filter(|part| part.kind == kind);
+            let source_id = matches.next()?.source_id.clone()?;
+            matches.next().is_none().then_some(source_id)
+        })
+        .collect::<Option<Vec<_>>>()?;
+
+    Some(PaperDollIdentityFact {
+        screen: screen.to_owned(),
+        root_entity: root_entity.to_owned(),
+        seed: definition.seed,
+        resolved_part_ids: resolved_part_ids(definition),
+        rig_source_ids,
+        part_count: parts.len(),
+        hybrid_part_count: parts.iter().filter(|part| part.hybrid_material).count(),
+        fallback_part_count: parts.iter().filter(|part| part.pending_material).count(),
+    })
+}
+
+/// Accumulated browser proof. Optional fields make intermediate states
+/// serializable while a journey is in progress; acceptance requires every
+/// field before it proceeds to the next authored identity.
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default, PartialEq, Eq)]
+struct PaperDollReviewSnapshot {
+    creation: Option<PaperDollIdentityFact>,
+    shop: Option<PaperDollIdentityFact>,
+    reloaded: Option<PaperDollIdentityFact>,
+    combat_player: Option<PaperDollIdentityFact>,
+    combat_npc: Option<PaperDollIdentityFact>,
+}
+
+/// In-memory session markers distinguish a first shop visit from the same
+/// saved run restored into a new WASM instance. The accumulated payload is
+/// loaded from localStorage once after boot, while these markers deliberately
+/// reset on a page reload.
+#[derive(Resource, Debug, Default)]
+struct PaperDollReviewState {
+    snapshot: PaperDollReviewSnapshot,
+    loaded: bool,
+    boot_id: u64,
+    creation_root: Option<String>,
+    shop_root: Option<String>,
+    shop_is_reload: bool,
+}
+
+fn paper_doll_root_marker(boot_id: u64, entity: impl std::fmt::Display) -> String {
+    format!("boot{boot_id}:{entity}")
+}
+
+fn next_paper_doll_boot_id(snapshot: &PaperDollReviewSnapshot) -> u64 {
+    [
+        snapshot.creation.as_ref(),
+        snapshot.shop.as_ref(),
+        snapshot.reloaded.as_ref(),
+        snapshot.combat_player.as_ref(),
+        snapshot.combat_npc.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|fact| {
+        fact.root_entity
+            .strip_prefix("boot")?
+            .split_once(':')?
+            .0
+            .parse::<u64>()
+            .ok()
+    })
+    .max()
+    .unwrap_or(0)
+    .saturating_add(1)
+}
+
+fn paper_doll_samples_for_root(
+    root: Entity,
+    ancestry: &Query<&ChildOf, With<CutoutPartMarker>>,
+    parts: &HybridCharacterPartQuery,
+) -> Vec<CharacterPartSample> {
+    parts
+        .iter()
+        .filter(|(entity, _, _, _)| {
+            cutout_rig_owner(*entity, |child| {
+                ancestry.get(child).ok().map(ChildOf::parent)
+            }) == root
+        })
+        .map(
+            |(_, marker, hybrid_material, pending_material)| CharacterPartSample {
+                kind: marker.kind,
+                source_id: marker.source_id.as_ref().map(ToString::to_string),
+                hybrid_material,
+                pending_material,
+            },
+        )
+        .collect()
+}
+
+// This review adapter intentionally joins all three scene-owned identity
+// resources with both fighter roots. Keeping it as one read-only system makes
+// the localStorage snapshot atomic from the browser's perspective.
+#[allow(clippy::too_many_arguments)]
+fn publish_paper_doll_state(
+    mut review: ResMut<PaperDollReviewState>,
+    state: Res<State<GameState>>,
+    draft: Res<CharacterDraft>,
+    player: Option<Res<PlayerCharacter>>,
+    prepared: Option<Res<PreparedEncounter>>,
+    roots: Query<(Entity, Has<PlayerFighter>, Has<EnemyFighter>), With<CutoutRig>>,
+    live_opponents: Query<&SeededOpponent, With<EnemyFighter>>,
+    ancestry: Query<&ChildOf, With<CutoutPartMarker>>,
+    parts: HybridCharacterPartQuery,
+) {
+    if !review.loaded {
+        review.snapshot = load_paper_doll_snapshot().unwrap_or_default();
+        review.boot_id = next_paper_doll_boot_id(&review.snapshot);
+        review.loaded = true;
+    }
+
+    match state.get() {
+        GameState::CharacterCreation => {
+            let Some(root) = roots
+                .iter()
+                .find_map(|(entity, player, enemy)| (!player && !enemy).then_some(entity))
+            else {
+                return;
+            };
+            let root_entity = paper_doll_root_marker(review.boot_id, format_args!("{root:?}"));
+            let samples = paper_doll_samples_for_root(root, &ancestry, &parts);
+            let Some(fact) = paper_doll_identity_fact(
+                draft.definition(),
+                "CharacterCreation",
+                &root_entity,
+                &samples,
+            ) else {
+                return;
+            };
+            if review.creation_root.as_deref() != Some(&root_entity) {
+                review.snapshot = PaperDollReviewSnapshot::default();
+                review.creation_root = Some(root_entity);
+                review.shop_root = None;
+                review.shop_is_reload = false;
+            }
+            review.snapshot.creation = Some(fact);
+        }
+        GameState::Shop => {
+            let Some(player) = player.as_deref() else {
+                return;
+            };
+            let Some(root) = roots
+                .iter()
+                .find_map(|(entity, player, enemy)| (!player && !enemy).then_some(entity))
+            else {
+                return;
+            };
+            let root_entity = paper_doll_root_marker(review.boot_id, format_args!("{root:?}"));
+            let samples = paper_doll_samples_for_root(root, &ancestry, &parts);
+            let Some(fact) =
+                paper_doll_identity_fact(&player.definition, "Shop", &root_entity, &samples)
+            else {
+                return;
+            };
+            if review.shop_root.as_deref() != Some(&root_entity) {
+                review.shop_is_reload = review.snapshot.shop.is_some();
+                review.shop_root = Some(root_entity);
+            }
+            if review.shop_is_reload {
+                review.snapshot.reloaded = Some(fact);
+            } else {
+                review.snapshot.shop = Some(fact);
+            }
+        }
+        GameState::Fight => {
+            let Some(player) = player.as_deref() else {
+                return;
+            };
+            let (Some(player_root), Some(enemy_root)) = roots.iter().fold(
+                (None, None),
+                |(player_root, enemy_root), (entity, is_player, is_enemy)| {
+                    (
+                        player_root.or(is_player.then_some(entity)),
+                        enemy_root.or(is_enemy.then_some(entity)),
+                    )
+                },
+            ) else {
+                return;
+            };
+            if let Some(fact) = paper_doll_identity_fact(
+                &player.definition,
+                "Fight",
+                &paper_doll_root_marker(review.boot_id, format_args!("{player_root:?}")),
+                &paper_doll_samples_for_root(player_root, &ancestry, &parts),
+            ) {
+                review.snapshot.combat_player = Some(fact);
+            }
+
+            // Later ladder rungs are not generated humans. Publish the player
+            // fact regardless, while retaining the already-proven seeded Hoț
+            // preview/live fact from the first arena instead of suppressing
+            // the whole cross-scene payload on a non-seeded opponent.
+            if let (Some(prepared), Ok(live)) = (prepared.as_deref(), live_opponents.single())
+                && live == &prepared.0
+                && let Some(fact) = paper_doll_identity_fact(
+                    &prepared.0.definition,
+                    "Fight",
+                    &paper_doll_root_marker(review.boot_id, format_args!("{enemy_root:?}")),
+                    &paper_doll_samples_for_root(enemy_root, &ancestry, &parts),
+                )
+            {
+                review.snapshot.combat_npc = Some(fact);
+            }
+        }
+        _ => {}
+    }
+
+    if let Ok(json) = serde_json::to_string(&review.snapshot) {
+        publish_paper_doll(&json);
     }
 }
 
@@ -1462,6 +1733,30 @@ fn publish_hybrid_character(json: &str) {
 fn publish_hybrid_character(_json: &str) {}
 
 #[cfg(target_arch = "wasm32")]
+fn load_paper_doll_snapshot() -> Option<PaperDollReviewSnapshot> {
+    let json = local_storage()?
+        .get_item(REVIEW_PAPER_DOLL_KEY)
+        .ok()
+        .flatten()?;
+    serde_json::from_str(&json).ok()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_paper_doll_snapshot() -> Option<PaperDollReviewSnapshot> {
+    None
+}
+
+#[cfg(target_arch = "wasm32")]
+fn publish_paper_doll(json: &str) {
+    if let Some(storage) = local_storage() {
+        let _ = storage.set_item(REVIEW_PAPER_DOLL_KEY, json);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_paper_doll(_json: &str) {}
+
+#[cfg(target_arch = "wasm32")]
 fn clear_hybrid_character() {
     if let Some(storage) = local_storage() {
         let _ = storage.remove_item(REVIEW_HYBRID_CHARACTER_KEY);
@@ -1827,6 +2122,145 @@ mod tests {
         assert_eq!(fallback.part_count, hybrid.part_count);
         assert_eq!(fallback.material_part_count, hybrid.material_part_count);
         assert_eq!(fallback.render_path, CharacterRenderPath::AlbedoFallback);
+    }
+
+    fn representative_paper_doll_fact(
+        definition: &crate::character::CharacterDefinition,
+        screen: &str,
+        root_entity: &str,
+        promoted: bool,
+    ) -> PaperDollIdentityFact {
+        let catalog = crate::character::bundled_human_catalog().unwrap();
+        let resolved = catalog.resolve(definition).unwrap();
+        let samples = crate::cutout::rig_template_for(&resolved)
+            .parts
+            .into_iter()
+            .map(|part| CharacterPartSample {
+                kind: part.kind,
+                source_id: part.source_id.map(|id| id.to_string()),
+                hybrid_material: promoted && part.material.is_some(),
+                pending_material: !promoted && part.material.is_some(),
+            })
+            .collect::<Vec<_>>();
+        paper_doll_identity_fact(definition, screen, root_entity, &samples).unwrap()
+    }
+
+    #[test]
+    fn paper_doll_snapshot_keeps_haiduc_identity_across_every_player_scene() {
+        let catalog = crate::character::bundled_human_catalog().unwrap();
+        let mut draft = CharacterDraft::default_with_catalog(catalog).unwrap();
+        draft
+            .select_choice(HeroChoice::Preset(HeroPreset::Haiducul), catalog)
+            .unwrap();
+        let definition = draft.definition().clone();
+        let creation =
+            representative_paper_doll_fact(&definition, "CharacterCreation", "10v0", true);
+
+        let player = crate::creation::PlayerCharacter {
+            name: draft.name().to_owned(),
+            attributes: draft.attributes(),
+            appearance: draft.appearance(),
+            definition,
+        };
+        let save = crate::save::SaveGame::capture(
+            &player,
+            &crate::progression::Level::default(),
+            &crate::progression::Wallet::default(),
+            &crate::progression::LifetimeEarnings::default(),
+            &crate::shop::OwnedItems::default(),
+            &crate::shop::PlayerEquipment::default(),
+            &crate::roster::LadderProgress::default(),
+            CampaignSeed(323),
+            None,
+            crate::save::ResumeDestination::Shop,
+        );
+        let reloaded_player = crate::save::SaveGame::from_json(&save.to_json().unwrap())
+            .unwrap()
+            .player_character();
+        let shop = representative_paper_doll_fact(&player.definition, "Shop", "20v0", true);
+        let reloaded =
+            representative_paper_doll_fact(&reloaded_player.definition, "Shop", "30v1", true);
+        let combat_player =
+            representative_paper_doll_fact(&reloaded_player.definition, "Fight", "40v0", true);
+        let generated = crate::roster::LadderProgress::default()
+            .seeded_opponent(CampaignSeed(323))
+            .unwrap()
+            .unwrap();
+        let combat_npc =
+            representative_paper_doll_fact(&generated.definition, "Fight", "41v0", true);
+        let snapshot = PaperDollReviewSnapshot {
+            creation: Some(creation.clone()),
+            shop: Some(shop.clone()),
+            reloaded: Some(reloaded.clone()),
+            combat_player: Some(combat_player.clone()),
+            combat_npc: Some(combat_npc.clone()),
+        };
+
+        assert_eq!(creation.resolved_part_ids, shop.resolved_part_ids);
+        assert_eq!(creation.resolved_part_ids, reloaded.resolved_part_ids);
+        assert_eq!(creation.resolved_part_ids, combat_player.resolved_part_ids);
+        assert_eq!(creation.rig_source_ids, combat_player.rig_source_ids);
+        assert_eq!(creation.part_count, 15);
+        assert!(creation.hybrid_part_count > 0);
+        assert_eq!(creation.fallback_part_count, 0);
+        assert_ne!(creation.resolved_part_ids, combat_npc.resolved_part_ids);
+        assert_eq!(combat_npc.seed, Some(generated.seed));
+        assert_eq!(snapshot.combat_npc.unwrap().root_entity, "41v0");
+    }
+
+    #[test]
+    fn paper_doll_snapshot_keeps_cioban_identity_and_seeded_npc_provenance() {
+        let catalog = crate::character::bundled_human_catalog().unwrap();
+        let mut draft = CharacterDraft::default_with_catalog(catalog).unwrap();
+        draft
+            .select_choice(HeroChoice::Preset(HeroPreset::Ciobanul), catalog)
+            .unwrap();
+        let creation =
+            representative_paper_doll_fact(draft.definition(), "CharacterCreation", "50v0", true);
+        let combat_player =
+            representative_paper_doll_fact(draft.definition(), "Fight", "60v0", true);
+        let generated = crate::roster::LadderProgress::default()
+            .seeded_opponent(CampaignSeed(323))
+            .unwrap()
+            .unwrap();
+        let preview = representative_paper_doll_fact(
+            &generated.definition,
+            "FightPreview",
+            "prepared:323",
+            true,
+        );
+        let combat_npc =
+            representative_paper_doll_fact(&generated.definition, "Fight", "61v0", true);
+
+        assert_eq!(creation.resolved_part_ids, combat_player.resolved_part_ids);
+        assert_eq!(preview.seed, combat_npc.seed);
+        assert_eq!(preview.resolved_part_ids, combat_npc.resolved_part_ids);
+        assert_eq!(preview.rig_source_ids, combat_npc.rig_source_ids);
+        assert_eq!(combat_npc.part_count, 15);
+        assert!(combat_npc.hybrid_part_count > 0);
+        assert_eq!(combat_npc.fallback_part_count, 0);
+        assert_ne!(creation.resolved_part_ids, combat_npc.resolved_part_ids);
+    }
+
+    #[test]
+    fn paper_doll_root_markers_stay_fresh_when_entity_ids_repeat_after_reload() {
+        let mut snapshot = PaperDollReviewSnapshot::default();
+        let mut creation = representative_paper_doll_fact(
+            CharacterDraft::default().definition(),
+            "CharacterCreation",
+            "boot7:42v0",
+            true,
+        );
+        creation.root_entity = paper_doll_root_marker(7, "42v0");
+        snapshot.creation = Some(creation);
+
+        let next_boot = next_paper_doll_boot_id(&snapshot);
+
+        assert_eq!(next_boot, 8);
+        assert_ne!(
+            snapshot.creation.unwrap().root_entity,
+            paper_doll_root_marker(next_boot, "42v0")
+        );
     }
 
     fn representative_hybrid_part_samples(promoted: bool) -> Vec<CharacterPartSample> {
