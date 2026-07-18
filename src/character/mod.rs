@@ -1,7 +1,13 @@
 //! Character model: folk-flavored attributes, resource pools, and fighter
 //! markers shared by combat, character creation, shop, and progression.
 
+pub mod definition;
 pub mod stats;
+
+pub use definition::{
+    CHARACTER_DEFINITION_VERSION, CharacterDefinition, CulturalProfile, PartId, PartIdError,
+    PartSelections, SkeletonFamily,
+};
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
