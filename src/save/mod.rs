@@ -51,7 +51,7 @@ use bevy::prelude::*;
 use crate::core::GameState;
 use crate::creation::PlayerCharacter;
 use crate::progression::{Level, LifetimeEarnings, Wallet};
-use crate::roster::LadderProgress;
+use crate::roster::{CampaignSeed, LadderProgress, PrepareEncounterSet, PreparedEncounter};
 use crate::shop::{OwnedItems, PlayerEquipment};
 
 /// The `localStorage` key of the wasm backend. The `_v1` names the storage
@@ -84,7 +84,9 @@ impl Plugin for SavePlugin {
             // either order.
             .add_systems(
                 Update,
-                persist_on_request.after(crate::flow::FlowIntentEmission),
+                persist_on_request
+                    .after(crate::flow::FlowIntentEmission)
+                    .after(PrepareEncounterSet),
             )
             .add_systems(OnEnter(GameState::GameOver), delete_save);
     }
@@ -99,7 +101,7 @@ impl Plugin for SavePlugin {
 /// same-frame duplicate) — every current call site only ever writes at most
 /// one per frame, so this is a defensive tie-break, not a real case.
 // A Bevy system: each parameter is a distinct ECS handle for one of the
-// seven run-scoped resources being snapshotted (see `snapshot`'s ownership
+// run-scoped resources being snapshotted (see `snapshot`'s ownership
 // contract).
 #[allow(clippy::too_many_arguments)]
 fn persist_on_request(
@@ -112,6 +114,8 @@ fn persist_on_request(
     owned: Option<Res<OwnedItems>>,
     equipment: Option<Res<PlayerEquipment>>,
     ladder: Option<Res<LadderProgress>>,
+    campaign_seed: Option<Res<CampaignSeed>>,
+    prepared_encounter: Option<Res<PreparedEncounter>>,
 ) {
     let Some(SaveRequested(resume_destination)) = requests.read().last().copied() else {
         return;
@@ -145,6 +149,8 @@ fn persist_on_request(
         &owned,
         &equipment,
         &ladder,
+        campaign_seed.as_deref().copied().unwrap_or_default(),
+        prepared_encounter.as_deref(),
         resume_destination,
     );
     match save.to_json() {
@@ -205,6 +211,12 @@ mod tests {
         app.add_message::<CombatLogEvent>();
         let (store, cell) = SaveStore::in_memory();
         app.insert_resource(store);
+        let appearance = PlayerAppearance {
+            skin_tone: crate::character::SkinTone::Deep,
+            build: crate::character::BodyBuild::Balanced,
+            hair: crate::character::HairStyle::Braided,
+            accent: crate::character::AccentColor::Storm,
+        };
         app.insert_resource(PlayerCharacter {
             name: "Făt-Frumos".to_string(),
             attributes: Attributes {
@@ -217,12 +229,8 @@ mod tests {
                 carisma: 1,
                 magie: 0,
             },
-            appearance: PlayerAppearance {
-                skin_tone: crate::character::SkinTone::Deep,
-                build: crate::character::BodyBuild::Balanced,
-                hair: crate::character::HairStyle::Braided,
-                accent: crate::character::AccentColor::Storm,
-            },
+            appearance,
+            definition: crate::character::CharacterDefinition::legacy_human(appearance),
         });
         app.update();
         (app, cell)

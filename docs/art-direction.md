@@ -54,6 +54,161 @@ coherent but every opponent is distinct at a glance.
   but every accepted file must have project-owned rights and an entry in
   `assets/CREDITS.md`.
 
+## Modular character catalog
+
+The human tracer bullet is authored in
+`assets/fighters/catalog/human-foundation.json`. It is runtime-readable
+character metadata, separate from the media sidecars: the catalog sidecar
+intentionally ignores the JSON while each referenced PNG remains owned by its
+runtime asset manifest. `cargo xtask assets check` still reads the ignored JSON
+through its catalog-aware validator and cross-checks every reference against
+those media records. A catalog record selects one semantic character region,
+not an arbitrary full-frame overlay.
+
+### Add a part
+
+1. Add the right-facing transparent PNG to the appropriate runtime asset
+   directory. Register it in that directory's `manifest.toml` with its
+   provenance, exact license text, dimensions, sampler, attachment metadata,
+   and `assets/CREDITS.md` entry before referencing it from the character
+   catalog.
+2. Add one `parts` record to the catalog with a new, non-blank stable `id`,
+   `region`, asset-relative `asset_path`, compatible `skeletons`,
+   `cultural_tags`, and `attachment` (`point`, rig-space `pivot`, and
+   `draw_layer`). `exclusions` and `companions` are optional stable part-ID
+   lists. The catalog document, part-record, and attachment parsers reject
+   unknown fields, so change the typed catalog schema and its version before
+   introducing a new field.
+3. Use a `region` matching the selection slot: `body`, `face`, `hair`,
+   `facial_hair`, `torso`, `legs`, `feet`, `waist`, or `accessory`. A valid
+   human catalog must provide `body`, `face`, `hair`, `torso`, `legs`, and
+   `feet`; `facial_hair`, `waist`, and `accessory` remain optional.
+4. Set `attachment.point` to the exact existing cutout part it can replace
+   (for example `head`, `hair`, `torso`, `thigh_front`, or `foot_front`). The
+   compatibility adapter preserves existing pose transforms and uses a catalog
+   PNG only when that point names the rendered rig part. One selected `body`
+   supplies both arm chains and one selected `legs` supplies both leg chains.
+
+The tracer-bullet adapter consumes only `attachment.point`; `attachment.pivot`
+and `attachment.draw_layer` are required, reserved metadata for later renderers.
+They do not currently move or reorder a sprite. `rig_template_for` keeps the
+legacy human template's transforms, pivots, sizes, rotations, and z offsets,
+then replaces only the matching part's asset path and records its stable
+`source_id`.
+
+The accepted point-to-rig mapping is closed in `src/cutout.rs`'s
+`attachment_kind` function:
+
+| Catalog `attachment.point` | `CutoutPartKind` | Selected catalog `region` |
+| --- | --- | --- |
+| `hair` | `Hair` | `hair` |
+| `head` | `Head` | `face` |
+| `torso` | `Torso` | `torso` |
+| `upper_arm_back` / `upper_arm_front` | `UpperArmBack` / `UpperArmFront` | `body` |
+| `forearm_back` / `forearm_front` | `ForearmBack` / `ForearmFront` | `body` |
+| `hand_back` / `hand_front` | `HandBack` / `HandFront` | `body` |
+| `thigh_back` / `thigh_front` | `ThighBack` / `ThighFront` | `legs` |
+| `shin_back` / `shin_front` | `ShinBack` / `ShinFront` | `legs` |
+| `foot_back` / `foot_front` | `FootBack` / `FootFront` | `feet` |
+
+Any other string is parsed but does not replace rendered art. The current
+adapter likewise does not map selected `facial_hair`, `waist`, or `accessory`
+records to a `CutoutPartKind`; those slots need explicit renderer support in a
+later wardrobe phase.
+
+Stable IDs are saved in `CharacterDefinition`; never rename or reuse one to
+mean different content. Add a new versioned ID instead, then migrate saved
+definitions deliberately if that is required.
+
+### Cultural compatibility and validation
+
+`cultural_tags` are open-ended authored strings; use lowercase names. A part is eligible
+when it shares at least one tag with the definition's cultural profile; it is
+not enough that the skeleton and region match. Keep `romanian` on the shared
+human foundation and add specific tags such as `chimir`, `itari`, or a future
+regional/role tag to describe the part's cultural grammar. Profiles may include
+several tags, but every selected part must match at least one of them. Use
+`companions` for parts that must be selected together and `exclusions` for
+incompatible combinations; all referenced IDs must exist.
+
+After an edit, run the media and catalog checks together:
+
+```bash
+cargo xtask assets check
+cargo test --lib character::catalog
+cargo test --lib character::generation
+```
+
+The asset command verifies sidecars, credits, runtime references, image
+dimensions, alpha integrity, and attachment metadata. Its catalog-aware pass
+also verifies that every catalog `asset_path` is a registered runtime record
+and that the authored attachment point and pivot match the owning sidecar.
+Runtime `CharacterCatalog::validate` independently rejects unregistered paths,
+unknown or region-incompatible attachment points, future schema versions,
+invalid required regions, cultural incompatibilities, and broken relationships.
+The focused generation tests pin deterministic selection on top of that
+validated content.
+
+### Review a resolved character
+
+Run `cargo xtask assets review` after changing art or attachment metadata and
+open the printed `target/xtask-artifacts/asset-gallery/index.html`. Inspect the
+right-facing and mirrored part pages plus the human composition for silhouette,
+pixel finish, pivot, draw layer, and gear overlap.
+
+For a generated identity, the review build publishes the representative
+opponent's `encounter_id`, derived `seed`, and semantic-order
+`resolved_part_ids` in `rff_review_encounter_v1`. Its `preview` field is
+available before combat from the persisted prepared encounter; its `combat`
+field reports the live spawned opponent. Run
+`cargo xtask web-smoke --scenario gold-journey` to exercise that review build
+through creation and combat and require those identities to match exactly, or
+run the focused review assertion:
+
+```bash
+cargo test --features review --lib \
+  review::tests::encounter_telemetry_exposes_pre_fight_and_matching_combat_identity
+```
+
+Compare those stable IDs with the intended profile and catalog records; do not
+approve a look from a screenshot alone.
+
+### Known-good human fallback
+
+Development validation should return catalog and generation errors rather than
+silently changing a requested identity. When a safe specimen is needed, build
+the catalog's explicit fallback with `character::fallback_human(&catalog)` and
+resolve that returned `CharacterDefinition`; it is the versioned
+`known_good_human` selection and its matching cultural tags from the catalog.
+
+The scene adapters invoke the same policy for generated and persisted humans:
+a generation or resolution error first renders the catalog's known-good human,
+emits a diagnostic, and leaves any saved definition unchanged for repair. Only
+if the bundled catalog itself cannot be read or its fallback cannot resolve do
+they retain the pre-catalog human cutout template for that frame rather than
+blocking a scene transition.
+
+### Stable handoff for material and wardrobe phases
+
+The next phases consume `CharacterDefinition` and resolved stable `PartId`s,
+not filesystem paths. Preserve the definition's version, optional provenance
+seed, skeleton family, cultural profile, semantic `PartSelections`, and
+temporary `PlayerAppearance` bridge; a saved resolved selection remains the
+identity authority even when a seed can explain how it was generated.
+
+The existing cutout semantic kinds, rest-pose hierarchy, `CutoutPartMarker`
+`source_id`, and gear attachment layers remain the pose and equipment
+contracts. Material work should add rendering data without changing those
+selected IDs or silhouettes, and wardrobe work should add compatible catalog
+records and profiles without creating a second character format. New skeleton
+families, material channels, and richer wardrobe metadata require more than a
+catalog version bump: extend the closed Rust enums and mappings (`SkeletonFamily`,
+`BodyRegion`, `CutoutPartKind`, `attachment_kind`, and
+`selected_record_for_kind`) and add the matching rig templates, attachments,
+and pose support. Extend and version the typed catalog schema for new metadata;
+when persisted definition meaning or shape changes, increment the
+`CharacterDefinition` schema version and provide an explicit save migration.
+
 ## First playable asset table
 
 This is the first production-intent batch to generate or author before replacing

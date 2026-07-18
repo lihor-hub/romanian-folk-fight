@@ -6,7 +6,9 @@
 
 use bevy::prelude::*;
 
-use crate::character::{AccentColor, Attributes, BodyBuild, HairStyle, PlayerAppearance, SkinTone};
+use crate::character::{
+    AccentColor, Attributes, BodyBuild, CharacterDefinition, HairStyle, PlayerAppearance, SkinTone,
+};
 use crate::items::ItemId;
 // Re-exported so existing `creation::AttributeKind` users keep working after
 // the enum moved to `character` (its canonical home, next to `Attributes`).
@@ -286,6 +288,16 @@ impl CharacterDraft {
     /// The appearance as configured so far.
     pub fn appearance(&self) -> PlayerAppearance {
         self.appearance
+    }
+
+    /// The stable resolved identity represented by the current preview.
+    ///
+    /// The first modular player tracer bullet maps the existing appearance
+    /// controls onto the versioned human definition. Later catalog-backed
+    /// selectors can replace this adapter without changing confirmation or
+    /// persistence consumers.
+    pub fn definition(&self) -> CharacterDefinition {
+        CharacterDefinition::legacy_human(self.appearance)
     }
 
     /// Current value of one attribute.

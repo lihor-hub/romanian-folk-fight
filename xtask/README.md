@@ -270,6 +270,81 @@ by this command.
 Plain `assets review` renders the *full* gallery every run; changed-asset
 filtering is the `--changed` flag below.
 
+### Character-catalog authoring and review (#319)
+
+The runtime human catalog lives at
+`assets/fighters/catalog/human-foundation.json`. It is intentionally ignored by
+its local asset sidecar: it is typed runtime metadata, while every PNG it names
+continues to be registered by the runtime asset sidecar that owns that media.
+The catalog-aware `assets check` pass still reads this JSON and validates its
+references against those owning media records.
+An author adds the media record (including provenance, exact credit/license,
+dimensions, sampler, and rig metadata), then adds a catalog part with a stable
+ID, semantic region, asset path, compatible skeletons and cultural tags, and
+an attachment point/pivot/draw layer. In this tracer bullet only
+`attachment.point` is wired into rendering; `pivot` and `draw_layer` are
+reserved metadata, while the existing cutout template continues to own
+transforms and z ordering. `cargo xtask assets check` validates the media and
+catalog-reference contract; the character catalog and generation tests validate
+the runtime schema, compatibility rules, and deterministic selection:
+
+```bash
+cargo xtask assets check
+cargo test --lib character::catalog
+cargo test --lib character::generation
+```
+
+Catalog cultural tags use overlap semantics: a selected part must share at
+least one open-ended authored tag with the definition's cultural profile.
+`companions` and `exclusions` name stable IDs and are validated as selected
+relationships. The mandatory human regions are body, face, hair, torso, legs,
+and feet. Keep IDs stable because resolved selections are persisted; create a
+new versioned ID rather than renaming or repurposing old content.
+
+`assets check` rejects a catalog `asset_path` that is absent from the aggregate
+runtime records, or whose attachment point/pivot differs from its owning
+sidecar. Runtime catalog validation independently rejects unregistered paths,
+unknown or region-incompatible attachment points, unsupported catalog or
+definition versions, and invalid required-region/relationship content. The
+current adapter still does not render facial-hair, waist, or accessory
+selections; those optional slots require explicit renderer work before a
+profile may claim them as visible identity.
+
+`assets review` is the visual inspection step for catalog-backed art. Open the
+printed gallery index and check the right-facing and mirrored rig-part pages,
+the human composition, pivot/attachment diagrams, draw order, and equipped
+gear composition. It validates/reviews art records, not the generated identity
+itself. For that identity, the review build publishes the seeded opponent's
+encounter ID, seed, and semantic-order resolved stable IDs in
+`rff_review_encounter_v1`: `preview` comes from the persisted prepared encounter
+before combat and `combat` from the live spawned opponent. The gold journey
+(`cargo xtask web-smoke --scenario gold-journey`) requires those identities to
+match exactly; the focused review assertion is:
+
+```bash
+cargo test --features review --lib \
+  review::tests::encounter_telemetry_exposes_pre_fight_and_matching_combat_identity
+```
+
+Generation and development validation report errors rather than hiding an
+invalid requested result. To inspect the safe explicit specimen, call
+`character::fallback_human(&catalog)` and resolve the returned definition. At
+scene runtime, generation and persisted-definition failures both render the
+catalog's versioned `known_good_human`, log the diagnostic, and never mutate a
+saved identity. A broken bundled catalog falls back one level further to the
+legacy human cutout template for that frame.
+
+For the 2.5D material and wardrobe phases, the stable interface is the
+versioned `CharacterDefinition`/`PartId` selection plus the existing cutout
+semantic attachment and `source_id` contracts. Consumers must not derive
+identity from file paths. Add material channels, new skeletons, or richer
+wardrobe metadata by extending the closed Rust enums, attachment/selection
+mappings, rig templates, and pose support as well as intentionally versioning
+the typed catalog schema; the current catalog document, part-record, and
+attachment parsers reject unknown fields. If persisted definition shape or
+meaning changes, increment the `CharacterDefinition` version and add an
+explicit save migration instead of relying on a catalog-only version bump.
+
 ### `assets review --changed` -- the focused changed-asset gallery (#211, a child of #141)
 
 Owned by `xtask/src/assets/changed.rs` (base resolution, diff mapping,

@@ -14,8 +14,13 @@
 //! ratio close to its pre-#128 curve; #149 may retune.
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
-use crate::character::{AttributeKind, Attributes};
+use crate::character::{
+    AttributeKind, Attributes, BodyRegion, CharacterDefinition, CulturalProfile, GenerationError,
+    GenerationProfile, GenerationSlot, HairStyle, PartId, PlayerAppearance, SkeletonFamily,
+    WeightedPart, bundled_human_catalog, generate_character,
+};
 use crate::cutout::CutoutTemplate;
 use crate::items::ItemId;
 
@@ -29,6 +34,48 @@ const POINTS_PER_LEVEL: u32 = 5;
 const BOSS_POINTS_PER_LEVEL: u32 = 6;
 /// Extra attribute-total percent per completed lap of the ladder.
 const LAP_BONUS_PERCENT: u32 = 20;
+
+/// The reproducible campaign seed used by ordinary runs. Review builds may
+/// replace it before entering an encounter without changing production save
+/// or combat-RNG behavior.
+pub const DEFAULT_CAMPAIGN_SEED: u64 = 0;
+
+/// Stable authored identity of the first generated-human tracer bullet.
+/// This deliberately does not reuse the display name: copy changes and the
+/// Romanian lap suffix must not silently reroll the fighter.
+pub const HOT_DE_CODRU_ENCOUNTER_ID: &str = "ladder.hot_de_codru.v1";
+
+/// Seed shared by every encounter in one campaign. The first generated-human
+/// slice derives its own seed from this value plus its authored encounter ID.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CampaignSeed(pub u64);
+
+impl Default for CampaignSeed {
+    fn default() -> Self {
+        Self(DEFAULT_CAMPAIGN_SEED)
+    }
+}
+
+/// Exact generated identity attached to the representative human opponent.
+/// The resolved stable IDs remain authoritative in `definition`; `seed`
+/// records the deterministic provenance used to select the unlocked parts.
+#[derive(Component, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeededOpponent {
+    pub encounter_id: String,
+    pub seed: u64,
+    pub definition: CharacterDefinition,
+}
+
+/// Resolved identity prepared before the arena transition. Keeping this as
+/// run-scoped state lets saves and previews retain the exact stable IDs
+/// rather than asking the current catalog/profile to recreate them later.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub struct PreparedEncounter(pub SeededOpponent);
+
+/// Ordering seam for consumers that must observe the prepared encounter
+/// identity (notably save capture) in the same update.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct PrepareEncounterSet;
 
 /// One rung of the opponent ladder: pure static data the arena turns into a
 /// fighter entity (attributes, AI profile, equipment) and the announcer and
@@ -410,6 +457,94 @@ impl LadderProgress {
     pub fn is_final_lap_one_fight(&self) -> bool {
         self.0 == LADDER.len() - 1
     }
+
+    /// Generates the one representative human opponent migrated by #319.
+    /// Every other ladder entry, including the Solomonar human template,
+    /// returns `None` and stays on the existing authored-template path.
+    pub fn seeded_opponent(
+        &self,
+        campaign_seed: CampaignSeed,
+    ) -> Option<Result<SeededOpponent, GenerationError>> {
+        self.seeded_opponent_provenance(campaign_seed)
+            .map(|_| hot_de_codru(campaign_seed))
+    }
+
+    fn seeded_opponent_provenance(
+        &self,
+        campaign_seed: CampaignSeed,
+    ) -> Option<(&'static str, u64)> {
+        self.0.is_multiple_of(LADDER.len()).then(|| {
+            (
+                HOT_DE_CODRU_ENCOUNTER_ID,
+                derive_encounter_seed(campaign_seed.0, HOT_DE_CODRU_ENCOUNTER_ID),
+            )
+        })
+    }
+}
+
+fn hot_de_codru(campaign_seed: CampaignSeed) -> Result<SeededOpponent, GenerationError> {
+    let seed = derive_encounter_seed(campaign_seed.0, HOT_DE_CODRU_ENCOUNTER_ID);
+    let profile = hot_de_codru_profile();
+    let definition = generate_character(
+        seed,
+        &profile,
+        bundled_human_catalog().map_err(GenerationError::from)?,
+    )?;
+
+    Ok(SeededOpponent {
+        encounter_id: HOT_DE_CODRU_ENCOUNTER_ID.to_owned(),
+        seed,
+        definition,
+    })
+}
+
+fn hot_de_codru_profile() -> GenerationProfile {
+    let appearance = PlayerAppearance::default();
+    let legacy = CharacterDefinition::legacy_human(appearance);
+    let hair_candidates = HairStyle::ALL
+        .into_iter()
+        .map(|hair| {
+            let definition =
+                CharacterDefinition::legacy_human(PlayerAppearance { hair, ..appearance });
+            WeightedPart::new(definition.parts.hair, 1)
+        })
+        .collect();
+    let slots = vec![
+        locked_slot(BodyRegion::Body, legacy.parts.body),
+        locked_slot(BodyRegion::Face, legacy.parts.face),
+        GenerationSlot::new(BodyRegion::Hair, hair_candidates),
+        locked_slot(BodyRegion::Torso, legacy.parts.torso),
+        locked_slot(BodyRegion::Legs, legacy.parts.legs),
+        locked_slot(BodyRegion::Feet, legacy.parts.feet),
+    ];
+    GenerationProfile::new(
+        SkeletonFamily::Human,
+        CulturalProfile {
+            tags: vec!["romanian".to_owned()],
+        },
+        appearance,
+        slots,
+    )
+}
+
+fn locked_slot(region: BodyRegion, id: PartId) -> GenerationSlot {
+    GenerationSlot::new(region, vec![WeightedPart::new(id, 1)])
+}
+
+/// Stable FNV-1a derivation over the little-endian campaign seed followed by
+/// the authored encounter ID. This intentionally avoids randomized standard
+/// hashers so the same inputs remain portable across native and wasm builds.
+fn derive_encounter_seed(campaign_seed: u64, encounter_id: &str) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    campaign_seed
+        .to_le_bytes()
+        .into_iter()
+        .chain(encounter_id.bytes())
+        .fold(FNV_OFFSET, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
+        })
 }
 
 /// Registers the ladder-position resource; the ladder itself is static data.
@@ -417,7 +552,45 @@ pub struct RosterPlugin;
 
 impl Plugin for RosterPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<LadderProgress>();
+        app.init_resource::<LadderProgress>()
+            .init_resource::<CampaignSeed>()
+            .add_systems(Update, prepare_seeded_opponent.in_set(PrepareEncounterSet));
+    }
+}
+
+fn prepare_seeded_opponent(
+    mut commands: Commands,
+    ladder: Res<LadderProgress>,
+    campaign_seed: Res<CampaignSeed>,
+    prepared: Option<Res<PreparedEncounter>>,
+) {
+    let Some((encounter_id, seed)) = ladder.seeded_opponent_provenance(*campaign_seed) else {
+        if prepared.is_some() {
+            commands.remove_resource::<PreparedEncounter>();
+        }
+        return;
+    };
+    if prepared
+        .as_deref()
+        .is_some_and(|existing| existing.0.encounter_id == encounter_id && existing.0.seed == seed)
+    {
+        // A loaded definition is authoritative. Do not resolve today's profile
+        // or catalog merely to rediscover an identity the save already owns.
+        return;
+    }
+
+    match ladder.seeded_opponent(*campaign_seed) {
+        Some(Ok(generated)) => {
+            commands.insert_resource(PreparedEncounter(generated));
+        }
+        Some(Err(error)) => {
+            warn!("could not prepare seeded opponent identity: {error}");
+            commands.remove_resource::<PreparedEncounter>();
+        }
+        None => {
+            warn!("representative encounter provenance disappeared before generation");
+            commands.remove_resource::<PreparedEncounter>();
+        }
     }
 }
 
@@ -425,6 +598,52 @@ impl Plugin for RosterPlugin {
 mod tests {
     use super::*;
     use crate::items::Slot;
+
+    #[test]
+    fn representative_profile_does_not_claim_an_unrendered_waist_part() {
+        for campaign_seed in 0..64 {
+            let generated = LadderProgress(0)
+                .seeded_opponent(CampaignSeed(campaign_seed))
+                .expect("the representative encounter is generated")
+                .expect("the bundled profile resolves");
+            assert_eq!(generated.definition.parts.waist, None);
+        }
+    }
+
+    #[test]
+    fn roster_prepares_the_representative_identity_before_combat() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, RosterPlugin));
+
+        app.update();
+
+        let prepared = app
+            .world()
+            .get_resource::<PreparedEncounter>()
+            .expect("the first encounter identity is prepared before entering the arena");
+        let expected = LadderProgress(0)
+            .seeded_opponent(CampaignSeed::default())
+            .expect("the first encounter is generated")
+            .expect("the bundled profile resolves");
+        assert_eq!(&prepared.0, &expected);
+    }
+
+    #[test]
+    fn a_restored_resolved_identity_is_not_regenerated_from_the_current_catalog() {
+        let mut persisted = LadderProgress(0)
+            .seeded_opponent(CampaignSeed::default())
+            .expect("the first encounter is generated")
+            .expect("the bundled profile resolves");
+        persisted.definition.parts.hair =
+            PartId::new("human.hair.retired-but-persisted.v1").expect("test ID is valid");
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, RosterPlugin));
+        app.insert_resource(PreparedEncounter(persisted.clone()));
+
+        app.update();
+
+        assert_eq!(app.world().resource::<PreparedEncounter>().0, persisted);
+    }
 
     #[test]
     fn the_ladder_names_the_ten_creatures_in_spec_order() {

@@ -40,6 +40,22 @@
 //! | `unspent_points` | `v2.unspent_points` | `+ `[`v3_widening_compensation_points`] | v2 heroes were built from a 10-point creation pool and 2 points per level; v3 widened those to [`crate::creation::FREE_POINTS`] / [`crate::progression::POINTS_PER_LEVEL`]. Granting the difference as *unspent* points lets a migrated hero re-spend into the new attributes and end up exactly as wide as a fresh v3 hero of the same level — without ever pre-allocating on the player's behalf |
 //! | everything else | `v2.*` | carried over verbatim | no new information needed |
 //!
+//! # v3 → v4 safe-default table (#319)
+//!
+//! | v4 field | v3 source | migrated value | why it's safe |
+//! |---|---|---|---|
+//! | `definition` | `appearance` | [`crate::character::CharacterDefinition::legacy_human`]`(appearance)` | v3 player identity was fully represented by the legacy appearance controls; the adapter resolves those choices to stable human part IDs without changing the visible palette/proportions bridge |
+//! | `appearance` | `v3.appearance` | carried over verbatim | existing UI and rendering consumers keep their compatibility projection while the definition becomes authoritative identity |
+//! | everything else | `v3.*` | carried over verbatim | no other run state changes in v4 |
+//!
+//! # v4 → v5 safe-default table (#319)
+//!
+//! | v5 field | v4 source | migrated value | why it's safe |
+//! |---|---|---|---|
+//! | `campaign_seed` | *(new)* | [`crate::roster::CampaignSeed::default`] | this is the campaign seed older builds implicitly used for the representative ladder encounter |
+//! | `seeded_opponent` | `ladder_progress` + migrated `campaign_seed` | the exact resolved representative opponent for that rung, or `None` where the modular tracer bullet does not apply | resolution happens once during migration and v5 persists the result, so later catalog/profile changes cannot silently change an existing encounter |
+//! | everything else | `v4.*` | carried over verbatim | no other run state changes in v5 |
+//!
 //! # Extending to a new version (recipe for #133/#137/#140)
 //!
 //! Each of those issues owns exactly one new version and follows the same
@@ -94,17 +110,17 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::character::{Attributes, PlayerAppearance};
+use crate::character::{Attributes, CharacterDefinition, PlayerAppearance};
 use crate::creation::PlayerCharacter;
 use crate::items::{Equipment, ItemId, Slot};
 use crate::progression::{Level, LifetimeEarnings, Wallet};
-use crate::roster::LadderProgress;
+use crate::roster::{CampaignSeed, LadderProgress, PreparedEncounter, SeededOpponent};
 use crate::shop::{OwnedItems, PlayerEquipment};
 
 /// The version written into every save produced by this build; loads of any
 /// other value either migrate forward (if older and known, see [`Migrate`])
 /// or are discarded (if unknown/newer).
-pub const CURRENT_VERSION: u32 = 3;
+pub const CURRENT_VERSION: u32 = 5;
 
 /// Serde mirror of [`Attributes`] (eight attributes since v3/#128); the
 /// character model stays serde-free.
@@ -302,6 +318,30 @@ struct SnapshotV2 {
     resume_destination: ResumeDestination,
 }
 
+/// v3 payload (#128, superseded by #319's v4): kept only so
+/// [`SaveGame::from_json`] can parse and [`Migrate`] old saves. The shape is
+/// the v3 `SaveGame` verbatim, before stable resolved character definitions
+/// became run-scoped save data.
+#[derive(Deserialize, Debug, Clone)]
+struct SnapshotV3 {
+    name: String,
+    attrs: SavedAttributes,
+    #[serde(default)]
+    appearance: PlayerAppearance,
+    level: u32,
+    xp: u32,
+    unspent_points: u32,
+    wallet: u32,
+    #[serde(default)]
+    lifetime_earnings: u32,
+    owned_items: Vec<String>,
+    equipped: Vec<String>,
+    ladder_progress: usize,
+    lap: u32,
+    #[serde(default)]
+    resume_destination: ResumeDestination,
+}
+
 /// The creation free-point pool a v2-era hero was built from — frozen
 /// historical fact, deliberately *not* [`crate::creation::FREE_POINTS`]
 /// (which later balance passes like #149 may move again).
@@ -355,15 +395,14 @@ impl Migrate for SnapshotV1 {
 }
 
 impl Migrate for SnapshotV2 {
-    type Next = SaveGame;
+    type Next = SnapshotV3;
 
     /// See the v2 → v3 default table in this module's docs: the four new
     /// attributes arrive at their fresh-hero base values (magie 0 — a valid
     /// non-caster, never normalized upward) and the pool widening lands as
     /// *unspent* points for the player to re-spend.
-    fn migrate(self) -> SaveGame {
-        SaveGame {
-            version: CURRENT_VERSION,
+    fn migrate(self) -> SnapshotV3 {
+        SnapshotV3 {
             name: self.name,
             attrs: self.attrs.widen(),
             appearance: self.appearance,
@@ -381,10 +420,104 @@ impl Migrate for SnapshotV2 {
     }
 }
 
-/// One full run snapshot (v3, #128; envelope from #193): mirrors every
-/// run-scoped resource — the confirmed character (eight attributes), the
-/// experience state, the wallet and lifetime earnings, the shop purchases
-/// and loadout, the ladder position, and the typed safe resume destination.
+impl Migrate for SnapshotV3 {
+    type Next = SnapshotV4;
+
+    /// See the v3 → v4 default table in this module's docs: v3's appearance
+    /// was its complete player-identity contract, so resolve that legacy
+    /// projection to stable human part IDs while carrying the projection
+    /// itself forward for current UI and rendering consumers.
+    fn migrate(self) -> SnapshotV4 {
+        SnapshotV4 {
+            name: self.name,
+            attrs: self.attrs,
+            appearance: self.appearance,
+            definition: Some(CharacterDefinition::legacy_human(self.appearance)),
+            level: self.level,
+            xp: self.xp,
+            unspent_points: self.unspent_points,
+            wallet: self.wallet,
+            lifetime_earnings: self.lifetime_earnings,
+            owned_items: self.owned_items,
+            equipped: self.equipped,
+            ladder_progress: self.ladder_progress,
+            lap: self.lap,
+            resume_destination: self.resume_destination,
+        }
+    }
+}
+
+/// v4 payload (#319 before resolved encounter provenance was persisted).
+/// `definition` remained optional during v4 so additive v4 saves could
+/// reconstruct the player's stable IDs from `appearance`.
+#[derive(Deserialize, Debug, Clone)]
+struct SnapshotV4 {
+    name: String,
+    attrs: SavedAttributes,
+    #[serde(default)]
+    appearance: PlayerAppearance,
+    #[serde(default)]
+    definition: Option<CharacterDefinition>,
+    level: u32,
+    xp: u32,
+    unspent_points: u32,
+    wallet: u32,
+    #[serde(default)]
+    lifetime_earnings: u32,
+    owned_items: Vec<String>,
+    equipped: Vec<String>,
+    ladder_progress: usize,
+    lap: u32,
+    #[serde(default)]
+    resume_destination: ResumeDestination,
+}
+
+impl Migrate for SnapshotV4 {
+    type Next = SaveGame;
+
+    fn migrate(self) -> SaveGame {
+        let campaign_seed = CampaignSeed::default();
+        let ladder = LadderProgress(self.ladder_progress);
+        let seeded_opponent =
+            ladder
+                .seeded_opponent(campaign_seed)
+                .and_then(|result| match result {
+                    Ok(generated) => Some(Box::new(generated)),
+                    Err(error) => {
+                        warn!("could not migrate legacy encounter identity: {error}");
+                        None
+                    }
+                });
+        SaveGame {
+            version: CURRENT_VERSION,
+            name: self.name,
+            attrs: self.attrs,
+            appearance: self.appearance,
+            definition: Box::new(
+                self.definition
+                    .unwrap_or_else(|| CharacterDefinition::legacy_human(self.appearance)),
+            ),
+            level: self.level,
+            xp: self.xp,
+            unspent_points: self.unspent_points,
+            wallet: self.wallet,
+            lifetime_earnings: self.lifetime_earnings,
+            owned_items: self.owned_items,
+            equipped: self.equipped,
+            ladder_progress: self.ladder_progress,
+            lap: self.lap,
+            campaign_seed: campaign_seed.0,
+            seeded_opponent,
+            resume_destination: self.resume_destination,
+        }
+    }
+}
+
+/// One full run snapshot (v5, #319; envelope from #193): mirrors every
+/// run-scoped resource — the confirmed character (eight attributes and stable
+/// resolved identity), the experience state, the wallet and lifetime earnings,
+/// the shop purchases and loadout, the ladder position, prepared encounter
+/// provenance, and the typed safe resume destination.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SaveGame {
     /// Always [`CURRENT_VERSION`] for freshly captured saves; older, known
@@ -399,6 +532,8 @@ pub struct SaveGame {
     /// where it defaults to the current project baseline.
     #[serde(default)]
     pub appearance: PlayerAppearance,
+    /// [`PlayerCharacter::definition`], including stable resolved part IDs.
+    pub definition: Box<CharacterDefinition>,
     /// [`Level::level`].
     pub level: u32,
     /// [`Level::xp`].
@@ -421,6 +556,11 @@ pub struct SaveGame {
     /// The 1-based ladder lap; derived from `ladder_progress`, stored for
     /// human-readable saves.
     pub lap: u32,
+    /// Campaign-level input used to derive generated encounter provenance.
+    pub campaign_seed: u64,
+    /// Exact resolved representative encounter identity. Stable IDs remain
+    /// authoritative across catalog/profile changes after this snapshot.
+    pub seeded_opponent: Option<Box<SeededOpponent>>,
     /// New in v2 (#193): see [`ResumeDestination`].
     #[serde(default)]
     pub resume_destination: ResumeDestination,
@@ -446,6 +586,8 @@ impl SaveGame {
         owned: &OwnedItems,
         equipment: &PlayerEquipment,
         ladder: &LadderProgress,
+        campaign_seed: CampaignSeed,
+        prepared_encounter: Option<&PreparedEncounter>,
         resume_destination: ResumeDestination,
     ) -> Self {
         let mut owned_items: Vec<String> = owned.0.iter().map(|id| item_name(*id)).collect();
@@ -460,6 +602,7 @@ impl SaveGame {
             name: player.name.clone(),
             attrs: player.attributes.into(),
             appearance: player.appearance,
+            definition: Box::new(player.definition.clone()),
             level: level.level,
             xp: level.xp,
             unspent_points: level.unspent_points,
@@ -469,6 +612,8 @@ impl SaveGame {
             equipped,
             ladder_progress: ladder.0,
             lap: ladder.lap(),
+            campaign_seed: campaign_seed.0,
+            seeded_opponent: prepared_encounter.map(|prepared| Box::new(prepared.0.clone())),
             resume_destination,
         }
     }
@@ -503,8 +648,19 @@ impl SaveGame {
             1 => serde_json::from_str::<SnapshotV1>(json)
                 .map_err(|_| SnapshotLoadError::Invalid)?
                 .migrate()
+                .migrate()
+                .migrate()
                 .migrate(),
             2 => serde_json::from_str::<SnapshotV2>(json)
+                .map_err(|_| SnapshotLoadError::Invalid)?
+                .migrate()
+                .migrate()
+                .migrate(),
+            3 => serde_json::from_str::<SnapshotV3>(json)
+                .map_err(|_| SnapshotLoadError::Invalid)?
+                .migrate()
+                .migrate(),
+            4 => serde_json::from_str::<SnapshotV4>(json)
                 .map_err(|_| SnapshotLoadError::Invalid)?
                 .migrate(),
             CURRENT_VERSION => {
@@ -530,6 +686,22 @@ impl SaveGame {
             warn!("save references unknown item {unknown:?}; discarding");
             return Err(SnapshotLoadError::Invalid);
         }
+        if save.definition.version != crate::character::CHARACTER_DEFINITION_VERSION {
+            warn!(
+                "save contains unsupported character definition version {}; discarding",
+                save.definition.version
+            );
+            return Err(SnapshotLoadError::Invalid);
+        }
+        if let Some(generated) = save.seeded_opponent.as_deref()
+            && generated.definition.version != crate::character::CHARACTER_DEFINITION_VERSION
+        {
+            warn!(
+                "save contains unsupported encounter definition version {}; discarding",
+                generated.definition.version
+            );
+            return Err(SnapshotLoadError::Invalid);
+        }
         Ok(save)
     }
 
@@ -539,6 +711,7 @@ impl SaveGame {
             name: self.name.clone(),
             attributes: self.attrs.into(),
             appearance: self.appearance,
+            definition: self.definition.as_ref().clone(),
         }
     }
 
@@ -586,6 +759,20 @@ impl SaveGame {
         LadderProgress(self.ladder_progress)
     }
 
+    /// The saved campaign seed used for encounter provenance.
+    pub fn campaign_seed(&self) -> CampaignSeed {
+        CampaignSeed(self.campaign_seed)
+    }
+
+    /// The saved pre-resolved encounter identity, when this ladder rung has
+    /// one in the modular tracer bullet.
+    pub fn prepared_encounter(&self) -> Option<PreparedEncounter> {
+        self.seeded_opponent
+            .as_deref()
+            .cloned()
+            .map(PreparedEncounter)
+    }
+
     /// The saved [`ResumeDestination`]. Not restored as an ECS resource (see
     /// its own docs) — read directly off the snapshot by whatever consumes
     /// it (#217).
@@ -604,6 +791,12 @@ impl SaveGame {
         commands.insert_resource(self.owned_items());
         commands.insert_resource(self.player_equipment());
         commands.insert_resource(self.ladder_progress());
+        commands.insert_resource(self.campaign_seed());
+        if let Some(prepared) = self.prepared_encounter() {
+            commands.insert_resource(prepared);
+        } else {
+            commands.remove_resource::<PreparedEncounter>();
+        }
     }
 }
 
@@ -621,6 +814,8 @@ pub fn reset(commands: &mut Commands) {
     commands.insert_resource(OwnedItems::default());
     commands.insert_resource(PlayerEquipment::default());
     commands.insert_resource(LadderProgress::default());
+    commands.insert_resource(CampaignSeed::default());
+    commands.remove_resource::<PreparedEncounter>();
 }
 
 #[cfg(test)]
@@ -628,7 +823,10 @@ pub(crate) mod tests {
     use std::collections::HashSet;
 
     use super::*;
-    use crate::character::{AccentColor, BodyBuild, HairStyle, SkinTone};
+    use crate::character::{
+        AccentColor, BodyBuild, CharacterDefinition, HairStyle, PartId, SkinTone,
+    };
+    use crate::roster::{CampaignSeed, PreparedEncounter};
 
     /// A mid-run set of resources: a leveled character with gear, gold, and
     /// ladder progress into the second lap.
@@ -641,6 +839,12 @@ pub(crate) mod tests {
         PlayerEquipment,
         LadderProgress,
     ) {
+        let appearance = PlayerAppearance {
+            skin_tone: SkinTone::Olive,
+            build: BodyBuild::Sturdy,
+            hair: HairStyle::Tied,
+            accent: AccentColor::Gold,
+        };
         let player = PlayerCharacter {
             name: "Făt-Frumos".to_string(),
             attributes: Attributes {
@@ -653,12 +857,8 @@ pub(crate) mod tests {
                 carisma: 2,
                 magie: 0,
             },
-            appearance: PlayerAppearance {
-                skin_tone: SkinTone::Olive,
-                build: BodyBuild::Sturdy,
-                hair: HairStyle::Tied,
-                accent: AccentColor::Gold,
-            },
+            appearance,
+            definition: CharacterDefinition::legacy_human(appearance),
         };
         let level = Level {
             level: 4,
@@ -709,6 +909,8 @@ pub(crate) mod tests {
             &owned,
             &equipment,
             &ladder,
+            CampaignSeed::default(),
+            None,
             resume_destination,
         )
     }
@@ -758,6 +960,8 @@ pub(crate) mod tests {
         );
         assert_eq!(save.ladder_progress, 12);
         assert_eq!(save.lap, 2, "index 12 sits on the second lap");
+        assert_eq!(save.campaign_seed, CampaignSeed::default().0);
+        assert!(save.seeded_opponent.is_none());
         assert_eq!(
             save.resume_destination,
             ResumeDestination::Fight,
@@ -789,6 +993,66 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn current_version_roundtrip_preserves_non_default_resolved_part_ids() {
+        let (mut player, level, wallet, lifetime_earnings, owned, equipment, ladder) = sample_run();
+        player.definition.parts.hair =
+            PartId::new("human.hair.roundtrip-signature.v1").expect("test ID is valid");
+        player.definition.parts.accessories =
+            vec![PartId::new("human.accessory.roundtrip-talisman.v1").expect("test ID is valid")];
+        let expected = player.definition.clone();
+
+        let json = SaveGame::capture(
+            &player,
+            &level,
+            &wallet,
+            &lifetime_earnings,
+            &owned,
+            &equipment,
+            &ladder,
+            CampaignSeed::default(),
+            None,
+            ResumeDestination::Fight,
+        )
+        .to_json()
+        .expect("plain data serializes");
+        let restored = SaveGame::from_json(&json).expect("own JSON loads");
+
+        assert_eq!(restored.player_character().definition, expected);
+    }
+
+    #[test]
+    fn current_roundtrip_preserves_resolved_encounter_identity_and_campaign_seed() {
+        let (player, level, wallet, lifetime_earnings, owned, equipment, ladder) = sample_run();
+        let campaign_seed = CampaignSeed(93);
+        let mut generated = LadderProgress(0)
+            .seeded_opponent(campaign_seed)
+            .expect("the representative encounter is generated")
+            .expect("the bundled profile resolves");
+        generated.definition.parts.hair =
+            PartId::new("human.hair.persisted-signature.v1").expect("test ID is valid");
+        let prepared = PreparedEncounter(generated.clone());
+
+        let json = SaveGame::capture(
+            &player,
+            &level,
+            &wallet,
+            &lifetime_earnings,
+            &owned,
+            &equipment,
+            &ladder,
+            campaign_seed,
+            Some(&prepared),
+            ResumeDestination::Fight,
+        )
+        .to_json()
+        .expect("plain data serializes");
+        let restored = SaveGame::from_json(&json).expect("own JSON loads");
+
+        assert_eq!(restored.campaign_seed(), campaign_seed);
+        assert_eq!(restored.prepared_encounter(), Some(prepared));
+    }
+
+    #[test]
     fn resources_survive_the_full_reconstruction_exactly() {
         let (player, level, wallet, lifetime_earnings, owned, equipment, ladder) = sample_run();
         let json = SaveGame::capture(
@@ -799,6 +1063,8 @@ pub(crate) mod tests {
             &owned,
             &equipment,
             &ladder,
+            CampaignSeed::default(),
+            None,
             ResumeDestination::Fight,
         )
         .to_json()
@@ -811,6 +1077,8 @@ pub(crate) mod tests {
         assert_eq!(save.owned_items(), owned);
         assert_eq!(save.player_equipment(), equipment);
         assert_eq!(save.ladder_progress(), ladder);
+        assert_eq!(save.campaign_seed(), CampaignSeed::default());
+        assert_eq!(save.prepared_encounter(), None);
         assert_eq!(save.resume_destination(), ResumeDestination::Fight);
     }
 
@@ -821,6 +1089,7 @@ pub(crate) mod tests {
             "not json at all",
             "{",
             "42",
+            r#"{"version":4}"#,
             r#"{"version":3}"#,
             r#"{"version":2}"#,
             r#"{"version":1}"#,
@@ -859,6 +1128,15 @@ pub(crate) mod tests {
         assert!(SaveGame::from_json(r#"{"version":0}"#).is_none());
     }
 
+    #[test]
+    fn a_current_save_with_a_future_character_definition_is_rejected() {
+        let mut save = sample_save();
+        save.definition.version = crate::character::CHARACTER_DEFINITION_VERSION + 1;
+        let json = save.to_json().expect("plain data serializes");
+
+        assert_eq!(SaveGame::load(&json), Err(SnapshotLoadError::Invalid));
+    }
+
     /// #201: [`SaveGame::load`] classifies exactly why a load failed, so
     /// [`super::super::storage`] can tell a corrupt/unsupported-old payload
     /// apart from one written by a newer build — both still fail closed
@@ -879,6 +1157,7 @@ pub(crate) mod tests {
             "not json at all",
             "{",
             "42",
+            r#"{"version":4}"#,
             r#"{"version":3}"#,
             r#"{"version":2}"#,
             r#"{"version":1}"#,
@@ -908,7 +1187,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_exact_v1_fixture_migrates_through_the_whole_chain_to_v3() {
+    fn an_exact_v1_fixture_migrates_through_the_whole_chain_to_v5() {
         let migrated = SaveGame::from_json(exact_v1_fixture()).expect("v1 fixture migrates");
         assert_eq!(migrated.version, CURRENT_VERSION);
         // Every v1 field is carried over verbatim — no v1 field is lost.
@@ -968,6 +1247,50 @@ pub(crate) mod tests {
     /// and `resume_destination` present).
     fn exact_v2_fixture() -> &'static str {
         r#"{"version":2,"name":"Făt-Frumos","attrs":{"putere":5,"agilitate":3,"vitalitate":7,"noroc":2},"appearance":{"skin_tone":"olive","build":"sturdy","hair":"tied","accent":"gold"},"level":4,"xp":120,"unspent_points":3,"wallet":365,"lifetime_earnings":510,"owned_items":["BataCiobaneasca","Palos","ScutDeLemn"],"equipped":["Palos","ScutDeLemn"],"ladder_progress":12,"lap":2,"resume_destination":"shop"}"#
+    }
+
+    #[test]
+    fn an_exact_v3_fixture_reconstructs_the_legacy_human_definition() {
+        let json = r#"{"version":3,"name":"Ileana Cosânzeana","attrs":{"putere":2,"agilitate":4,"vitalitate":3,"noroc":5,"atac":2,"aparare":3,"carisma":4,"magie":1},"appearance":{"skin_tone":"deep","build":"lean","hair":"long","accent":"storm"},"level":3,"xp":75,"unspent_points":2,"wallet":140,"lifetime_earnings":260,"owned_items":[],"equipped":[],"ladder_progress":7,"lap":1,"resume_destination":"fight"}"#;
+
+        let migrated = SaveGame::from_json(json).expect("v3 fixture migrates");
+        let player = migrated.player_character();
+
+        assert_eq!(migrated.version, CURRENT_VERSION);
+        assert_eq!(
+            player.definition,
+            CharacterDefinition::legacy_human(player.appearance)
+        );
+    }
+
+    #[test]
+    fn a_v4_payload_missing_definition_migrates_from_appearance() {
+        let json = r#"{"version":4,"name":"Ileana Cosânzeana","attrs":{"putere":2,"agilitate":4,"vitalitate":3,"noroc":5,"atac":2,"aparare":3,"carisma":4,"magie":1},"appearance":{"skin_tone":"deep","build":"lean","hair":"long","accent":"storm"},"level":3,"xp":75,"unspent_points":2,"wallet":140,"lifetime_earnings":260,"owned_items":[],"equipped":[],"ladder_progress":7,"lap":1,"resume_destination":"fight"}"#;
+
+        let loaded = SaveGame::from_json(json).expect("additive v4 payload loads");
+
+        assert_eq!(
+            loaded.definition.as_ref(),
+            &CharacterDefinition::legacy_human(loaded.appearance)
+        );
+    }
+
+    #[test]
+    fn a_v4_representative_encounter_is_resolved_once_during_migration() {
+        let json = r#"{"version":4,"name":"Ileana Cosânzeana","attrs":{"putere":2,"agilitate":4,"vitalitate":3,"noroc":5,"atac":2,"aparare":3,"carisma":4,"magie":1},"appearance":{"skin_tone":"deep","build":"lean","hair":"long","accent":"storm"},"level":3,"xp":75,"unspent_points":2,"wallet":140,"lifetime_earnings":260,"owned_items":[],"equipped":[],"ladder_progress":0,"lap":1,"resume_destination":"fight"}"#;
+        let expected = LadderProgress(0)
+            .seeded_opponent(CampaignSeed::default())
+            .expect("the representative rung is modular")
+            .expect("the bundled catalog resolves");
+
+        let migrated = SaveGame::from_json(json).expect("v4 fixture migrates");
+
+        assert_eq!(migrated.version, CURRENT_VERSION);
+        assert_eq!(migrated.campaign_seed(), CampaignSeed::default());
+        assert_eq!(
+            migrated.prepared_encounter(),
+            Some(PreparedEncounter(expected))
+        );
     }
 
     #[test]
@@ -1103,6 +1426,12 @@ pub(crate) mod tests {
         equipment.equip(ItemId::Palos);
         app.insert_resource(PlayerEquipment(equipment));
         app.insert_resource(LadderProgress(37));
+        app.insert_resource(CampaignSeed(999));
+        let prepared = LadderProgress(0)
+            .seeded_opponent(CampaignSeed(999))
+            .expect("the representative rung is modular")
+            .expect("the bundled catalog resolves");
+        app.insert_resource(PreparedEncounter(prepared));
 
         fn reset_system(mut commands: Commands) {
             reset(&mut commands);
@@ -1129,5 +1458,10 @@ pub(crate) mod tests {
             *app.world().resource::<LadderProgress>(),
             LadderProgress::default()
         );
+        assert_eq!(
+            *app.world().resource::<CampaignSeed>(),
+            CampaignSeed::default()
+        );
+        assert!(app.world().get_resource::<PreparedEncounter>().is_none());
     }
 }

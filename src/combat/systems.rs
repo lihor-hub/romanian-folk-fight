@@ -527,6 +527,9 @@ mod tests {
             name: "Făt-Frumos".to_string(),
             attributes,
             appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
         });
         app.insert_resource(CombatRng(strikes_rng(4)));
         app.update();

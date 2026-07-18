@@ -117,6 +117,7 @@ use crate::items::ItemId;
 use crate::menu::{DisabledButton, MenuAction};
 use crate::progression::result_ui::{GameOverAction, ResultAction};
 use crate::progression::victory_ui::VictoryAction;
+use crate::roster::{CampaignSeed, PreparedEncounter, SeededOpponent};
 use crate::settings::AccessibilityPreferences;
 use crate::shop::ShopAction;
 use crate::theme::Palette;
@@ -176,6 +177,10 @@ pub const REVIEW_THEME_KEY: &str = "rff_review_theme_v1";
 /// doc comment for why the key itself is duplicated as a plain string on the
 /// `xtask` side.
 pub const REVIEW_ACCESSIBILITY_KEY: &str = "rff_review_a11y_v1";
+/// `localStorage` key publishing the prepared pre-fight identity beside the
+/// identity attached to the live combat enemy. The browser journey compares
+/// these exact stable-ID snapshots rather than inferring identity from pixels.
+pub const REVIEW_ENCOUNTER_KEY: &str = "rff_review_encounter_v1";
 
 /// One command the harness can queue through [`REVIEW_COMMAND_KEY`]. Plain
 /// JSON via `serde`, tagged by `cmd` so the wire format is a flat, readable
@@ -184,6 +189,12 @@ pub const REVIEW_ACCESSIBILITY_KEY: &str = "rff_review_a11y_v1";
 #[serde(tag = "cmd", rename_all = "camelCase")]
 pub enum ReviewCommand {
     SeedCombat {
+        seed: u64,
+    },
+    /// Replaces the campaign seed used to derive deterministic encounter
+    /// identities. The ordinary run keeps [`CampaignSeed::default`]; this is
+    /// an explicit review-only override applied before entering the fight.
+    SeedCampaign {
         seed: u64,
     },
     SelectPreset {
@@ -272,6 +283,7 @@ pub struct ReviewPlugin;
 impl Plugin for ReviewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ReviewAutoplay>()
+            .init_resource::<CampaignSeed>()
             // Idempotent re-registrations of what the systems below read and
             // write (the real app's CreationPlugin/CombatPlugin already
             // provide both), so this plugin never depends on plugin order --
@@ -309,6 +321,7 @@ impl Plugin for ReviewPlugin {
                     publish_palette_state,
                     publish_theme_state,
                     publish_accessibility_state,
+                    publish_encounter_identity_state,
                     autoplay_player_turn,
                 ),
             );
@@ -321,6 +334,65 @@ impl Plugin for ReviewPlugin {
 struct ParallaxSample {
     base_x: f32,
     x: f32,
+}
+
+/// Review-facing provenance for the one generated-human encounter. Stable
+/// IDs are copied from the resolved definition in semantic slot order so a
+/// browser assertion never depends on catalog `HashMap` iteration order.
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+struct GeneratedOpponentSnapshot {
+    encounter_id: String,
+    seed: u64,
+    resolved_part_ids: Vec<String>,
+}
+
+fn generated_opponent_snapshot(generated: &SeededOpponent) -> GeneratedOpponentSnapshot {
+    let parts = &generated.definition.parts;
+    let mut resolved_part_ids = vec![
+        parts.body.to_string(),
+        parts.face.to_string(),
+        parts.hair.to_string(),
+    ];
+    resolved_part_ids.extend(parts.facial_hair.iter().map(ToString::to_string));
+    resolved_part_ids.extend([
+        parts.torso.to_string(),
+        parts.legs.to_string(),
+        parts.feet.to_string(),
+    ]);
+    resolved_part_ids.extend(parts.waist.iter().map(ToString::to_string));
+    resolved_part_ids.extend(parts.accessories.iter().map(ToString::to_string));
+
+    GeneratedOpponentSnapshot {
+        encounter_id: generated.encounter_id.to_owned(),
+        seed: generated.seed,
+        resolved_part_ids,
+    }
+}
+
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+struct EncounterIdentitySnapshot {
+    preview: Option<GeneratedOpponentSnapshot>,
+    combat: Option<GeneratedOpponentSnapshot>,
+}
+
+fn encounter_identity_snapshot(
+    prepared: Option<&PreparedEncounter>,
+    combat: Option<&SeededOpponent>,
+) -> EncounterIdentitySnapshot {
+    EncounterIdentitySnapshot {
+        preview: prepared.map(|prepared| generated_opponent_snapshot(&prepared.0)),
+        combat: combat.map(generated_opponent_snapshot),
+    }
+}
+
+fn publish_encounter_identity_state(
+    prepared: Option<Res<PreparedEncounter>>,
+    enemies: Query<&SeededOpponent, With<EnemyFighter>>,
+) {
+    let snapshot = encounter_identity_snapshot(prepared.as_deref(), enemies.single().ok());
+    if let Ok(json) = serde_json::to_string(&snapshot) {
+        publish_encounter_identity(&json);
+    }
 }
 
 /// Everything the `reduced-motion-fight` scenario (#200) needs to assert the
@@ -338,7 +410,17 @@ struct MotionSnapshot {
     camera_x: f32,
     camera_y: f32,
     parallax: Vec<ParallaxSample>,
+    generated_opponent: Option<GeneratedOpponentSnapshot>,
 }
+
+/// Enemy root and optional generated identity sampled by
+/// [`publish_motion_state`].
+type EnemyMotionQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static Transform, Option<&'static SeededOpponent>),
+    (With<EnemyFighter>, Without<PlayerFighter>),
+>;
 
 /// Publishes a [`MotionSnapshot`] every frame the arena's fighters/camera
 /// exist (outside the fight, e.g. on the menu, clears the key instead so a
@@ -346,11 +428,11 @@ struct MotionSnapshot {
 /// current one).
 fn publish_motion_state(
     players: Query<&Transform, (With<PlayerFighter>, Without<EnemyFighter>)>,
-    enemies: Query<&Transform, (With<EnemyFighter>, Without<PlayerFighter>)>,
+    enemies: EnemyMotionQuery,
     cameras: Query<&Transform, With<WorldCamera>>,
     parallax: Query<(&ParallaxLayer, &Transform)>,
 ) {
-    let (Ok(player), Ok(enemy)) = (players.single(), enemies.single()) else {
+    let (Ok(player), Ok((enemy, generated_opponent))) = (players.single(), enemies.single()) else {
         clear_motion();
         return;
     };
@@ -372,6 +454,7 @@ fn publish_motion_state(
                 x: transform.translation.x,
             })
             .collect(),
+        generated_opponent: generated_opponent.map(generated_opponent_snapshot),
     };
     match serde_json::to_string(&snapshot) {
         Ok(json) => publish_motion(&json),
@@ -980,6 +1063,7 @@ fn poll_review_commands(
     mut commands: Commands,
     mut draft: ResMut<CharacterDraft>,
     mut autoplay: ResMut<ReviewAutoplay>,
+    mut campaign_seed: ResMut<CampaignSeed>,
     mut virtual_time: ResMut<Time<Virtual>>,
     mut buttons: Query<PressableButton, (With<Button>, Without<CategoryButton>)>,
     mut categories: Query<(&mut Interaction, &CategoryButton), With<Button>>,
@@ -991,6 +1075,7 @@ fn poll_review_commands(
         Ok(ReviewCommand::SeedCombat { seed }) => {
             commands.insert_resource(CombatRng(ChaCha8Rng::seed_from_u64(seed)));
         }
+        Ok(ReviewCommand::SeedCampaign { seed }) => campaign_seed.0 = seed,
         Ok(ReviewCommand::SelectPreset { preset }) => match parse_preset(&preset) {
             Some(preset) => draft.select_choice(HeroChoice::Preset(preset)),
             None => warn!("review: selectPreset(\"{preset}\") is not a known hero preset"),
@@ -1180,6 +1265,16 @@ fn publish_motion(json: &str) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn publish_motion(_json: &str) {}
+
+#[cfg(target_arch = "wasm32")]
+fn publish_encounter_identity(json: &str) {
+    if let Some(storage) = local_storage() {
+        let _ = storage.set_item(REVIEW_ENCOUNTER_KEY, json);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_encounter_identity(_json: &str) {}
 
 /// Clears [`REVIEW_MOTION_KEY`] so a scenario polling outside the fight (or
 /// after a snapshot failed to serialize) never reads a stale motion
@@ -1417,6 +1512,58 @@ mod tests {
     fn malformed_command_is_a_parse_error_not_a_panic() {
         assert!(serde_json::from_str::<ReviewCommand>("not json").is_err());
         assert!(serde_json::from_str::<ReviewCommand>(r#"{"cmd":"bogus"}"#).is_err());
+    }
+
+    #[test]
+    fn seed_campaign_command_accepts_an_explicit_alternate_review_seed() {
+        assert_eq!(
+            serde_json::from_str::<ReviewCommand>(r#"{"cmd":"seedCampaign","seed":1}"#)
+                .expect("the review seed command parses"),
+            ReviewCommand::SeedCampaign { seed: 1 }
+        );
+    }
+
+    #[test]
+    fn generated_opponent_snapshot_exposes_seed_and_resolved_stable_ids() {
+        let generated = crate::roster::LadderProgress(0)
+            .seeded_opponent(CampaignSeed::default())
+            .expect("the first ladder rung is the generated slice")
+            .expect("the bundled profile and catalog generate");
+
+        let snapshot = generated_opponent_snapshot(&generated);
+
+        assert_eq!(snapshot.encounter_id, generated.encounter_id);
+        assert_eq!(snapshot.seed, generated.seed);
+        assert_eq!(
+            snapshot.resolved_part_ids,
+            vec![
+                "human.body.foundation.v1",
+                "human.face.default.v1",
+                "human.hair.tied.v1",
+                "human.torso.linen.v1",
+                "human.legs.itari.v1",
+                "human.feet.opinci.v1",
+            ]
+        );
+    }
+
+    #[test]
+    fn encounter_telemetry_exposes_pre_fight_and_matching_combat_identity() {
+        let generated = crate::roster::LadderProgress(0)
+            .seeded_opponent(CampaignSeed::default())
+            .expect("the first ladder rung is generated")
+            .expect("the bundled profile resolves");
+        let prepared = crate::roster::PreparedEncounter(generated.clone());
+
+        let preview = encounter_identity_snapshot(Some(&prepared), None);
+        assert_eq!(
+            preview.preview,
+            Some(generated_opponent_snapshot(&generated))
+        );
+        assert_eq!(preview.combat, None);
+
+        let combat = encounter_identity_snapshot(Some(&prepared), Some(&generated));
+        assert_eq!(combat.preview, combat.combat);
     }
 
     #[test]

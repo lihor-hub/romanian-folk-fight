@@ -571,6 +571,9 @@ mod tests {
                 magie: 1,
             },
             appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
         });
         app.update();
         app.world_mut()
@@ -804,6 +807,9 @@ mod tests {
                 magie: 1,
             },
             appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
         };
         let level = Level {
             level: 3,
@@ -820,6 +826,8 @@ mod tests {
             &OwnedItems(HashSet::from([ItemId::ToporDePadurar])),
             &PlayerEquipment(equipment),
             &LadderProgress(4),
+            crate::roster::CampaignSeed::default(),
+            None,
             resume_destination,
         )
         .to_json()

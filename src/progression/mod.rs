@@ -787,6 +787,9 @@ mod tests {
                 ..Attributes::default()
             },
             appearance: PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                PlayerAppearance::default(),
+            ),
         });
         app.insert_resource(Wallet(12_345));
         app.insert_resource(Level {

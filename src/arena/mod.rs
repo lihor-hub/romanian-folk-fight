@@ -9,19 +9,22 @@
 pub mod animation;
 pub mod fx;
 
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 
-use crate::character::{Attributes, EnemyFighter, PlayerFighter, spawn_fighter};
+use crate::character::{
+    Attributes, CatalogError, CharacterCatalog, CharacterDefinition, EnemyFighter, GenerationError,
+    PlayerFighter, bundled_human_catalog, fallback_human, spawn_fighter,
+};
 use crate::combat::AiProfile;
 use crate::core::{GameState, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::cutout::{
     CutoutPartMarker, CutoutRig, CutoutRigTemplate, CutoutTemplate, GearVisualLayer, boss_template,
-    cutout_rig_owner, enemy_template, human_template, human_template_for,
+    cutout_rig_owner, enemy_template, human_template, spawn_character_definition_rig,
     spawn_cutout_rig_with_accent, spawn_gear_attachment_layers,
 };
 use crate::items::{Equipment, GearMotion};
-use crate::roster::{Boss, LadderProgress, Opponent};
+use crate::roster::{Boss, CampaignSeed, LadderProgress, Opponent, PreparedEncounter};
 use crate::theme::GROUND_COLOR;
 use animation::{AnimationSet, FighterClip, FighterSpriteSheets};
 use fx::{ArenaBackgrounds, background_tier, spawn_background};
@@ -46,6 +49,13 @@ const FIGHTER_Y: f32 = GROUND_TOP_Y + FIGHTER_SIZE.y / 2.0;
 pub const PLAYER_ANCHOR: Transform = Transform::from_xyz(-220.0, FIGHTER_Y, 0.0);
 /// Where the opponent stands, facing left; mirrors [`PLAYER_ANCHOR`].
 pub const ENEMY_ANCHOR: Transform = Transform::from_xyz(220.0, FIGHTER_Y, 0.0);
+
+#[derive(SystemParam)]
+struct EncounterResources<'w> {
+    ladder: Option<Res<'w, LadderProgress>>,
+    campaign_seed: Option<Res<'w, CampaignSeed>>,
+    prepared: Option<Res<'w, PreparedEncounter>>,
+}
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ArenaSet {
@@ -85,7 +95,7 @@ impl Plugin for ArenaPlugin {
 fn spawn_arena(
     commands: Commands,
     player: Option<Res<PlayerCharacter>>,
-    ladder: Option<Res<LadderProgress>>,
+    encounter: EncounterResources,
     sheets: Res<FighterSpriteSheets>,
     backgrounds: Res<ArenaBackgrounds>,
     asset_server: Option<Res<AssetServer>>,
@@ -103,7 +113,12 @@ fn spawn_arena(
     spawn_scene(
         commands,
         &player,
-        ladder,
+        encounter.ladder,
+        encounter
+            .campaign_seed
+            .map(|seed| *seed)
+            .unwrap_or_default(),
+        encounter.prepared.as_deref(),
         &backgrounds,
         asset_server.as_deref(),
     );
@@ -114,7 +129,7 @@ fn spawn_arena(
 fn spawn_arena_when_ready(
     commands: Commands,
     player: Option<Res<PlayerCharacter>>,
-    ladder: Option<Res<LadderProgress>>,
+    encounter: EncounterResources,
     sheets: Res<FighterSpriteSheets>,
     backgrounds: Res<ArenaBackgrounds>,
     asset_server: Option<Res<AssetServer>>,
@@ -129,7 +144,12 @@ fn spawn_arena_when_ready(
     spawn_scene(
         commands,
         &player,
-        ladder,
+        encounter.ladder,
+        encounter
+            .campaign_seed
+            .map(|seed| *seed)
+            .unwrap_or_default(),
+        encounter.prepared.as_deref(),
         &backgrounds,
         asset_server.as_deref(),
     );
@@ -142,11 +162,23 @@ fn spawn_scene(
     mut commands: Commands,
     player: &PlayerCharacter,
     ladder: Option<Res<LadderProgress>>,
+    campaign_seed: CampaignSeed,
+    prepared_encounter: Option<&PreparedEncounter>,
     backgrounds: &ArenaBackgrounds,
     asset_server: Option<&AssetServer>,
 ) {
     let ladder = ladder.map(|ladder| *ladder).unwrap_or_default();
     let opponent = ladder.opponent();
+    let seeded_visual = prepared_encounter
+        .filter(|prepared| {
+            ladder.0.is_multiple_of(crate::roster::LADDER.len())
+                && prepared.0.encounter_id == crate::roster::HOT_DE_CODRU_ENCOUNTER_ID
+        })
+        .map(|prepared| SeededEncounterVisual::Generated(prepared.0.clone()))
+        .unwrap_or_else(|| match ladder.seeded_opponent(campaign_seed) {
+            Some(generated) => seeded_encounter_visual(generated),
+            None => SeededEncounterVisual::Legacy,
+        });
     spawn_background(&mut commands, backgrounds, background_tier(ladder));
     spawn_scenery(&mut commands);
     let player_fighter = spawn_arena_fighter(
@@ -155,7 +187,7 @@ fn spawn_scene(
         player.attributes,
         PlayerFighter,
         PLAYER_ANCHOR,
-        human_template_for(player.appearance),
+        ArenaRig::Character(&player.definition),
         false,
         asset_server,
         None,
@@ -172,7 +204,13 @@ fn spawn_scene(
             },
         ),
         ENEMY_ANCHOR,
-        opponent_template(opponent),
+        match &seeded_visual {
+            SeededEncounterVisual::Generated(generated) => {
+                ArenaRig::Character(&generated.definition)
+            }
+            SeededEncounterVisual::KnownGood(definition) => ArenaRig::Character(definition),
+            SeededEncounterVisual::Legacy => ArenaRig::Template(opponent_template(opponent)),
+        },
         true,
         asset_server,
         Some(opponent.accent_hue),
@@ -182,10 +220,54 @@ fn spawn_scene(
         equipment.equip(id);
     }
     commands.entity(enemy).insert(equipment);
+    if let SeededEncounterVisual::Generated(generated) = seeded_visual {
+        commands.entity(enemy).insert(generated);
+    }
     if opponent.is_boss {
         commands.entity(enemy).insert(Boss {
             intro_line: opponent.intro_line,
         });
+    }
+}
+
+enum SeededEncounterVisual {
+    Generated(crate::roster::SeededOpponent),
+    KnownGood(CharacterDefinition),
+    Legacy,
+}
+
+fn seeded_encounter_visual(
+    generated: Result<crate::roster::SeededOpponent, GenerationError>,
+) -> SeededEncounterVisual {
+    seeded_encounter_visual_with_catalog(generated, bundled_human_catalog())
+}
+
+fn seeded_encounter_visual_with_catalog(
+    generated: Result<crate::roster::SeededOpponent, GenerationError>,
+    catalog: Result<&CharacterCatalog, CatalogError>,
+) -> SeededEncounterVisual {
+    match generated {
+        Ok(generated) => SeededEncounterVisual::Generated(generated),
+        Err(generation_error) => {
+            warn!(
+                "could not generate seeded opponent ({generation_error}); trying the versioned \
+                 known-good modular human"
+            );
+            let fallback = match catalog {
+                Ok(catalog) => fallback_human(catalog).map_err(|error| error.to_string()),
+                Err(error) => Err(error.to_string()),
+            };
+            match fallback {
+                Ok(definition) => SeededEncounterVisual::KnownGood(definition),
+                Err(fallback_error) => {
+                    error!(
+                        "known-good modular human also failed ({fallback_error}); using the legacy \
+                         authored opponent template"
+                    );
+                    SeededEncounterVisual::Legacy
+                }
+            }
+        }
     }
 }
 
@@ -208,13 +290,13 @@ fn spawn_scenery(commands: &mut Commands) {
 // Each argument is one distinct piece of the fighter's dressing; bundling
 // them into a struct for one call site would only add indirection.
 #[allow(clippy::too_many_arguments)]
-fn spawn_arena_fighter(
+fn spawn_arena_fighter<'a>(
     commands: &mut Commands,
     name: impl Into<String>,
     attrs: Attributes,
     marker: impl Bundle,
     anchor: Transform,
-    template: CutoutRigTemplate,
+    rig: ArenaRig<'a>,
     flip_x: bool,
     asset_server: Option<&AssetServer>,
     accent_hue: Option<Color>,
@@ -227,15 +309,31 @@ fn spawn_arena_fighter(
         FighterClip::Idle.animation(),
         anchor,
     ));
-    spawn_cutout_rig_with_accent(
-        commands,
-        fighter,
-        template,
-        asset_server,
-        flip_x,
-        accent_hue,
-    );
+    match rig {
+        ArenaRig::Character(definition) => spawn_character_definition_rig(
+            commands,
+            fighter,
+            definition,
+            asset_server,
+            flip_x,
+            None,
+            accent_hue,
+        ),
+        ArenaRig::Template(template) => spawn_cutout_rig_with_accent(
+            commands,
+            fighter,
+            template,
+            asset_server,
+            flip_x,
+            accent_hue,
+        ),
+    }
     fighter
+}
+
+enum ArenaRig<'a> {
+    Character(&'a CharacterDefinition),
+    Template(CutoutRigTemplate),
 }
 
 fn opponent_template(opponent: &Opponent) -> CutoutRigTemplate {
@@ -472,10 +570,10 @@ mod tests {
     use crate::core::CorePlugin;
     use crate::cutout::{
         CutoutPartKind, CutoutPartMarker, CutoutRig, CutoutTemplate, boss_template, enemy_template,
-        gear_sprite, human_template,
+        gear_sprite, human_template, human_template_for,
     };
     use crate::items::{ItemId, Slot, item_visual};
-    use crate::roster::LADDER;
+    use crate::roster::{CampaignSeed, LADDER, PreparedEncounter, SeededOpponent};
     use bevy::state::app::StatesPlugin;
 
     const PLAYER_ATTRIBUTES: Attributes = Attributes {
@@ -494,6 +592,9 @@ mod tests {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
             appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
         }
     }
 
@@ -507,6 +608,20 @@ mod tests {
     /// ladder.
     fn test_app_at(progress: LadderProgress) -> App {
         test_app_with(player_character(), progress)
+    }
+
+    fn test_app_at_with_campaign_seed(progress: LadderProgress, campaign_seed: u64) -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, ArenaPlugin));
+        app.insert_resource(player_character());
+        app.insert_resource(progress);
+        app.insert_resource(CampaignSeed(campaign_seed));
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Fight);
+        app.update();
+        app
     }
 
     fn test_app_with(player: PlayerCharacter, progress: LadderProgress) -> App {
@@ -827,6 +942,7 @@ mod tests {
                 name: "Făt-Frumos".to_string(),
                 attributes: PLAYER_ATTRIBUTES,
                 appearance,
+                definition: crate::character::CharacterDefinition::legacy_human(appearance),
             },
             LadderProgress::default(),
         );
@@ -840,10 +956,236 @@ mod tests {
     }
 
     #[test]
+    fn arena_player_rig_uses_the_persisted_definition_as_visual_authority() {
+        let legacy_projection = PlayerAppearance::default();
+        let definition_appearance = PlayerAppearance {
+            skin_tone: SkinTone::Deep,
+            build: BodyBuild::Powerful,
+            hair: HairStyle::Tied,
+            accent: AccentColor::Storm,
+        };
+        let mut app = test_app_with(
+            PlayerCharacter {
+                name: "Făt-Frumos".to_string(),
+                attributes: PLAYER_ATTRIBUTES,
+                appearance: legacy_projection,
+                definition: crate::character::CharacterDefinition::legacy_human(
+                    definition_appearance,
+                ),
+            },
+            LadderProgress::default(),
+        );
+
+        let player = app
+            .world_mut()
+            .query_filtered::<Entity, With<PlayerFighter>>()
+            .single(app.world())
+            .expect("player fighter exists");
+        let expected_torso = human_template_for(definition_appearance)
+            .parts
+            .into_iter()
+            .find(|part| part.kind == CutoutPartKind::Torso)
+            .expect("human template has a torso");
+        let part_parents = cutout_part_parents(&mut app);
+        let torso_size = app
+            .world_mut()
+            .query::<(
+                Entity,
+                &CutoutPartMarker,
+                &crate::cutout::CutoutPartRestPose,
+            )>()
+            .iter(app.world())
+            .find_map(|(entity, marker, rest)| {
+                (marker.kind == CutoutPartKind::Torso
+                    && cutout_rig_owner(entity, |part| part_parents.get(&part).copied()) == player)
+                    .then_some(rest.size)
+            })
+            .expect("player rig has a torso");
+
+        assert_eq!(
+            torso_size, expected_torso.size,
+            "the persisted definition, not its legacy projection, drives the arena rig"
+        );
+    }
+
+    #[test]
+    fn arena_invalid_persisted_part_id_renders_known_good_without_mutating_the_save() {
+        let mut player = player_character();
+        player.definition.parts.hair =
+            crate::character::PartId::new("human.hair.missing.v1").unwrap();
+        let persisted_definition = player.definition.clone();
+        let mut app = test_app_with(player, LadderProgress::default());
+
+        assert_eq!(
+            app.world().resource::<PlayerCharacter>().definition,
+            persisted_definition,
+            "render fallback must not rewrite the saved identity"
+        );
+        let player = app
+            .world_mut()
+            .query_filtered::<Entity, With<PlayerFighter>>()
+            .single(app.world())
+            .expect("player fighter still spawns");
+        let part_parents = cutout_part_parents(&mut app);
+        let rendered_hair_id = app
+            .world_mut()
+            .query::<(Entity, &CutoutPartMarker)>()
+            .iter(app.world())
+            .find_map(|(entity, marker)| {
+                (marker.kind == CutoutPartKind::Hair
+                    && cutout_rig_owner(entity, |part| part_parents.get(&part).copied()) == player)
+                    .then(|| marker.source_id.clone())
+                    .flatten()
+            })
+            .expect("known-good fallback renders a catalog-backed hair part");
+
+        assert_eq!(rendered_hair_id.as_str(), "human.hair.braided.v1");
+    }
+
+    #[test]
     fn arena_spawns_no_floating_name_labels() {
         let mut app = test_app();
         let labels = app.world_mut().query::<&Text2d>().iter(app.world()).count();
         assert_eq!(labels, 0, "no floating Text2d name labels in the arena");
+    }
+
+    #[test]
+    fn seeded_human_encounter_repeats_and_an_alternate_seed_changes_only_unlocked_choices() {
+        fn generated(app: &mut App) -> SeededOpponent {
+            app.world_mut()
+                .query_filtered::<&SeededOpponent, With<EnemyFighter>>()
+                .single(app.world())
+                .expect("the representative human opponent is generated")
+                .clone()
+        }
+
+        let mut first_entry = test_app_at_with_campaign_seed(LadderProgress(0), 0);
+        let mut repeated_entry = test_app_at_with_campaign_seed(LadderProgress(0), 0);
+        let mut alternate_entry = test_app_at_with_campaign_seed(LadderProgress(0), 1);
+
+        let first = generated(&mut first_entry);
+        let repeated = generated(&mut repeated_entry);
+        let alternate = generated(&mut alternate_entry);
+
+        assert_eq!(first, repeated, "the same encounter seed repeats exactly");
+        assert_ne!(first.seed, alternate.seed);
+        assert_ne!(
+            first.definition.parts.hair, alternate.definition.parts.hair,
+            "the pinned alternate review seed exercises the unlocked hair choice"
+        );
+        assert_eq!(first.definition.parts.body, alternate.definition.parts.body);
+        assert_eq!(first.definition.parts.face, alternate.definition.parts.face);
+        assert_eq!(
+            first.definition.parts.torso,
+            alternate.definition.parts.torso
+        );
+        assert_eq!(first.definition.parts.legs, alternate.definition.parts.legs);
+        assert_eq!(first.definition.parts.feet, alternate.definition.parts.feet);
+        assert_eq!(
+            first.definition.parts.waist,
+            alternate.definition.parts.waist
+        );
+        assert_eq!(
+            first.definition.parts.accessories,
+            alternate.definition.parts.accessories
+        );
+        assert_eq!(first.definition.appearance, alternate.definition.appearance);
+
+        let mut other_human = test_app_at_with_campaign_seed(LadderProgress(6), 0);
+        assert!(
+            other_human
+                .world_mut()
+                .query_filtered::<&SeededOpponent, With<EnemyFighter>>()
+                .single(other_human.world())
+                .is_err(),
+            "Solomonar keeps the existing human template path"
+        );
+    }
+
+    #[test]
+    fn arena_uses_the_prepared_persisted_encounter_instead_of_regenerating_it() {
+        let mut persisted = LadderProgress(0)
+            .seeded_opponent(CampaignSeed::default())
+            .expect("the representative encounter is generated")
+            .expect("the bundled profile resolves");
+        persisted.definition.parts.hair =
+            crate::character::PartId::new("human.hair.long.v1").expect("catalog ID is valid");
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, ArenaPlugin));
+        app.insert_resource(player_character());
+        app.insert_resource(LadderProgress(0));
+        app.insert_resource(CampaignSeed::default());
+        app.insert_resource(PreparedEncounter(persisted.clone()));
+        app.update();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Fight);
+        app.update();
+
+        let combat_identity = app
+            .world_mut()
+            .query_filtered::<&SeededOpponent, With<EnemyFighter>>()
+            .single(app.world())
+            .expect("the seeded enemy carries its exact combat identity");
+        assert_eq!(combat_identity, &persisted);
+    }
+
+    #[test]
+    fn generation_error_uses_known_good_modular_human_before_legacy_template() {
+        let choice = seeded_encounter_visual(Err(
+            crate::character::GenerationError::MissingRequiredSlot {
+                region: crate::character::BodyRegion::Hair,
+            },
+        ));
+
+        let SeededEncounterVisual::KnownGood(definition) = choice else {
+            panic!("GenerationError must choose the shared known-good modular human first");
+        };
+        assert_eq!(
+            definition.parts,
+            crate::character::bundled_human_catalog()
+                .expect("bundled catalog is available")
+                .known_good_human()
+                .clone()
+        );
+    }
+
+    #[test]
+    fn production_loader_keeps_known_good_available_when_an_unrelated_record_is_invalid() {
+        let mut value: serde_json::Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("bundled catalog is valid JSON");
+        let unrelated_long_hair = value["parts"]
+            .as_array_mut()
+            .expect("catalog has parts")
+            .iter_mut()
+            .find(|part| part["id"] == "human.hair.long.v1")
+            .expect("catalog has unrelated long hair");
+        unrelated_long_hair["asset_path"] =
+            serde_json::json!("fighters/human/runtime/not-registered.png");
+
+        let catalog = crate::character::load_human_catalog(&value.to_string());
+        assert!(
+            catalog
+                .as_ref()
+                .expect("the production loader accepts the schema")
+                .validate()
+                .is_err(),
+            "the unrelated bad record must still fail whole-catalog validation"
+        );
+        let choice = seeded_encounter_visual_with_catalog(
+            Err(crate::character::GenerationError::MissingRequiredSlot {
+                region: crate::character::BodyRegion::Hair,
+            }),
+            catalog.as_ref().map_err(Clone::clone),
+        );
+
+        let SeededEncounterVisual::KnownGood(definition) = choice else {
+            panic!("an unrelated invalid record must not hide the valid known-good human");
+        };
+        assert_eq!(definition.parts.hair.as_str(), "human.hair.braided.v1");
     }
 
     /// The enemy's `(FighterName, Attributes, Equipment, Option<Boss>)`.

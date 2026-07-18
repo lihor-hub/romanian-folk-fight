@@ -75,6 +75,13 @@ pub enum Diagnostic {
         path: PathBuf,
         detail: String,
     },
+    /// Runtime character-catalog metadata disagrees with the registered
+    /// sidecar asset contract.
+    CatalogContent {
+        catalog: PathBuf,
+        part_id: String,
+        detail: String,
+    },
 
     // --- #185: runtime-reference and image-integrity validation ---
     /// Production Rust/HTML code references an asset whose sidecar record
@@ -250,6 +257,15 @@ impl fmt::Display for Diagnostic {
             Diagnostic::CreditsDrift { id, path, detail } => {
                 write!(f, "assets/CREDITS.md: {id} ({}): {detail}", path.display())
             }
+            Diagnostic::CatalogContent {
+                catalog,
+                part_id,
+                detail,
+            } => write!(
+                f,
+                "{}: character part {part_id:?}: {detail}",
+                catalog.display()
+            ),
             Diagnostic::IllegalRuntimeReference {
                 file,
                 line,

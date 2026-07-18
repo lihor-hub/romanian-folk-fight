@@ -11,7 +11,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 
-use crate::character::{Attributes, PlayerAppearance, PlayerFighter, stats};
+use crate::character::{Attributes, CharacterDefinition, PlayerAppearance, PlayerFighter, stats};
 #[cfg(test)]
 use crate::core::screen_point_for_world_point;
 use crate::core::{
@@ -19,7 +19,7 @@ use crate::core::{
     letterbox_zoom, logical_node_rect, world_point_for_screen_point,
 };
 use crate::creation::PlayerCharacter;
-use crate::cutout::{CutoutRig, human_template_for, spawn_cutout_rig_with_gear};
+use crate::cutout::{CutoutRig, spawn_character_definition_rig};
 use crate::flow::FlowIntent;
 use crate::items::{CATALOG, Equipment, Item, ItemId, Slot};
 use crate::menu::DisabledButton;
@@ -394,8 +394,10 @@ fn player_attributes(player: Option<&PlayerCharacter>) -> Attributes {
     }
 }
 
-fn player_appearance(player: Option<&PlayerCharacter>) -> PlayerAppearance {
-    player.map(|player| player.appearance).unwrap_or_default()
+fn player_definition(player: Option<&PlayerCharacter>) -> CharacterDefinition {
+    player
+        .map(|player| player.definition.clone())
+        .unwrap_or_else(|| CharacterDefinition::legacy_human(PlayerAppearance::default()))
 }
 
 #[derive(SystemParam)]
@@ -420,7 +422,7 @@ fn spawn_shop_screen(
     let ui_font = &*assets.ui_font;
     let panel_texture = &*assets.panel_texture;
     let icons = &*assets.icons;
-    let appearance = player_appearance(player.as_deref());
+    let definition = player_definition(player.as_deref());
     let attributes = player_attributes(player.as_deref());
     // The brown backdrop is a world-space sprite behind the preview rig
     // (z -40 < SHOP_PREVIEW_Z), not a `BackgroundColor` on the UI root: the
@@ -594,7 +596,7 @@ fn spawn_shop_screen(
     spawn_shop_preview(
         &mut commands,
         &equipment.0,
-        appearance,
+        &definition,
         assets.asset_server.as_deref(),
     );
 }
@@ -702,7 +704,7 @@ fn spawn_shop_preview_stage(
 fn spawn_shop_preview(
     commands: &mut Commands,
     equipment: &Equipment,
-    appearance: PlayerAppearance,
+    definition: &CharacterDefinition,
     asset_server: Option<&AssetServer>,
 ) {
     // Placeholder until `update_shop_preview_transform` places it for real:
@@ -718,13 +720,14 @@ fn spawn_shop_preview(
                 .with_scale(Vec3::splat(SHOP_PREVIEW_SCALE)),
         ))
         .id();
-    spawn_cutout_rig_with_gear(
+    spawn_character_definition_rig(
         commands,
         preview,
-        human_template_for(appearance),
+        definition,
         asset_server,
         false,
-        equipment,
+        Some(equipment),
+        None,
     );
 }
 
@@ -1169,7 +1172,7 @@ fn refresh_shop_preview_rig(
     previews: Query<(Entity, Option<&Children>), With<ShopPreview>>,
     asset_server: Option<Res<AssetServer>>,
 ) {
-    let appearance = player_appearance(player.as_deref());
+    let definition = player_definition(player.as_deref());
     for (preview, children) in &previews {
         if let Some(children) = children {
             for child in children.iter() {
@@ -1177,13 +1180,14 @@ fn refresh_shop_preview_rig(
             }
         }
         commands.entity(preview).remove::<CutoutRig>();
-        spawn_cutout_rig_with_gear(
+        spawn_character_definition_rig(
             &mut commands,
             preview,
-            human_template_for(appearance),
+            &definition,
             asset_server.as_deref(),
             false,
-            &equipment.0,
+            Some(&equipment.0),
+            None,
         );
     }
 }
@@ -1337,11 +1341,18 @@ mod tests {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
             appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
         }
     }
 
     /// Headless app with only the shop flow.
     fn test_app() -> App {
+        test_app_with_player(player_character())
+    }
+
+    fn test_app_with_player(player: PlayerCharacter) -> App {
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
@@ -1350,7 +1361,7 @@ mod tests {
             FlowPlugin,
             ShopPlugin,
         ));
-        app.insert_resource(player_character());
+        app.insert_resource(player);
         app.update();
         app
     }
@@ -1425,6 +1436,31 @@ mod tests {
             .query_filtered::<(), With<C>>()
             .iter(app.world())
             .count()
+    }
+
+    #[test]
+    fn shop_invalid_persisted_part_id_renders_known_good_without_mutating_the_save() {
+        let mut player = player_character();
+        player.definition.parts.hair =
+            crate::character::PartId::new("human.hair.missing.v1").unwrap();
+        let persisted_definition = player.definition.clone();
+        let mut app = test_app_with_player(player);
+
+        set_state(&mut app, GameState::Shop);
+
+        assert_eq!(
+            app.world().resource::<PlayerCharacter>().definition,
+            persisted_definition,
+            "shop fallback must not rewrite the saved identity"
+        );
+        let rendered_hair_id = app
+            .world_mut()
+            .query::<&CutoutPartMarker>()
+            .iter(app.world())
+            .find(|marker| marker.kind == CutoutPartKind::Hair)
+            .and_then(|marker| marker.source_id.clone())
+            .expect("known-good fallback renders a catalog-backed hair part");
+        assert_eq!(rendered_hair_id.as_str(), "human.hair.braided.v1");
     }
 
     /// The button entity carrying `action`.

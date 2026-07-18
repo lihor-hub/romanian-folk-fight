@@ -12,14 +12,14 @@ use bevy::ui::UiSystems;
 
 pub use draft::{AttributeKind, CharacterDraft, FOLK_NAMES, FREE_POINTS, HeroChoice, HeroPreset};
 
-use crate::character::{Attributes, PlayerAppearance, stats};
+use crate::character::{Attributes, CharacterDefinition, PlayerAppearance, stats};
 use crate::core::{
     GameState, LetterboxRect, UiFont, despawn_screen, letterbox_zoom, logical_node_rect,
     world_point_for_screen_point,
 };
 #[cfg(test)]
 use crate::core::{ViewportInfo, screen_point_for_world_point};
-use crate::cutout::{CutoutRig, human_template_for, spawn_cutout_rig_with_gear};
+use crate::cutout::{CutoutRig, spawn_character_definition_rig};
 use crate::flow::FlowIntent;
 use crate::items::Equipment;
 use crate::menu::DisabledButton;
@@ -47,13 +47,15 @@ const CREATION_PREVIEW_SCALE: f32 = 1.02;
 const CREATION_PREVIEW_Y: f32 = -18.0;
 const PREVIEW_Z: f32 = 25.0;
 
-/// The confirmed player character: chosen name, final attributes, and saved
-/// appearance. Written by the confirm button and read by the fight screen.
+/// The confirmed player character: chosen name, final attributes, legacy
+/// appearance projection, and stable resolved identity. Written by the
+/// confirm button and read by the fight screen.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
 pub struct PlayerCharacter {
     pub name: String,
     pub attributes: Attributes,
     pub appearance: PlayerAppearance,
+    pub definition: CharacterDefinition,
 }
 
 /// Marker for the creation-screen root; everything under it is despawned by
@@ -257,13 +259,14 @@ fn spawn_creation_screen(
         ))
         .id();
     let equipment = equipment_from_items(draft.starter_items());
-    spawn_cutout_rig_with_gear(
+    spawn_character_definition_rig(
         &mut commands,
         preview,
-        human_template_for(draft.appearance()),
+        &draft.definition(),
         asset_server.as_deref(),
         false,
-        &equipment,
+        Some(&equipment),
+        None,
     );
 }
 
@@ -761,6 +764,7 @@ fn handle_creation_actions(
                         name: draft.name().to_string(),
                         attributes: draft.attributes(),
                         appearance: draft.appearance(),
+                        definition: draft.definition(),
                     });
                     let equipment = equipment_from_items(draft.starter_items());
                     commands.insert_resource(OwnedItems(
@@ -891,13 +895,14 @@ fn refresh_preview_rig(
         }
         commands.entity(preview).remove::<CutoutRig>();
         let equipment = equipment_from_items(draft.starter_items());
-        spawn_cutout_rig_with_gear(
+        spawn_character_definition_rig(
             &mut commands,
             preview,
-            human_template_for(draft.appearance()),
+            &draft.definition(),
             asset_server.as_deref(),
             false,
-            &equipment,
+            Some(&equipment),
+            None,
         );
     }
 }
@@ -908,7 +913,8 @@ mod tests {
     use crate::character::{AccentColor, BodyBuild, HairStyle, SkinTone};
     use crate::core::CorePlugin;
     use crate::cutout::{
-        CutoutPartKind, CutoutPartMarker, GearVisualLayer, cutout_rig_owner, human_template,
+        CutoutPartKind, CutoutPartMarker, CutoutPartRestPose, GearVisualLayer, cutout_rig_owner,
+        human_template,
     };
     use crate::items::ItemId;
     use crate::save::{SaveGame, SavePlugin, SaveStore};
@@ -1314,6 +1320,33 @@ mod tests {
         count
     }
 
+    fn cutout_identity_and_rest_snapshot(
+        app: &App,
+        root: Entity,
+    ) -> std::collections::HashMap<
+        CutoutPartKind,
+        (Option<crate::character::PartId>, CutoutPartRestPose),
+    > {
+        let world = app.world();
+        let mut snapshot = std::collections::HashMap::new();
+        let mut stack = vec![root];
+        while let Some(entity) = stack.pop() {
+            let Some(children) = world.get::<Children>(entity) else {
+                continue;
+            };
+            for child in children.iter() {
+                if let (Some(marker), Some(rest)) = (
+                    world.get::<CutoutPartMarker>(child),
+                    world.get::<CutoutPartRestPose>(child),
+                ) {
+                    snapshot.insert(marker.kind, (marker.source_id.clone(), *rest));
+                }
+                stack.push(child);
+            }
+        }
+        snapshot
+    }
+
     #[test]
     fn entering_creation_spawns_a_cutout_preview() {
         let mut app = test_app();
@@ -1325,6 +1358,53 @@ mod tests {
         assert_eq!(
             cutout_descendant_count(&mut app, preview),
             human_template().parts.len()
+        );
+    }
+
+    #[test]
+    fn creation_and_arena_render_the_same_definition_identity_and_rest_pose() {
+        let mut creation = test_app();
+        let definition = draft(&creation).definition();
+        let creation_root = creation
+            .world_mut()
+            .query_filtered::<Entity, With<CreationPreview>>()
+            .single(creation.world())
+            .expect("creation preview exists");
+        let creation_snapshot = cutout_identity_and_rest_snapshot(&creation, creation_root);
+
+        let mut arena = App::new();
+        arena.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            crate::arena::ArenaPlugin,
+        ));
+        arena.insert_resource(PlayerCharacter {
+            name: "Făt-Frumos".to_owned(),
+            attributes: Attributes::default(),
+            appearance: definition.appearance,
+            definition,
+        });
+        arena.insert_resource(crate::roster::LadderProgress::default());
+        arena.update();
+        arena
+            .world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Fight);
+        arena.update();
+        let arena_root = arena
+            .world_mut()
+            .query_filtered::<Entity, With<crate::character::PlayerFighter>>()
+            .single(arena.world())
+            .expect("arena player exists");
+        let arena_snapshot = cutout_identity_and_rest_snapshot(&arena, arena_root);
+
+        assert_eq!(creation_snapshot, arena_snapshot);
+        assert!(
+            creation_snapshot
+                .values()
+                .all(|(source_id, _)| source_id.is_some()),
+            "every rendered semantic region retains its resolved stable ID"
         );
     }
 
@@ -1617,6 +1697,25 @@ mod tests {
             *app.world().resource::<OwnedItems>(),
             OwnedItems(Default::default())
         );
+    }
+
+    #[test]
+    fn confirmation_persists_the_definition_shown_by_the_preview() {
+        let mut app = test_app();
+        press(
+            &mut app,
+            CreationAction::SelectChoice(HeroChoice::Preset(HeroPreset::Haiducul)),
+        );
+        let previewed_definition = draft(&app).definition();
+
+        press(&mut app, CreationAction::Confirm);
+        app.update();
+
+        let player = app
+            .world()
+            .get_resource::<PlayerCharacter>()
+            .expect("PlayerCharacter stored on confirm");
+        assert_eq!(player.definition, previewed_definition);
     }
 
     #[test]

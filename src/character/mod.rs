@@ -1,19 +1,47 @@
 //! Character model: folk-flavored attributes, resource pools, and fighter
 //! markers shared by combat, character creation, shop, and progression.
 
+pub mod catalog;
+pub mod definition;
+pub mod generation;
 pub mod stats;
+
+pub use catalog::{
+    AttachmentMetadata, BodyRegion, CHARACTER_CATALOG_VERSION, CatalogError, CharacterCatalog,
+    PartRecord, ResolvedCharacter, bundled_human_catalog, load_human_catalog,
+};
+pub use definition::{
+    CHARACTER_DEFINITION_VERSION, CharacterDefinition, CulturalProfile, PartId, PartIdError,
+    PartSelections, SkeletonFamily,
+};
+pub use generation::{
+    GenerationError, GenerationProfile, GenerationSlot, WeightedPart, fallback_human,
+    generate_character,
+};
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::items::Equipment;
 
-/// Registers the character model. Components are plain data for now; systems
-/// arrive with the combat and progression issues.
+/// Registers the character model and its single validated catalog resource.
 pub struct CharacterPlugin;
 
 impl Plugin for CharacterPlugin {
-    fn build(&self, _app: &mut App) {}
+    fn build(&self, app: &mut App) {
+        match bundled_human_catalog() {
+            Ok(catalog) => {
+                if let Err(error) = catalog.validate() {
+                    error!("bundled character catalog is invalid: {error}");
+                } else {
+                    app.insert_resource(catalog.clone());
+                }
+            }
+            Err(error) => {
+                error!("bundled character catalog is invalid: {error}");
+            }
+        }
+    }
 }
 
 /// The eight folk attributes of a fighter (#128): strength, agility,
@@ -335,6 +363,20 @@ pub fn spawn_fighter(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn character_plugin_registers_the_validated_shared_catalog_resource() {
+        let mut app = App::new();
+        app.add_plugins(CharacterPlugin);
+
+        let resource = app
+            .world()
+            .get_resource::<CharacterCatalog>()
+            .expect("the bundled validated catalog is an ECS resource");
+        let bundled = bundled_human_catalog().expect("the bundled catalog validates");
+        assert_eq!(resource.version(), bundled.version());
+        assert_eq!(resource.known_good_human(), bundled.known_good_human());
+    }
 
     #[test]
     fn attributes_default_to_the_per_kind_base_values() {
