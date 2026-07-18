@@ -238,7 +238,7 @@ fn check_catalog_material_channels(assets_root: &Path, aggregate: &Aggregate) ->
             let Some(record) = aggregate
                 .records
                 .iter()
-                .find(|record| record.full_path == PathBuf::from(&asset_path))
+                .find(|record| record.full_path.as_path() == Path::new(&asset_path))
             else {
                 diagnostics.push(Diagnostic::CatalogContent {
                     catalog: display_catalog.clone(),
