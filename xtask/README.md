@@ -270,6 +270,63 @@ by this command.
 Plain `assets review` renders the *full* gallery every run; changed-asset
 filtering is the `--changed` flag below.
 
+### Character-catalog authoring and review (#319)
+
+The runtime human catalog lives at
+`assets/fighters/catalog/human-foundation.json`. It is intentionally ignored by
+its local asset sidecar: it is typed runtime metadata, while every PNG it names
+continues to be registered by the runtime asset sidecar that owns that media.
+An author adds the media record (including provenance, exact credit/license,
+dimensions, sampler, and rig metadata), then adds a catalog part with a stable
+ID, semantic region, asset path, compatible skeletons and cultural tags, and
+an attachment point/pivot/draw layer. `cargo xtask assets check` validates the
+media contract; the character catalog and generation tests validate the JSON
+contract and compatibility rules:
+
+```bash
+cargo xtask assets check
+cargo test --lib character::catalog
+cargo test --lib character::generation
+```
+
+Catalog cultural tags use overlap semantics: a selected part must share at
+least one open-ended authored tag with the definition's cultural profile.
+`companions` and `exclusions` name stable IDs and are validated as selected
+relationships. The mandatory human regions are body, face, hair, torso, legs,
+and feet. Keep IDs stable because resolved selections are persisted; create a
+new versioned ID rather than renaming or repurposing old content.
+
+`assets review` is the visual inspection step for catalog-backed art. Open the
+printed gallery index and check the right-facing and mirrored rig-part pages,
+the human composition, pivot/attachment diagrams, draw order, and equipped
+gear composition. It validates/reviews art records, not the generated identity
+itself. For that identity, the review build publishes the seeded opponent's
+encounter ID, seed, and semantic-order resolved stable IDs as
+`generated_opponent` inside `rff_review_motion_v1` while a fight is active.
+`cargo xtask web-smoke --scenario gold-journey` exercises this path; the
+focused review assertion is:
+
+```bash
+cargo test --features review --lib \
+  review::tests::generated_opponent_snapshot_exposes_seed_and_resolved_stable_ids
+```
+
+Generation and development validation report errors rather than swapping in a
+different result. To inspect the safe explicit specimen, call
+`character::fallback_human(&catalog)` and resolve the returned definition. At
+scene runtime, `spawn_character_definition_rig` automatically renders the
+catalog's versioned `known_good_human` only when a persisted human definition
+cannot resolve, logs the diagnostic, and never mutates the saved identity. A
+broken bundled catalog falls back one level further to the legacy human cutout
+template for that frame.
+
+For the 2.5D material and wardrobe phases, the stable interface is the
+versioned `CharacterDefinition`/`PartId` selection plus the existing cutout
+semantic attachment and `source_id` contracts. Consumers must not derive
+identity from file paths. Add material channels, new skeletons, or richer
+wardrobe metadata through an intentional catalog/schema version; the current
+catalog document, part-record, and attachment parsers reject unknown fields.
+
 ### `assets review --changed` -- the focused changed-asset gallery (#211, a child of #141)
 
 Owned by `xtask/src/assets/changed.rs` (base resolution, diff mapping,
