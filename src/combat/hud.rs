@@ -740,6 +740,9 @@ mod tests {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
             appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
         });
         app.insert_resource(CombatRng(strikes_rng(4)));
         app.update();
@@ -1181,6 +1184,9 @@ mod tests {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
             appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
         });
         app.insert_resource(CombatRng(strikes_rng(4)));
         app.insert_resource(Level {
@@ -1332,6 +1338,9 @@ mod tests {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
             appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
         });
         app.insert_resource(crate::roster::LadderProgress(4)); // Muma Pădurii, the first boss
         app.insert_resource(CombatRng(strikes_rng(4)));
@@ -1376,6 +1385,9 @@ mod tests {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
             appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
         });
         app.insert_resource(CombatRng(strikes_rng(4)));
         app.insert_resource(AccessibilityPreferences {

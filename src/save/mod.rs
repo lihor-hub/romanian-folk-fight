@@ -205,6 +205,12 @@ mod tests {
         app.add_message::<CombatLogEvent>();
         let (store, cell) = SaveStore::in_memory();
         app.insert_resource(store);
+        let appearance = PlayerAppearance {
+            skin_tone: crate::character::SkinTone::Deep,
+            build: crate::character::BodyBuild::Balanced,
+            hair: crate::character::HairStyle::Braided,
+            accent: crate::character::AccentColor::Storm,
+        };
         app.insert_resource(PlayerCharacter {
             name: "Făt-Frumos".to_string(),
             attributes: Attributes {
@@ -217,12 +223,8 @@ mod tests {
                 carisma: 1,
                 magie: 0,
             },
-            appearance: PlayerAppearance {
-                skin_tone: crate::character::SkinTone::Deep,
-                build: crate::character::BodyBuild::Balanced,
-                hair: crate::character::HairStyle::Braided,
-                accent: crate::character::AccentColor::Storm,
-            },
+            appearance,
+            definition: crate::character::CharacterDefinition::legacy_human(appearance),
         });
         app.update();
         (app, cell)

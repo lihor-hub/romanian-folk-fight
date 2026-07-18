@@ -1337,6 +1337,9 @@ mod tests {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
             appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
         }
     }
 

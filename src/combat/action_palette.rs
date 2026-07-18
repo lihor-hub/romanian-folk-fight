@@ -1022,6 +1022,9 @@ mod tests {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
             appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
         });
         app.insert_resource(CombatRng(strikes_rng(4)));
         app.update();
@@ -1048,6 +1051,9 @@ mod tests {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
             appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
         });
         app.insert_resource(CombatRng(strikes_rng(4)));
         app.insert_resource(ViewportInfo {
@@ -1357,6 +1363,9 @@ mod tests {
             name: "Făt-Frumos".to_string(),
             attributes: PLAYER_ATTRIBUTES,
             appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
         });
         app.insert_resource(CombatRng(strikes_rng(4)));
         // Register the eighth descriptor *before* the fight screen (and thus
@@ -1620,6 +1629,9 @@ mod tests {
                 name: "Făt-Frumos".to_string(),
                 attributes: PLAYER_ATTRIBUTES,
                 appearance: crate::character::PlayerAppearance::default(),
+                definition: crate::character::CharacterDefinition::legacy_human(
+                    crate::character::PlayerAppearance::default(),
+                ),
             });
             app.insert_resource(CombatRng(strikes_rng(4)));
             app.insert_resource(ViewportInfo {
@@ -2174,6 +2186,9 @@ mod tests {
                 name: "Făt-Frumos".to_string(),
                 attributes: PLAYER_ATTRIBUTES,
                 appearance: crate::character::PlayerAppearance::default(),
+                definition: crate::character::CharacterDefinition::legacy_human(
+                    crate::character::PlayerAppearance::default(),
+                ),
             });
             app.insert_resource(CombatRng(strikes_rng(4)));
             app.insert_resource(ExtraDescriptors(vec![ActionDescriptor {

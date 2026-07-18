@@ -12,7 +12,7 @@ use bevy::ui::UiSystems;
 
 pub use draft::{AttributeKind, CharacterDraft, FOLK_NAMES, FREE_POINTS, HeroChoice, HeroPreset};
 
-use crate::character::{Attributes, PlayerAppearance, stats};
+use crate::character::{Attributes, CharacterDefinition, PlayerAppearance, stats};
 use crate::core::{
     GameState, LetterboxRect, UiFont, despawn_screen, letterbox_zoom, logical_node_rect,
     world_point_for_screen_point,
@@ -47,13 +47,15 @@ const CREATION_PREVIEW_SCALE: f32 = 1.02;
 const CREATION_PREVIEW_Y: f32 = -18.0;
 const PREVIEW_Z: f32 = 25.0;
 
-/// The confirmed player character: chosen name, final attributes, and saved
-/// appearance. Written by the confirm button and read by the fight screen.
+/// The confirmed player character: chosen name, final attributes, legacy
+/// appearance projection, and stable resolved identity. Written by the
+/// confirm button and read by the fight screen.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
 pub struct PlayerCharacter {
     pub name: String,
     pub attributes: Attributes,
     pub appearance: PlayerAppearance,
+    pub definition: CharacterDefinition,
 }
 
 /// Marker for the creation-screen root; everything under it is despawned by
@@ -761,6 +763,7 @@ fn handle_creation_actions(
                         name: draft.name().to_string(),
                         attributes: draft.attributes(),
                         appearance: draft.appearance(),
+                        definition: draft.definition(),
                     });
                     let equipment = equipment_from_items(draft.starter_items());
                     commands.insert_resource(OwnedItems(
@@ -1617,6 +1620,25 @@ mod tests {
             *app.world().resource::<OwnedItems>(),
             OwnedItems(Default::default())
         );
+    }
+
+    #[test]
+    fn confirmation_persists_the_definition_shown_by_the_preview() {
+        let mut app = test_app();
+        press(
+            &mut app,
+            CreationAction::SelectChoice(HeroChoice::Preset(HeroPreset::Haiducul)),
+        );
+        let previewed_definition = draft(&app).definition();
+
+        press(&mut app, CreationAction::Confirm);
+        app.update();
+
+        let player = app
+            .world()
+            .get_resource::<PlayerCharacter>()
+            .expect("PlayerCharacter stored on confirm");
+        assert_eq!(player.definition, previewed_definition);
     }
 
     #[test]

@@ -571,6 +571,9 @@ mod tests {
                 magie: 1,
             },
             appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
         });
         app.update();
         app.world_mut()
@@ -804,6 +807,9 @@ mod tests {
                 magie: 1,
             },
             appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
         };
         let level = Level {
             level: 3,
