@@ -56,6 +56,7 @@ struct CatalogDocument {
     version: u32,
     parts: Vec<PartRecord>,
     known_good_human: PartSelections,
+    known_good_human_cultural_tags: Vec<String>,
 }
 
 /// A validated lookup table for character parts and a safe human fallback.
@@ -65,6 +66,7 @@ pub struct CharacterCatalog {
     parts: HashMap<PartId, PartRecord>,
     duplicate_ids: Vec<PartId>,
     known_good_human: PartSelections,
+    known_good_human_cultural_tags: Vec<String>,
 }
 
 impl CharacterCatalog {
@@ -91,6 +93,7 @@ impl CharacterCatalog {
             parts,
             duplicate_ids,
             known_good_human: document.known_good_human,
+            known_good_human_cultural_tags: document.known_good_human_cultural_tags,
         })
     }
 
@@ -103,6 +106,11 @@ impl CharacterCatalog {
     /// versioned fallback when later runtime adapters need one.
     pub fn known_good_human(&self) -> &PartSelections {
         &self.known_good_human
+    }
+
+    /// Returns the cultural profile tags validated with the human fallback.
+    pub fn known_good_human_cultural_tags(&self) -> &[String] {
+        &self.known_good_human_cultural_tags
     }
 
     /// Returns the resolved record for a stable part ID, when present.
@@ -131,9 +139,22 @@ impl CharacterCatalog {
                     });
                 }
             }
+            for exclusion in &part.exclusions {
+                if !self.parts.contains_key(exclusion) {
+                    return Err(CatalogError::MissingExclusionPart {
+                        part_id: part.id.clone(),
+                        exclusion: exclusion.clone(),
+                    });
+                }
+            }
         }
 
-        self.validate_selections(&self.known_good_human)
+        self.resolve_parts(
+            &self.known_good_human,
+            SkeletonFamily::Human,
+            &self.known_good_human_cultural_tags,
+        )
+        .map(|_| ())
     }
 
     /// Resolves a stable definition into the records needed by the renderer.
@@ -143,7 +164,25 @@ impl CharacterCatalog {
     ) -> Result<ResolvedCharacter, CatalogError> {
         self.validate()?;
 
-        let selections = selected_parts(&definition.parts);
+        let parts = self.resolve_parts(
+            &definition.parts,
+            definition.skeleton,
+            &definition.culture.tags,
+        )?;
+
+        Ok(ResolvedCharacter {
+            definition: definition.clone(),
+            parts,
+        })
+    }
+
+    fn resolve_parts(
+        &self,
+        part_selections: &PartSelections,
+        skeleton: SkeletonFamily,
+        culture_tags: &[String],
+    ) -> Result<HashMap<PartId, PartRecord>, CatalogError> {
+        let selections = selected_parts(part_selections);
         let selected_ids = selections
             .iter()
             .map(|(id, _)| (*id).clone())
@@ -161,10 +200,19 @@ impl CharacterCatalog {
                     actual: part.region,
                 });
             }
-            if !part.skeletons.contains(&definition.skeleton) {
+            if !part.skeletons.contains(&skeleton) {
                 return Err(CatalogError::IncompatibleSkeleton {
                     part_id: id.clone(),
-                    skeleton: definition.skeleton,
+                    skeleton,
+                });
+            }
+            if !culture_tags
+                .iter()
+                .any(|tag| part.cultural_tags.contains(tag))
+            {
+                return Err(CatalogError::IncompatibleCulture {
+                    part_id: id.clone(),
+                    culture_tags: culture_tags.to_vec(),
                 });
             }
             for companion in &part.companions {
@@ -187,10 +235,7 @@ impl CharacterCatalog {
             parts.insert(id.clone(), part.clone());
         }
 
-        Ok(ResolvedCharacter {
-            definition: definition.clone(),
-            parts,
-        })
+        Ok(parts)
     }
 
     const REQUIRED_HUMAN_REGIONS: [BodyRegion; 6] = [
@@ -201,23 +246,6 @@ impl CharacterCatalog {
         BodyRegion::Legs,
         BodyRegion::Feet,
     ];
-
-    fn validate_selections(&self, selections: &PartSelections) -> Result<(), CatalogError> {
-        for (id, expected_region) in selected_parts(selections) {
-            let part = self
-                .part(id)
-                .ok_or_else(|| CatalogError::UnknownPart(id.clone()))?;
-            if part.region != expected_region {
-                return Err(CatalogError::WrongRegion {
-                    part_id: id.clone(),
-                    expected: expected_region,
-                    actual: part.region,
-                });
-            }
-        }
-
-        Ok(())
-    }
 }
 
 fn selected_parts(selections: &PartSelections) -> Vec<(&PartId, BodyRegion)> {
@@ -273,6 +301,10 @@ pub enum CatalogError {
         part_id: PartId,
         companion: PartId,
     },
+    MissingExclusionPart {
+        part_id: PartId,
+        exclusion: PartId,
+    },
     MissingSelectedCompanion {
         part_id: PartId,
         companion: PartId,
@@ -281,6 +313,10 @@ pub enum CatalogError {
     IncompatibleSkeleton {
         part_id: PartId,
         skeleton: SkeletonFamily,
+    },
+    IncompatibleCulture {
+        part_id: PartId,
+        culture_tags: Vec<String>,
     },
     WrongRegion {
         part_id: PartId,
@@ -312,6 +348,12 @@ impl fmt::Display for CatalogError {
                     "part `{part_id}` references missing companion `{companion}`"
                 )
             }
+            Self::MissingExclusionPart { part_id, exclusion } => {
+                write!(
+                    formatter,
+                    "part `{part_id}` references missing exclusion `{exclusion}`"
+                )
+            }
             Self::MissingSelectedCompanion { part_id, companion } => {
                 write!(
                     formatter,
@@ -325,6 +367,13 @@ impl fmt::Display for CatalogError {
                     "part `{part_id}` is incompatible with skeleton `{skeleton:?}`"
                 )
             }
+            Self::IncompatibleCulture {
+                part_id,
+                culture_tags,
+            } => write!(
+                formatter,
+                "part `{part_id}` shares no cultural tag with {culture_tags:?}"
+            ),
             Self::WrongRegion {
                 part_id,
                 expected,
@@ -346,7 +395,10 @@ impl std::error::Error for CatalogError {}
 mod tests {
     use serde_json::Value;
 
-    use crate::character::{CharacterDefinition, PartId, PlayerAppearance, SkeletonFamily};
+    use crate::character::{
+        CHARACTER_DEFINITION_VERSION, CharacterDefinition, CulturalProfile, PartId,
+        PlayerAppearance, SkeletonFamily,
+    };
 
     use super::{BodyRegion, CatalogError, CharacterCatalog};
 
@@ -454,12 +506,83 @@ mod tests {
     }
 
     #[test]
+    fn human_catalog_rejects_a_dangling_exclusion_id() {
+        let mut value: Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("human foundation fixture is valid JSON");
+        value["parts"]
+            .as_array_mut()
+            .expect("fixture has parts")
+            .iter_mut()
+            .find(|part| part["id"] == "human.torso.linen.v1")
+            .expect("fixture has a torso part")["exclusions"] =
+            serde_json::json!(["human.accessory.missing.v1"]);
+        let catalog = fixture_from(value);
+
+        assert_eq!(
+            catalog.validate(),
+            Err(CatalogError::MissingExclusionPart {
+                part_id: PartId::new("human.torso.linen.v1").unwrap(),
+                exclusion: PartId::new("human.accessory.missing.v1").unwrap(),
+            })
+        );
+    }
+
+    #[test]
+    fn resolution_rejects_parts_without_a_shared_cultural_tag() {
+        let catalog = fixture();
+        let mut definition = CharacterDefinition::legacy_human(PlayerAppearance::default());
+        definition.culture.tags = vec!["generic_fantasy".to_owned()];
+
+        assert_eq!(
+            catalog.resolve(&definition),
+            Err(CatalogError::IncompatibleCulture {
+                part_id: PartId::new("human.body.foundation.v1").unwrap(),
+                culture_tags: vec!["generic_fantasy".to_owned()],
+            })
+        );
+    }
+
+    #[test]
+    fn validation_resolves_the_catalog_fallback_under_full_human_rules() {
+        let mut value: Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("human foundation fixture is valid JSON");
+        value["parts"]
+            .as_array_mut()
+            .expect("fixture has parts")
+            .iter_mut()
+            .find(|part| part["id"] == "human.body.foundation.v1")
+            .expect("fixture has a body part")["cultural_tags"] =
+            serde_json::json!(["generic_fantasy"]);
+        let catalog = fixture_from(value);
+
+        assert_eq!(
+            catalog.validate(),
+            Err(CatalogError::IncompatibleCulture {
+                part_id: PartId::new("human.body.foundation.v1").unwrap(),
+                culture_tags: vec!["romanian".to_owned()],
+            })
+        );
+    }
+
+    #[test]
     fn known_good_human_resolves_all_selected_parts() {
         let catalog = fixture();
-        let definition = CharacterDefinition::legacy_human(PlayerAppearance::default());
+        let definition = CharacterDefinition {
+            version: CHARACTER_DEFINITION_VERSION,
+            seed: None,
+            skeleton: SkeletonFamily::Human,
+            culture: CulturalProfile {
+                tags: catalog.known_good_human_cultural_tags().to_vec(),
+            },
+            parts: catalog.known_good_human().clone(),
+            appearance: PlayerAppearance::default(),
+        };
 
         assert_eq!(catalog.validate(), Ok(()));
-        assert_eq!(catalog.known_good_human(), &definition.parts);
 
         let resolved = catalog.resolve(&definition).unwrap();
         assert_eq!(resolved.definition(), &definition);

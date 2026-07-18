@@ -112,5 +112,6 @@
     "feet": "human.feet.opinci.v1",
     "waist": "human.waist.chimir.v1",
     "accessories": []
-  }
+  },
+  "known_good_human_cultural_tags": ["romanian"]
 }
