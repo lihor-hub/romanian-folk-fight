@@ -7,7 +7,10 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use crate::character::{AccentColor, BodyBuild, HairStyle, PlayerAppearance, SkinTone};
+use crate::character::{
+    AccentColor, BodyBuild, CatalogError, CharacterCatalog, CharacterDefinition, HairStyle, PartId,
+    PartRecord, PlayerAppearance, ResolvedCharacter, SkinTone,
+};
 use crate::items::{Equipment, GearAttachment, GearMotion, ItemId, ItemVisual, Slot, item_visual};
 
 /// Registers cutout-rig support. The first implementation is spawn-helper
@@ -52,6 +55,11 @@ pub enum CutoutPartKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CutoutPart {
     pub kind: CutoutPartKind,
+    /// Stable catalog identity supplying this semantic rig region. Several
+    /// articulated pieces can share one selected source part (for example,
+    /// the selected body supplies both arm chains) while `kind` remains the
+    /// pose and equipment attachment contract.
+    pub source_id: Option<PartId>,
     /// Local translation. For a chained part (a forearm, hand, shin, or
     /// foot -- see [`parent_kind`]) this is relative to its parent PART's
     /// own origin, not the rig root, and becomes that part's local
@@ -77,7 +85,7 @@ pub struct CutoutPart {
     pub rotation: f32,
     pub z_offset: f32,
     pub color: Color,
-    pub asset_path: Option<&'static str>,
+    pub asset_path: Option<String>,
 }
 
 impl CutoutPart {
@@ -160,9 +168,10 @@ pub struct CutoutRig {
 }
 
 /// Marker on each body-part child.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct CutoutPartMarker {
     pub kind: CutoutPartKind,
+    pub source_id: Option<PartId>,
 }
 
 /// Current jointed pose applied to a cutout rig root by arena presentation.
@@ -214,6 +223,82 @@ pub fn human_template_for(appearance: PlayerAppearance) -> CutoutRigTemplate {
         template: CutoutTemplate::Human,
         parts,
     }
+}
+
+/// Resolves a definition against the bundled, validated human catalog used by
+/// creation, shop, and arena. Keeping this lookup beside the compatibility
+/// adapter prevents scene-specific catalog or template selection from
+/// drifting apart.
+pub fn resolve_human_character(
+    definition: &CharacterDefinition,
+) -> Result<ResolvedCharacter, CatalogError> {
+    CharacterCatalog::from_json(include_str!(
+        "../assets/fighters/catalog/human-foundation.json"
+    ))?
+    .resolve(definition)
+}
+
+/// Adapts stable catalog selections to the existing articulated human rig.
+///
+/// The current catalog selects broader regions than the cutout animation
+/// rig: one body selection supplies both arm chains, and one legs selection
+/// supplies both leg chains. The selected stable ID is copied onto every
+/// corresponding semantic part. Existing authored transforms, pivots, sizes,
+/// colors, and fallback art stay intact; a catalog asset replaces fallback
+/// art only where its attachment point names that exact cutout region.
+pub fn rig_template_for(character: &ResolvedCharacter) -> CutoutRigTemplate {
+    let mut template = human_template_for(character.definition().appearance);
+    for part in &mut template.parts {
+        let Some(record) = selected_record_for_kind(character, part.kind) else {
+            continue;
+        };
+        part.source_id = Some(record.id.clone());
+        if attachment_kind(&record.attachment.point) == Some(part.kind) {
+            part.asset_path = Some(record.asset_path.clone());
+        }
+    }
+    template
+}
+
+fn selected_record_for_kind(
+    character: &ResolvedCharacter,
+    kind: CutoutPartKind,
+) -> Option<&PartRecord> {
+    use CutoutPartKind::*;
+    let selections = &character.definition().parts;
+    let id = match kind {
+        Hair => &selections.hair,
+        Head => &selections.face,
+        Torso => &selections.torso,
+        UpperArmBack | ForearmBack | HandBack | UpperArmFront | ForearmFront | HandFront => {
+            &selections.body
+        }
+        ThighBack | ShinBack | ThighFront | ShinFront => &selections.legs,
+        FootBack | FootFront => &selections.feet,
+    };
+    character.parts().get(id)
+}
+
+fn attachment_kind(point: &str) -> Option<CutoutPartKind> {
+    use CutoutPartKind::*;
+    Some(match point {
+        "hair" => Hair,
+        "upper_arm_back" => UpperArmBack,
+        "forearm_back" => ForearmBack,
+        "hand_back" => HandBack,
+        "thigh_back" => ThighBack,
+        "shin_back" => ShinBack,
+        "foot_back" => FootBack,
+        "torso" => Torso,
+        "head" => Head,
+        "upper_arm_front" => UpperArmFront,
+        "forearm_front" => ForearmFront,
+        "hand_front" => HandFront,
+        "thigh_front" => ThighFront,
+        "shin_front" => ShinFront,
+        "foot_front" => FootFront,
+        _ => return None,
+    })
 }
 
 fn align_rig_joint_offsets(parts: &mut [CutoutPart]) {
@@ -306,6 +391,30 @@ pub fn spawn_cutout_rig_with_accent(
     );
 }
 
+/// Shared creation/shop/combat entry point for a resolved modular human.
+/// Existing cutout spawning remains available for non-human and legacy
+/// templates until those definitions are migrated in later phases.
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_character_rig(
+    commands: &mut Commands,
+    root: Entity,
+    character: &ResolvedCharacter,
+    asset_server: Option<&AssetServer>,
+    flip_x: bool,
+    equipment: Option<&Equipment>,
+    accent_hue: Option<Color>,
+) {
+    spawn_cutout_rig_impl(
+        commands,
+        root,
+        rig_template_for(character),
+        asset_server,
+        flip_x,
+        equipment,
+        accent_hue,
+    );
+}
+
 fn spawn_cutout_rig_impl(
     commands: &mut Commands,
     root: Entity,
@@ -373,7 +482,10 @@ fn spawn_part_and_children(
     let tint = accent_hue.filter(|_| is_accent_part(kind));
     parent
         .spawn((
-            CutoutPartMarker { kind },
+            CutoutPartMarker {
+                kind,
+                source_id: part.source_id.clone(),
+            },
             CutoutPartRestPose {
                 transform,
                 size: part.size,
@@ -527,11 +639,11 @@ fn part_sprite(
     flip_x: bool,
     tint: Option<Color>,
 ) -> Sprite {
-    let mut sprite = match (asset_server, part.asset_path) {
+    let mut sprite = match (asset_server, part.asset_path.as_ref()) {
         (Some(asset_server), Some(path)) => Sprite {
             custom_size: Some(part.size),
             flip_x,
-            ..Sprite::from_image(asset_server.load(path))
+            ..Sprite::from_image(asset_server.load(path.clone()))
         },
         _ => Sprite {
             flip_x,
@@ -730,7 +842,7 @@ fn human_parts(scale: f32) -> Vec<CutoutPart> {
         part.offset *= scale;
         part.pivot *= scale;
         part.size *= scale;
-        part.asset_path = human_asset_path(part.kind);
+        part.asset_path = human_asset_path(part.kind).map(str::to_owned);
         part
     })
     .collect()
@@ -760,7 +872,7 @@ fn effective_z_offset(parts: &[CutoutPart], kind: CutoutPartKind) -> f32 {
 
 fn strigoi_part(mut part: CutoutPart) -> CutoutPart {
     part.color = enemy_color(part.kind);
-    part.asset_path = strigoi_asset_path(part.kind);
+    part.asset_path = strigoi_asset_path(part.kind).map(str::to_owned);
     match part.kind {
         CutoutPartKind::Hair => {
             part.color = Color::NONE;
@@ -841,7 +953,7 @@ fn strigoi_part(mut part: CutoutPart) -> CutoutPart {
 
 fn zmeu_part(mut part: CutoutPart) -> CutoutPart {
     part.color = boss_color(part.kind);
-    part.asset_path = zmeu_asset_path(part.kind);
+    part.asset_path = zmeu_asset_path(part.kind).map(str::to_owned);
     match part.kind {
         CutoutPartKind::Hair => {
             part.color = Color::NONE;
@@ -930,6 +1042,7 @@ fn part(
 ) -> CutoutPart {
     CutoutPart {
         kind,
+        source_id: None,
         offset: Vec2::new(x, y),
         pivot: Vec2::ZERO,
         size: Vec2::new(width, height),
@@ -1204,6 +1317,11 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    fn resolved_human(appearance: PlayerAppearance) -> ResolvedCharacter {
+        resolve_human_character(&CharacterDefinition::legacy_human(appearance))
+            .expect("the test definition resolves against the bundled human catalog")
+    }
+
     /// Recursively collects every `CutoutPartMarker` entity under `root`, at
     /// any depth. Forearms/hands/shins/feet are nested several joints deep
     /// rather than being direct children of the root (#117), so callers
@@ -1239,6 +1357,168 @@ mod tests {
                 .filter(|marker| marker.kind == kind)
                 .map(|_| child)
         })
+    }
+
+    fn rig_snapshot(
+        world: &World,
+        root: Entity,
+    ) -> HashMap<CutoutPartKind, (Option<PartId>, CutoutPartRestPose, bool)> {
+        collect_rig_parts(world, root)
+            .into_iter()
+            .map(|(kind, entity)| {
+                let marker = world
+                    .get::<CutoutPartMarker>(entity)
+                    .expect("collected entity has a part marker");
+                let rest = *world
+                    .get::<CutoutPartRestPose>(entity)
+                    .expect("cutout part has a rest pose");
+                let flip_x = world
+                    .get::<Sprite>(entity)
+                    .expect("cutout part has a sprite")
+                    .flip_x;
+                (kind, (marker.source_id.clone(), rest, flip_x))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn resolved_definition_keeps_stable_ids_on_existing_semantic_parts() {
+        let resolved = resolved_human(PlayerAppearance::default());
+        let template = rig_template_for(&resolved);
+        let selections = &resolved.definition().parts;
+
+        for (kind, expected_id) in [
+            (CutoutPartKind::Hair, &selections.hair),
+            (CutoutPartKind::Head, &selections.face),
+            (CutoutPartKind::Torso, &selections.torso),
+            (CutoutPartKind::UpperArmFront, &selections.body),
+            (CutoutPartKind::HandBack, &selections.body),
+            (CutoutPartKind::ThighFront, &selections.legs),
+            (CutoutPartKind::ShinBack, &selections.legs),
+            (CutoutPartKind::FootFront, &selections.feet),
+        ] {
+            let part = template
+                .parts
+                .iter()
+                .find(|part| part.kind == kind)
+                .unwrap_or_else(|| panic!("adapted template has {kind:?}"));
+            assert_eq!(part.source_id.as_ref(), Some(expected_id), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn same_resolved_definition_spawns_the_same_ids_and_rest_transforms() {
+        let resolved = resolved_human(PlayerAppearance {
+            skin_tone: SkinTone::Deep,
+            build: BodyBuild::Powerful,
+            hair: HairStyle::Tied,
+            accent: AccentColor::Storm,
+        });
+        let mut world = World::new();
+        let creation_root = world.spawn_empty().id();
+        let arena_root = world.spawn_empty().id();
+        world.commands().queue(move |world: &mut World| {
+            let mut commands = world.commands();
+            spawn_character_rig(
+                &mut commands,
+                creation_root,
+                &resolved,
+                None,
+                false,
+                None,
+                None,
+            );
+            spawn_character_rig(
+                &mut commands,
+                arena_root,
+                &resolved,
+                None,
+                false,
+                None,
+                None,
+            );
+        });
+        world.flush();
+
+        assert_eq!(
+            rig_snapshot(&world, creation_root),
+            rig_snapshot(&world, arena_root),
+            "creation and arena roots render one definition identically"
+        );
+    }
+
+    #[test]
+    fn mirroring_a_resolved_definition_changes_only_its_facing() {
+        let resolved = resolved_human(PlayerAppearance::default());
+        let mut world = World::new();
+        let normal = world.spawn_empty().id();
+        let mirrored = world.spawn_empty().id();
+        world.commands().queue(move |world: &mut World| {
+            let mut commands = world.commands();
+            spawn_character_rig(&mut commands, normal, &resolved, None, false, None, None);
+            spawn_character_rig(&mut commands, mirrored, &resolved, None, true, None, None);
+        });
+        world.flush();
+
+        let normal_snapshot = rig_snapshot(&world, normal);
+        let mirrored_snapshot = rig_snapshot(&world, mirrored);
+        assert_eq!(normal_snapshot.len(), mirrored_snapshot.len());
+        for (kind, (normal_id, normal_rest, normal_flip)) in normal_snapshot {
+            let (mirrored_id, mirrored_rest, mirrored_flip) = mirrored_snapshot
+                .get(&kind)
+                .unwrap_or_else(|| panic!("mirrored rig has {kind:?}"));
+            assert_eq!(&normal_id, mirrored_id, "{kind:?} keeps its stable ID");
+            assert_eq!(normal_rest.size, mirrored_rest.size, "{kind:?} keeps size");
+            assert_eq!(
+                normal_rest.transform.translation.x, -mirrored_rest.transform.translation.x,
+                "{kind:?} mirrors x"
+            );
+            assert_eq!(
+                normal_rest.transform.translation.yz(),
+                mirrored_rest.transform.translation.yz(),
+                "{kind:?} keeps y/z placement"
+            );
+            assert!(!normal_flip && *mirrored_flip, "{kind:?} changes facing");
+        }
+    }
+
+    #[test]
+    fn modular_character_gear_keeps_existing_semantic_attachment_regions() {
+        let resolved = resolved_human(PlayerAppearance::default());
+        let mut equipment = Equipment::default();
+        equipment.equip(ItemId::Palos);
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        world.commands().queue(move |world: &mut World| {
+            let mut commands = world.commands();
+            spawn_character_rig(
+                &mut commands,
+                root,
+                &resolved,
+                None,
+                false,
+                Some(&equipment),
+                None,
+            );
+        });
+        world.flush();
+
+        let visual = item_visual(ItemId::Palos).expect("paloș has a visual definition");
+        let mut attached_regions = Vec::new();
+        let mut layers = world.query::<(&GearVisualLayer, &ChildOf)>();
+        for (layer, parent) in layers.iter(&world) {
+            if layer.item != ItemId::Palos {
+                continue;
+            }
+            let marker = world
+                .get::<CutoutPartMarker>(parent.parent())
+                .expect("gear is parented to a semantic cutout part");
+            attached_regions.push(marker.kind);
+        }
+        attached_regions.sort_by_key(|kind| *kind as usize);
+        let mut expected = visual.attachment.parts.to_vec();
+        expected.sort_by_key(|kind| *kind as usize);
+        assert_eq!(attached_regions, expected);
     }
 
     #[test]
@@ -1793,7 +2073,11 @@ mod tests {
                     .iter()
                     .find(|part| part.kind == *kind)
                     .unwrap_or_else(|| panic!("{label} template missing {kind:?}"));
-                assert_eq!(part.asset_path, Some(*expected_path), "{label} {kind:?}");
+                assert_eq!(
+                    part.asset_path.as_deref(),
+                    Some(*expected_path),
+                    "{label} {kind:?}"
+                );
                 assert!(
                     assets.join(expected_path).is_file(),
                     "{label} {kind:?} asset missing at {}",

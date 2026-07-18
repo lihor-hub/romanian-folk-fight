@@ -11,13 +11,13 @@ pub mod fx;
 
 use bevy::prelude::*;
 
-use crate::character::{Attributes, EnemyFighter, PlayerFighter, spawn_fighter};
+use crate::character::{Attributes, EnemyFighter, PlayerFighter, ResolvedCharacter, spawn_fighter};
 use crate::combat::AiProfile;
 use crate::core::{GameState, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::cutout::{
     CutoutPartMarker, CutoutRig, CutoutRigTemplate, CutoutTemplate, GearVisualLayer, boss_template,
-    cutout_rig_owner, enemy_template, human_template, human_template_for,
+    cutout_rig_owner, enemy_template, human_template, resolve_human_character, spawn_character_rig,
     spawn_cutout_rig_with_accent, spawn_gear_attachment_layers,
 };
 use crate::items::{Equipment, GearMotion};
@@ -149,13 +149,15 @@ fn spawn_scene(
     let opponent = ladder.opponent();
     spawn_background(&mut commands, backgrounds, background_tier(ladder));
     spawn_scenery(&mut commands);
+    let resolved_player = resolve_human_character(&player.definition)
+        .expect("the arena player resolves against the bundled human catalog");
     let player_fighter = spawn_arena_fighter(
         &mut commands,
         player.name.clone(),
         player.attributes,
         PlayerFighter,
         PLAYER_ANCHOR,
-        human_template_for(player.appearance),
+        ArenaRig::Character(&resolved_player),
         false,
         asset_server,
         None,
@@ -172,7 +174,7 @@ fn spawn_scene(
             },
         ),
         ENEMY_ANCHOR,
-        opponent_template(opponent),
+        ArenaRig::Template(opponent_template(opponent)),
         true,
         asset_server,
         Some(opponent.accent_hue),
@@ -208,13 +210,13 @@ fn spawn_scenery(commands: &mut Commands) {
 // Each argument is one distinct piece of the fighter's dressing; bundling
 // them into a struct for one call site would only add indirection.
 #[allow(clippy::too_many_arguments)]
-fn spawn_arena_fighter(
+fn spawn_arena_fighter<'a>(
     commands: &mut Commands,
     name: impl Into<String>,
     attrs: Attributes,
     marker: impl Bundle,
     anchor: Transform,
-    template: CutoutRigTemplate,
+    rig: ArenaRig<'a>,
     flip_x: bool,
     asset_server: Option<&AssetServer>,
     accent_hue: Option<Color>,
@@ -227,15 +229,31 @@ fn spawn_arena_fighter(
         FighterClip::Idle.animation(),
         anchor,
     ));
-    spawn_cutout_rig_with_accent(
-        commands,
-        fighter,
-        template,
-        asset_server,
-        flip_x,
-        accent_hue,
-    );
+    match rig {
+        ArenaRig::Character(character) => spawn_character_rig(
+            commands,
+            fighter,
+            character,
+            asset_server,
+            flip_x,
+            None,
+            accent_hue,
+        ),
+        ArenaRig::Template(template) => spawn_cutout_rig_with_accent(
+            commands,
+            fighter,
+            template,
+            asset_server,
+            flip_x,
+            accent_hue,
+        ),
+    }
     fighter
+}
+
+enum ArenaRig<'a> {
+    Character(&'a ResolvedCharacter),
+    Template(CutoutRigTemplate),
 }
 
 fn opponent_template(opponent: &Opponent) -> CutoutRigTemplate {
@@ -472,7 +490,7 @@ mod tests {
     use crate::core::CorePlugin;
     use crate::cutout::{
         CutoutPartKind, CutoutPartMarker, CutoutRig, CutoutTemplate, boss_template, enemy_template,
-        gear_sprite, human_template,
+        gear_sprite, human_template, human_template_for,
     };
     use crate::items::{ItemId, Slot, item_visual};
     use crate::roster::LADDER;
@@ -841,6 +859,59 @@ mod tests {
             .single(app.world())
             .expect("player fighter carries appearance");
         assert_eq!(*stored, appearance);
+    }
+
+    #[test]
+    fn arena_player_rig_uses_the_persisted_definition_as_visual_authority() {
+        let legacy_projection = PlayerAppearance::default();
+        let definition_appearance = PlayerAppearance {
+            skin_tone: SkinTone::Deep,
+            build: BodyBuild::Powerful,
+            hair: HairStyle::Tied,
+            accent: AccentColor::Storm,
+        };
+        let mut app = test_app_with(
+            PlayerCharacter {
+                name: "Făt-Frumos".to_string(),
+                attributes: PLAYER_ATTRIBUTES,
+                appearance: legacy_projection,
+                definition: crate::character::CharacterDefinition::legacy_human(
+                    definition_appearance,
+                ),
+            },
+            LadderProgress::default(),
+        );
+
+        let player = app
+            .world_mut()
+            .query_filtered::<Entity, With<PlayerFighter>>()
+            .single(app.world())
+            .expect("player fighter exists");
+        let expected_torso = human_template_for(definition_appearance)
+            .parts
+            .into_iter()
+            .find(|part| part.kind == CutoutPartKind::Torso)
+            .expect("human template has a torso");
+        let part_parents = cutout_part_parents(&mut app);
+        let torso_size = app
+            .world_mut()
+            .query::<(
+                Entity,
+                &CutoutPartMarker,
+                &crate::cutout::CutoutPartRestPose,
+            )>()
+            .iter(app.world())
+            .find_map(|(entity, marker, rest)| {
+                (marker.kind == CutoutPartKind::Torso
+                    && cutout_rig_owner(entity, |part| part_parents.get(&part).copied()) == player)
+                    .then_some(rest.size)
+            })
+            .expect("player rig has a torso");
+
+        assert_eq!(
+            torso_size, expected_torso.size,
+            "the persisted definition, not its legacy projection, drives the arena rig"
+        );
     }
 
     #[test]
