@@ -12,7 +12,7 @@ use serde::Deserialize;
 use super::{CharacterDefinition, PartId, PartSelections, SkeletonFamily};
 
 /// Only catalog schema understood by this foundation build.
-pub const CHARACTER_CATALOG_VERSION: u32 = 2;
+pub const CHARACTER_CATALOG_VERSION: u32 = 3;
 
 /// Material masks reserve alpha for the albedo silhouette, leaving RGB as the
 /// only semantic recolor channels.
@@ -77,22 +77,59 @@ pub enum PaletteRegion {
     Metal,
 }
 
-/// One independently selectable character part from an authored catalog.
+/// One authored media layer inside a semantic catalog part bundle.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PartLayerRecord {
+    pub asset_path: String,
+    pub attachment: AttachmentMetadata,
+    #[serde(default)]
+    pub material: MaterialMetadata,
+}
+
+/// One independently selectable semantic character part from an authored
+/// catalog. A part owns every media layer needed to fill its rig region.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PartRecord {
     pub id: PartId,
     pub region: BodyRegion,
-    pub asset_path: String,
     pub skeletons: Vec<SkeletonFamily>,
     pub cultural_tags: Vec<String>,
-    pub attachment: AttachmentMetadata,
-    #[serde(default)]
-    pub material: MaterialMetadata,
+    pub layers: Vec<PartLayerRecord>,
     #[serde(default)]
     pub exclusions: Vec<PartId>,
     #[serde(default)]
     pub companions: Vec<PartId>,
+}
+
+impl PartRecord {
+    /// Returns the authored layer for one live rig attachment.
+    pub fn layer_for_attachment(&self, attachment: &str) -> Option<&PartLayerRecord> {
+        self.layers
+            .iter()
+            .find(|layer| layer.attachment.point == attachment)
+    }
+}
+
+/// Exact rig attachments a semantic region must provide as one atomic bundle.
+pub const fn required_attachment_points(region: BodyRegion) -> &'static [&'static str] {
+    match region {
+        BodyRegion::Body => &[
+            "upper_arm_back",
+            "forearm_back",
+            "hand_back",
+            "upper_arm_front",
+            "forearm_front",
+            "hand_front",
+        ],
+        BodyRegion::Face => &["head"],
+        BodyRegion::Hair => &["hair"],
+        BodyRegion::Torso => &["torso"],
+        BodyRegion::Legs => &["thigh_back", "shin_back", "thigh_front", "shin_front"],
+        BodyRegion::Feet => &["foot_back", "foot_front"],
+        BodyRegion::FacialHair | BodyRegion::Waist | BodyRegion::Accessory => &[],
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -378,59 +415,94 @@ impl CharacterCatalog {
 }
 
 fn validate_part_content(part: &PartRecord) -> Result<(), CatalogError> {
-    let Some(asset_attachment) = runtime_asset_attachment(&part.asset_path) else {
-        return Err(CatalogError::UnregisteredAssetPath {
-            part_id: part.id.clone(),
-            asset_path: part.asset_path.clone(),
-        });
-    };
-    if !attachment_compatible_with_region(part.region, &part.attachment.point) {
-        return Err(CatalogError::IncompatibleAttachmentPoint {
-            part_id: part.id.clone(),
-            region: part.region,
-            point: part.attachment.point.clone(),
-        });
+    let required = required_attachment_points(part.region);
+    let mut attachments = HashSet::with_capacity(part.layers.len());
+
+    for layer in &part.layers {
+        let attachment = layer.attachment.point.as_str();
+        if !attachments.insert(attachment) {
+            return Err(CatalogError::DuplicatePartLayer {
+                part_id: part.id.clone(),
+                attachment: attachment.to_owned(),
+            });
+        }
+        if !required.contains(&attachment) {
+            return Err(CatalogError::UnexpectedPartLayer {
+                part_id: part.id.clone(),
+                attachment: attachment.to_owned(),
+            });
+        }
+        validate_layer_content(part, layer)?;
     }
-    if asset_attachment != part.attachment.point {
-        return Err(CatalogError::AssetAttachmentMismatch {
-            part_id: part.id.clone(),
-            asset_path: part.asset_path.clone(),
-            expected: asset_attachment.to_owned(),
-            actual: part.attachment.point.clone(),
-        });
+
+    for attachment in required {
+        if !attachments.contains(attachment) {
+            return Err(CatalogError::MissingPartLayer {
+                part_id: part.id.clone(),
+                attachment: (*attachment).to_owned(),
+            });
+        }
     }
-    validate_material_content(part)?;
     Ok(())
 }
 
-fn validate_material_content(part: &PartRecord) -> Result<(), CatalogError> {
+fn validate_layer_content(part: &PartRecord, layer: &PartLayerRecord) -> Result<(), CatalogError> {
+    let Some(asset_attachment) = runtime_asset_attachment(&layer.asset_path) else {
+        return Err(CatalogError::UnregisteredAssetPath {
+            part_id: part.id.clone(),
+            asset_path: layer.asset_path.clone(),
+        });
+    };
+    if !attachment_compatible_with_region(part.region, &layer.attachment.point) {
+        return Err(CatalogError::IncompatibleAttachmentPoint {
+            part_id: part.id.clone(),
+            region: part.region,
+            point: layer.attachment.point.clone(),
+        });
+    }
+    if asset_attachment != layer.attachment.point {
+        return Err(CatalogError::AssetAttachmentMismatch {
+            part_id: part.id.clone(),
+            asset_path: layer.asset_path.clone(),
+            expected: asset_attachment.to_owned(),
+            actual: layer.attachment.point.clone(),
+        });
+    }
+    validate_material_content(&part.id, &layer.material)?;
+    Ok(())
+}
+
+fn validate_material_content(
+    part_id: &PartId,
+    material: &MaterialMetadata,
+) -> Result<(), CatalogError> {
     for (channel, asset_path) in [
-        ("mask_path", part.material.mask_path.as_deref()),
-        ("normal_path", part.material.normal_path.as_deref()),
-        ("shadow_path", part.material.shadow_path.as_deref()),
+        ("mask_path", material.mask_path.as_deref()),
+        ("normal_path", material.normal_path.as_deref()),
+        ("shadow_path", material.shadow_path.as_deref()),
     ] {
         let Some(asset_path) = asset_path else {
             continue;
         };
         if !is_human_material_channel_path(asset_path) {
             return Err(CatalogError::InvalidMaterialChannelPath {
-                part_id: part.id.clone(),
+                part_id: part_id.clone(),
                 channel: channel.to_owned(),
                 asset_path: asset_path.to_owned(),
             });
         }
     }
 
-    if part.material.palette.len() > MAX_MATERIAL_PALETTE_REGIONS {
+    if material.palette.len() > MAX_MATERIAL_PALETTE_REGIONS {
         return Err(CatalogError::TooManyMaterialPaletteRegions {
-            part_id: part.id.clone(),
-            found: part.material.palette.len(),
+            part_id: part_id.clone(),
+            found: material.palette.len(),
             supported: MAX_MATERIAL_PALETTE_REGIONS,
         });
     }
 
-    validate_material_number(part, "depth_offset", part.material.depth_offset, -1.0..=1.0)?;
-    validate_material_number(part, "highlight", part.material.highlight, 0.0..=1.0)?;
+    validate_material_number(part_id, "depth_offset", material.depth_offset, -1.0..=1.0)?;
+    validate_material_number(part_id, "highlight", material.highlight, 0.0..=1.0)?;
     Ok(())
 }
 
@@ -450,14 +522,14 @@ fn is_human_material_channel_path(path: &str) -> bool {
 }
 
 fn validate_material_number(
-    part: &PartRecord,
+    part_id: &PartId,
     setting: &str,
     value: Option<f32>,
     range: std::ops::RangeInclusive<f32>,
 ) -> Result<(), CatalogError> {
     if value.is_some_and(|value| !value.is_finite() || !range.contains(&value)) {
         return Err(CatalogError::InvalidMaterialNumeric {
-            part_id: part.id.clone(),
+            part_id: part_id.clone(),
             setting: setting.to_owned(),
         });
     }
@@ -609,6 +681,18 @@ pub enum CatalogError {
         found: usize,
         supported: usize,
     },
+    MissingPartLayer {
+        part_id: PartId,
+        attachment: String,
+    },
+    DuplicatePartLayer {
+        part_id: PartId,
+        attachment: String,
+    },
+    UnexpectedPartLayer {
+        part_id: PartId,
+        attachment: String,
+    },
     DuplicatePartId(PartId),
     MissingRequiredRegion(BodyRegion),
     MissingCompanionPart {
@@ -701,6 +785,27 @@ impl fmt::Display for CatalogError {
                 formatter,
                 "part `{part_id}` material palette has {found} regions (maximum {supported}; mask alpha is reserved for the silhouette)"
             ),
+            Self::MissingPartLayer {
+                part_id,
+                attachment,
+            } => write!(
+                formatter,
+                "part `{part_id}` is missing required layer `{attachment}`"
+            ),
+            Self::DuplicatePartLayer {
+                part_id,
+                attachment,
+            } => write!(
+                formatter,
+                "part `{part_id}` defines layer `{attachment}` more than once"
+            ),
+            Self::UnexpectedPartLayer {
+                part_id,
+                attachment,
+            } => write!(
+                formatter,
+                "part `{part_id}` defines unexpected layer `{attachment}`"
+            ),
             Self::DuplicatePartId(id) => write!(formatter, "duplicate character part ID `{id}`"),
             Self::MissingRequiredRegion(region) => {
                 write!(
@@ -759,6 +864,8 @@ impl std::error::Error for CatalogError {}
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use serde_json::Value;
 
     use crate::character::{
@@ -770,6 +877,28 @@ mod tests {
         BodyRegion, CHARACTER_CATALOG_VERSION, CatalogError, CharacterCatalog, MaterialMetadata,
         PaletteRegion, validate_part_content,
     };
+
+    const EXPECTED_HUMAN_ATTACHMENTS: [&str; 15] = [
+        "upper_arm_back",
+        "forearm_back",
+        "hand_back",
+        "upper_arm_front",
+        "forearm_front",
+        "hand_front",
+        "head",
+        "hair",
+        "torso",
+        "thigh_back",
+        "shin_back",
+        "thigh_front",
+        "shin_front",
+        "foot_back",
+        "foot_front",
+    ];
+
+    fn id(value: &str) -> PartId {
+        PartId::new(value).expect("test ID is valid")
+    }
 
     fn fixture() -> CharacterCatalog {
         CharacterCatalog::from_json(include_str!(
@@ -792,6 +921,122 @@ mod tests {
             .expect("fixture has parts")
             .retain(|part| part["id"] != id);
         fixture_from(value)
+    }
+
+    fn fixture_with_layer_removed(part_id: &str, attachment: &str) -> CharacterCatalog {
+        let mut value: Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("human foundation fixture is valid JSON");
+        value["parts"]
+            .as_array_mut()
+            .expect("fixture has parts")
+            .iter_mut()
+            .find(|part| part["id"] == part_id)
+            .expect("fixture has requested part")["layers"]
+            .as_array_mut()
+            .expect("part has layers")
+            .retain(|layer| layer["attachment"]["point"] != attachment);
+        fixture_from(value)
+    }
+
+    #[test]
+    fn catalog_rejects_v2_schema() {
+        let mut value: Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("human foundation fixture is valid JSON");
+        value["version"] = serde_json::json!(2);
+
+        assert_eq!(
+            CharacterCatalog::from_json(&value.to_string()).expect_err("v2 schema is rejected"),
+            CatalogError::UnsupportedCatalogVersion {
+                found: 2,
+                supported: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn body_bundle_requires_both_complete_arm_chains() {
+        let catalog = fixture_with_layer_removed("human.body.foundation.v1", "forearm_back");
+
+        assert_eq!(
+            catalog.validate(),
+            Err(CatalogError::MissingPartLayer {
+                part_id: id("human.body.foundation.v1"),
+                attachment: "forearm_back".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn part_bundle_rejects_duplicate_attachment_points() {
+        let mut value: Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("human foundation fixture is valid JSON");
+        let body = value["parts"]
+            .as_array_mut()
+            .expect("fixture has parts")
+            .iter_mut()
+            .find(|part| part["id"] == "human.body.foundation.v1")
+            .expect("fixture has body");
+        let duplicate = body["layers"][0].clone();
+        body["layers"]
+            .as_array_mut()
+            .expect("body has layers")
+            .push(duplicate);
+        let catalog = fixture_from(value);
+
+        assert_eq!(
+            catalog.validate(),
+            Err(CatalogError::DuplicatePartLayer {
+                part_id: id("human.body.foundation.v1"),
+                attachment: "upper_arm_back".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn part_bundle_rejects_attachment_outside_its_semantic_region() {
+        let mut value: Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("human foundation fixture is valid JSON");
+        let hair = value["parts"]
+            .as_array_mut()
+            .expect("fixture has parts")
+            .iter_mut()
+            .find(|part| part["id"] == "human.hair.long.v1")
+            .expect("fixture has long hair");
+        hair["layers"][0]["attachment"]["point"] = serde_json::json!("torso");
+        hair["layers"][0]["asset_path"] = serde_json::json!("fighters/human/runtime/torso.png");
+        let catalog = fixture_from(value);
+
+        assert_eq!(
+            catalog.validate(),
+            Err(CatalogError::UnexpectedPartLayer {
+                part_id: id("human.hair.long.v1"),
+                attachment: "torso".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn known_good_human_resolves_every_cutout_attachment() {
+        let resolved = fixture().resolve_known_good_human().unwrap();
+        let attachments = resolved
+            .parts()
+            .values()
+            .flat_map(|part| part.layers.iter())
+            .map(|layer| layer.attachment.point.as_str())
+            .collect::<HashSet<_>>();
+
+        assert_eq!(
+            attachments,
+            EXPECTED_HUMAN_ATTACHMENTS.into_iter().collect()
+        );
     }
 
     #[test]
@@ -859,7 +1104,7 @@ mod tests {
             .iter_mut()
             .find(|part| part["id"] == "human.hair.long.v1")
             .expect("fixture has long hair");
-        part["asset_path"] = serde_json::json!("fighters/human/runtime/missing.png");
+        part["layers"][0]["asset_path"] = serde_json::json!("fighters/human/runtime/missing.png");
         let catalog = fixture_from(value);
 
         assert_eq!(
@@ -883,7 +1128,7 @@ mod tests {
             .iter_mut()
             .find(|part| part["id"] == "human.hair.long.v1")
             .expect("fixture has long hair");
-        part["material"] = serde_json::json!({
+        part["layers"][0]["material"] = serde_json::json!({
             "mask_path": "fighters/human/runtime/hair.png",
             "normal_path": "fighters/human/runtime/hair.png",
             "shadow_path": "fighters/human/runtime/hair.png",
@@ -896,6 +1141,8 @@ mod tests {
         let material = &catalog
             .part(&PartId::new("human.hair.long.v1").unwrap())
             .expect("fixture has long hair")
+            .layer_for_attachment("hair")
+            .expect("long hair has its required layer")
             .material;
 
         assert_eq!(
@@ -924,7 +1171,7 @@ mod tests {
             .iter_mut()
             .find(|part| part["id"] == "human.hair.long.v1")
             .expect("fixture has long hair");
-        part["material"] = serde_json::json!({
+        part["layers"][0]["material"] = serde_json::json!({
             "palette": ["hair", "cloth", "embroidery", "leather"]
         });
         let catalog = fixture_from(value);
@@ -951,7 +1198,7 @@ mod tests {
             .iter_mut()
             .find(|part| part["id"] == "human.hair.long.v1")
             .expect("fixture has long hair");
-        part["material"] = serde_json::json!({
+        part["layers"][0]["material"] = serde_json::json!({
             "mask_path": "fighters/human/source/hair.png"
         });
         let catalog = fixture_from(value);
@@ -978,7 +1225,7 @@ mod tests {
             .iter_mut()
             .find(|part| part["id"] == "human.hair.long.v1")
             .expect("fixture has long hair");
-        part["material"] = serde_json::json!({ "depth_offset": 1.01 });
+        part["layers"][0]["material"] = serde_json::json!({ "depth_offset": 1.01 });
         let catalog = fixture_from(value);
 
         assert_eq!(
@@ -996,7 +1243,7 @@ mod tests {
             .part(&PartId::new("human.hair.long.v1").unwrap())
             .expect("fixture has long hair")
             .clone();
-        part.material.highlight = Some(f32::NAN);
+        part.layers[0].material.highlight = Some(f32::NAN);
 
         assert_eq!(
             validate_part_content(&part),
@@ -1019,15 +1266,15 @@ mod tests {
             .iter_mut()
             .find(|part| part["id"] == "human.hair.long.v1")
             .expect("fixture has long hair");
-        part["attachment"]["point"] = serde_json::json!("torso");
+        part["layers"][0]["attachment"]["point"] = serde_json::json!("torso");
+        part["layers"][0]["asset_path"] = serde_json::json!("fighters/human/runtime/torso.png");
         let catalog = fixture_from(value);
 
         assert_eq!(
             catalog.validate(),
-            Err(CatalogError::IncompatibleAttachmentPoint {
+            Err(CatalogError::UnexpectedPartLayer {
                 part_id: PartId::new("human.hair.long.v1").unwrap(),
-                region: BodyRegion::Hair,
-                point: "torso".to_owned(),
+                attachment: "torso".to_owned(),
             })
         );
     }
@@ -1036,15 +1283,17 @@ mod tests {
     fn every_bundled_catalog_asset_exists_on_disk() {
         let catalog = fixture();
         for record in catalog.parts.values() {
-            assert!(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("assets")
-                    .join(&record.asset_path)
-                    .is_file(),
-                "{} must exist for {}",
-                record.asset_path,
-                record.id
-            );
+            for layer in &record.layers {
+                assert!(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("assets")
+                        .join(&layer.asset_path)
+                        .is_file(),
+                    "{} must exist for {}",
+                    layer.asset_path,
+                    record.id
+                );
+            }
         }
     }
 

@@ -10,7 +10,7 @@ use bevy::{
     sprite_render::{AlphaMode2d, Material2d},
 };
 
-use super::{PaletteRegion, PartId, PartRecord};
+use super::{PaletteRegion, PartId, PartLayerRecord};
 
 const HYBRID_CHARACTER_SHADER: &str = "shaders/hybrid_character_2d.wgsl";
 
@@ -199,11 +199,14 @@ fn color_vec4(color: Color) -> Vec4 {
 }
 
 /// Resolves renderer inputs without moving asset-path ownership out of the
-/// validated catalog record.
-pub fn resolve_material_for_part(part: &PartRecord) -> ResolvedPartMaterial {
-    let depth_offset = bounded_or_default(part.material.depth_offset, 0.0, -1.0, 1.0);
-    let highlight = bounded_or_default(part.material.highlight, 0.0, 0.0, 1.0);
-    let shadow = part
+/// validated catalog layer or losing its semantic stable-ID provenance.
+pub fn resolve_material_for_layer(
+    part_id: &PartId,
+    layer: &PartLayerRecord,
+) -> ResolvedPartMaterial {
+    let depth_offset = bounded_or_default(layer.material.depth_offset, 0.0, -1.0, 1.0);
+    let highlight = bounded_or_default(layer.material.highlight, 0.0, 0.0, 1.0);
+    let shadow = layer
         .material
         .shadow_path
         .as_ref()
@@ -215,12 +218,12 @@ pub fn resolve_material_for_part(part: &PartRecord) -> ResolvedPartMaterial {
         });
 
     ResolvedPartMaterial {
-        part_id: part.id.clone(),
-        albedo_path: part.asset_path.clone(),
-        mask_path: part.material.mask_path.clone(),
-        normal_path: part.material.normal_path.clone(),
+        part_id: part_id.clone(),
+        albedo_path: layer.asset_path.clone(),
+        mask_path: layer.material.mask_path.clone(),
+        normal_path: layer.material.normal_path.clone(),
         shadow,
-        palette: part.material.palette.clone(),
+        palette: layer.material.palette.clone(),
         depth_offset,
         highlight,
     }
@@ -236,29 +239,26 @@ fn bounded_or_default(value: Option<f32>, default: f32, min: f32, max: f32) -> f
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::character::{AttachmentMetadata, BodyRegion, MaterialMetadata, SkeletonFamily};
+    use crate::character::{AttachmentMetadata, MaterialMetadata};
 
-    fn part_with(material: MaterialMetadata) -> PartRecord {
-        PartRecord {
-            id: PartId::new("human.torso.material-test.v1").expect("test ID is valid"),
-            region: BodyRegion::Torso,
-            asset_path: "fighters/human/runtime/torso.png".to_owned(),
-            skeletons: vec![SkeletonFamily::Human],
-            cultural_tags: vec!["romanian".to_owned()],
-            attachment: AttachmentMetadata {
-                point: "torso".to_owned(),
-                pivot: [0.5, 0.5],
-                draw_layer: 0,
+    fn layer_with(material: MaterialMetadata) -> (PartId, PartLayerRecord) {
+        (
+            PartId::new("human.torso.material-test.v1").expect("test ID is valid"),
+            PartLayerRecord {
+                asset_path: "fighters/human/runtime/torso.png".to_owned(),
+                attachment: AttachmentMetadata {
+                    point: "torso".to_owned(),
+                    pivot: [0.5, 0.5],
+                    draw_layer: 0,
+                },
+                material,
             },
-            material,
-            exclusions: Vec::new(),
-            companions: Vec::new(),
-        }
+        )
     }
 
     #[test]
     fn complete_material_resolves_from_the_stable_part_record() {
-        let part = part_with(MaterialMetadata {
+        let (part_id, layer) = layer_with(MaterialMetadata {
             mask_path: Some("fighters/human/runtime/torso_mask.png".to_owned()),
             normal_path: Some("fighters/human/runtime/torso_normal.png".to_owned()),
             shadow_path: Some("fighters/human/runtime/torso_shadow.png".to_owned()),
@@ -267,10 +267,10 @@ mod tests {
             highlight: Some(0.65),
         });
 
-        let resolved = resolve_material_for_part(&part);
+        let resolved = resolve_material_for_layer(&part_id, &layer);
 
-        assert_eq!(resolved.part_id, part.id);
-        assert_eq!(resolved.albedo_path, part.asset_path);
+        assert_eq!(resolved.part_id, part_id);
+        assert_eq!(resolved.albedo_path, layer.asset_path);
         assert_eq!(
             resolved.mask_path.as_deref(),
             Some("fighters/human/runtime/torso_mask.png")
@@ -292,12 +292,12 @@ mod tests {
 
     #[test]
     fn absent_optional_channels_resolve_to_none_and_neutral_settings() {
-        let part = part_with(MaterialMetadata::default());
+        let (part_id, layer) = layer_with(MaterialMetadata::default());
 
-        let resolved = resolve_material_for_part(&part);
+        let resolved = resolve_material_for_layer(&part_id, &layer);
 
-        assert_eq!(resolved.part_id, part.id);
-        assert_eq!(resolved.albedo_path, part.asset_path);
+        assert_eq!(resolved.part_id, part_id);
+        assert_eq!(resolved.albedo_path, layer.asset_path);
         assert!(resolved.mask_path.is_none());
         assert!(resolved.normal_path.is_none());
         assert!(resolved.shadow.is_none());
@@ -308,14 +308,14 @@ mod tests {
 
     #[test]
     fn renderer_settings_stay_bounded_when_resolution_is_called_directly() {
-        let part = part_with(MaterialMetadata {
+        let (part_id, layer) = layer_with(MaterialMetadata {
             shadow_path: Some("fighters/human/runtime/torso_shadow.png".to_owned()),
             depth_offset: Some(f32::INFINITY),
             highlight: Some(9.0),
             ..Default::default()
         });
 
-        let resolved = resolve_material_for_part(&part);
+        let resolved = resolve_material_for_layer(&part_id, &layer);
 
         assert!((-1.0..=1.0).contains(&resolved.depth_offset));
         assert!((0.0..=1.0).contains(&resolved.highlight));
@@ -359,14 +359,15 @@ mod tests {
         let size = Vec2::new(44.0, 74.0);
         let transform =
             Transform::from_xyz(3.0, 5.0, 0.14).with_rotation(Quat::from_rotation_z(0.2));
-        let resolved = resolve_material_for_part(&part_with(MaterialMetadata {
+        let (part_id, layer) = layer_with(MaterialMetadata {
             mask_path: Some("fighters/human/runtime/torso_mask.png".to_owned()),
             normal_path: Some("fighters/human/runtime/torso_normal.png".to_owned()),
             shadow_path: Some("fighters/human/runtime/torso_shadow.png".to_owned()),
             palette: vec![PaletteRegion::Cloth],
             depth_offset: Some(0.25),
             highlight: Some(0.5),
-        }));
+        });
+        let resolved = resolve_material_for_layer(&part_id, &layer);
         let entity = app
             .world_mut()
             .spawn((

@@ -14,8 +14,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::super::aggregate::ResolvedRecord;
 use super::super::schema::{Category, Status};
 
-/// Fixed anatomical draw order, back-to-front, matching the literal
-/// authoring order of `human_parts()` in `src/cutout.rs` (verified there by
+/// Fixed anatomical draw order, back-to-front, matching both the v3 catalog
+/// attachment contract and the literal authoring order of `human_parts()` in
+/// `src/cutout.rs` (verified there by
 /// the `parts are authored in draw order` test: z_offset is non-decreasing
 /// in this exact sequence). This is a point-in-time snapshot of a *sequence*
 /// (not a numeric value), not cross-referenced against the live source by
@@ -288,6 +289,24 @@ mod tests {
             assert_eq!(draw_order_index(part), i);
         }
         assert_eq!(draw_order_index("nonexistent"), DRAW_ORDER.len());
+    }
+
+    #[test]
+    fn bundled_human_gallery_exposes_every_v3_catalog_attachment_once() {
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask lives below the workspace root")
+            .to_path_buf();
+        let aggregate = crate::assets::aggregate::build(&workspace.join("assets"));
+        let records = aggregate.records.iter().collect::<Vec<_>>();
+        let human = identity_parts(&records, "human");
+        let attachments = human
+            .iter()
+            .filter_map(|record| record.record.attachment.as_deref())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(human.len(), DRAW_ORDER.len());
+        assert_eq!(attachments, DRAW_ORDER.iter().copied().collect());
     }
 
     #[test]

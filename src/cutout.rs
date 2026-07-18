@@ -13,7 +13,7 @@ use crate::character::{
     PartRecord, PlayerAppearance, ResolvedCharacter, SkinTone, bundled_human_catalog,
     material::{
         HybridCharacterMaterial, PendingHybridCharacterMaterial, ResolvedPartMaterial,
-        pending_hybrid_material_for, promote_ready_hybrid_materials, resolve_material_for_part,
+        pending_hybrid_material_for, promote_ready_hybrid_materials, resolve_material_for_layer,
     },
 };
 use crate::items::{Equipment, GearAttachment, GearMotion, ItemId, ItemVisual, Slot, item_visual};
@@ -242,6 +242,18 @@ pub fn human_template_for(appearance: PlayerAppearance) -> CutoutRigTemplate {
     }
 }
 
+/// Human neutral pose for catalog-authored silhouettes. Palette colors remain
+/// appearance-owned, while authored albedo bounds replace legacy build and
+/// hairstyle geometry projections.
+pub fn catalog_human_template(appearance: PlayerAppearance) -> CutoutRigTemplate {
+    let mut parts = human_parts(1.0);
+    apply_palette_colors(&mut parts, appearance);
+    CutoutRigTemplate {
+        template: CutoutTemplate::Human,
+        parts,
+    }
+}
+
 /// Resolves a definition against the bundled, validated human catalog used by
 /// creation, shop, and arena. Keeping this lookup beside the compatibility
 /// adapter prevents scene-specific catalog or template selection from
@@ -301,15 +313,15 @@ pub fn rig_template_for(character: &ResolvedCharacter) -> CutoutRigTemplate {
     if let Some(hair) = hair_style_for_id(&character.definition().parts.hair) {
         appearance.hair = hair;
     }
-    let mut template = human_template_for(appearance);
+    let mut template = catalog_human_template(appearance);
     for part in &mut template.parts {
         let Some(record) = selected_record_for_kind(character, part.kind) else {
             continue;
         };
         part.source_id = Some(record.id.clone());
-        if attachment_kind(&record.attachment.point) == Some(part.kind) {
-            part.asset_path = Some(record.asset_path.clone());
-            part.material = Some(resolve_material_for_part(record));
+        if let Some(layer) = record.layer_for_attachment(attachment_name(part.kind)) {
+            part.asset_path = Some(layer.asset_path.clone());
+            part.material = Some(resolve_material_for_layer(&record.id, layer));
         }
     }
     template
@@ -344,26 +356,25 @@ fn selected_record_for_kind(
     character.parts().get(id)
 }
 
-fn attachment_kind(point: &str) -> Option<CutoutPartKind> {
+const fn attachment_name(kind: CutoutPartKind) -> &'static str {
     use CutoutPartKind::*;
-    Some(match point {
-        "hair" => Hair,
-        "upper_arm_back" => UpperArmBack,
-        "forearm_back" => ForearmBack,
-        "hand_back" => HandBack,
-        "thigh_back" => ThighBack,
-        "shin_back" => ShinBack,
-        "foot_back" => FootBack,
-        "torso" => Torso,
-        "head" => Head,
-        "upper_arm_front" => UpperArmFront,
-        "forearm_front" => ForearmFront,
-        "hand_front" => HandFront,
-        "thigh_front" => ThighFront,
-        "shin_front" => ShinFront,
-        "foot_front" => FootFront,
-        _ => return None,
-    })
+    match kind {
+        Hair => "hair",
+        UpperArmBack => "upper_arm_back",
+        ForearmBack => "forearm_back",
+        HandBack => "hand_back",
+        ThighBack => "thigh_back",
+        ShinBack => "shin_back",
+        FootBack => "foot_back",
+        Torso => "torso",
+        Head => "head",
+        UpperArmFront => "upper_arm_front",
+        ForearmFront => "forearm_front",
+        HandFront => "hand_front",
+        ThighFront => "thigh_front",
+        ShinFront => "shin_front",
+        FootFront => "foot_front",
+    }
 }
 
 fn align_rig_joint_offsets(parts: &mut [CutoutPart]) {
@@ -1230,6 +1241,16 @@ fn zmeu_asset_path(kind: CutoutPartKind) -> Option<&'static str> {
 }
 
 fn apply_player_appearance(parts: &mut [CutoutPart], appearance: PlayerAppearance) {
+    apply_palette_colors(parts, appearance);
+    for part in parts.iter_mut() {
+        if part.kind == CutoutPartKind::Hair {
+            apply_hair_style(part, appearance.hair);
+        }
+        apply_build(part, appearance.build);
+    }
+}
+
+fn apply_palette_colors(parts: &mut [CutoutPart], appearance: PlayerAppearance) {
     let skin = skin_color(appearance.skin_tone);
     let garment = accent_color(appearance.accent);
     let cloth = limb_cloth_color(appearance.accent);
@@ -1237,10 +1258,7 @@ fn apply_player_appearance(parts: &mut [CutoutPart], appearance: PlayerAppearanc
 
     for part in parts.iter_mut() {
         match part.kind {
-            CutoutPartKind::Hair => {
-                apply_hair_style(part, appearance.hair);
-                part.color = hair;
-            }
+            CutoutPartKind::Hair => part.color = hair,
             CutoutPartKind::Torso => part.color = garment,
             CutoutPartKind::Head | CutoutPartKind::HandBack | CutoutPartKind::HandFront => {
                 part.color = skin;
@@ -1250,7 +1268,6 @@ fn apply_player_appearance(parts: &mut [CutoutPart], appearance: PlayerAppearanc
             }
             _ => part.color = cloth,
         }
-        apply_build(part, appearance.build);
     }
 }
 
@@ -1449,7 +1466,7 @@ mod tests {
             .iter_mut()
             .find(|part| part["id"] == "human.torso.linen.v1")
             .expect("fixture has the selected torso");
-        torso["material"] = serde_json::json!({
+        torso["layers"][0]["material"] = serde_json::json!({
             "mask_path": "fighters/human/runtime/torso_mask.png",
             "normal_path": "fighters/human/runtime/torso_normal.png",
             "shadow_path": "fighters/human/runtime/torso_shadow.png",
@@ -1548,9 +1565,61 @@ mod tests {
     }
 
     #[test]
+    fn catalog_template_keeps_neutral_geometry_for_legacy_build_and_hair_choices() {
+        let neutral = catalog_human_template(PlayerAppearance::default());
+        let customized = catalog_human_template(PlayerAppearance {
+            skin_tone: SkinTone::Deep,
+            build: BodyBuild::Powerful,
+            hair: HairStyle::Tied,
+            accent: AccentColor::Storm,
+        });
+
+        for customized_part in &customized.parts {
+            let neutral_part = neutral
+                .parts
+                .iter()
+                .find(|part| part.kind == customized_part.kind)
+                .expect("neutral catalog template has the same rig part");
+            assert_eq!(customized_part.offset, neutral_part.offset);
+            assert_eq!(customized_part.pivot, neutral_part.pivot);
+            assert_eq!(customized_part.size, neutral_part.size);
+            assert_eq!(customized_part.rotation, neutral_part.rotation);
+            assert_eq!(customized_part.z_offset, neutral_part.z_offset);
+        }
+
+        assert_ne!(customized.parts[0].color, neutral.parts[0].color);
+    }
+
+    #[test]
+    fn selected_catalog_bundles_replace_every_human_rig_layer() {
+        let resolved = resolved_human(PlayerAppearance::default());
+        let adapted = rig_template_for(&resolved);
+
+        assert_eq!(adapted.parts.len(), 15);
+        for part in &adapted.parts {
+            let selected = selected_record_for_kind(&resolved, part.kind)
+                .expect("every human rig kind has a selected semantic record");
+            let layer = selected
+                .layer_for_attachment(attachment_name(part.kind))
+                .expect("selected semantic bundle covers the live rig attachment");
+            assert_eq!(
+                part.source_id.as_ref(),
+                Some(&selected.id),
+                "{:?}",
+                part.kind
+            );
+            assert_eq!(part.asset_path.as_deref(), Some(layer.asset_path.as_str()));
+            assert_eq!(
+                part.material.as_ref().map(|material| &material.part_id),
+                Some(&selected.id)
+            );
+        }
+    }
+
+    #[test]
     fn rig_adapter_transfers_material_without_changing_part_geometry_or_identity() {
         let resolved = resolved_human_with_torso_material();
-        let baseline = human_template_for(resolved.definition().appearance);
+        let baseline = catalog_human_template(resolved.definition().appearance);
         let adapted = rig_template_for(&resolved);
 
         assert_eq!(adapted.parts.len(), baseline.parts.len());
@@ -1730,7 +1799,8 @@ mod tests {
             .iter_mut()
             .find(|part| part["id"] == "human.hair.long.v1")
             .expect("catalog has long hair");
-        long_hair["asset_path"] = serde_json::json!("fighters/human/runtime/not-registered.png");
+        long_hair["layers"][0]["asset_path"] =
+            serde_json::json!("fighters/human/runtime/not-registered.png");
         let catalog = CharacterCatalog::from_json(&value.to_string())
             .expect("content errors are reported by validation, not JSON parsing");
         let definition = CharacterDefinition::legacy_human(PlayerAppearance {
