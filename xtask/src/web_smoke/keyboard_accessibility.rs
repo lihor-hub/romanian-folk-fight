@@ -117,6 +117,11 @@ const REVIEW_ACCESSIBILITY_KEY: &str = "rff_review_a11y_v1";
 
 const VIEWPORT_WIDTH: u32 = 1280;
 const VIEWPORT_HEIGHT: u32 = 800;
+// A full autoplay fight can run substantially slower than real time on a
+// cold, contended CI runner. Keep the frame and wall-clock ceilings paired:
+// 15 FPS remains the intentional minimum-progress assumption.
+const SCREEN_MAX_FRAMES: usize = 1_800;
+const SCREEN_MAX_WALL_CLOCK: Duration = Duration::from_secs(120);
 
 const KEYBOARD_ACCESSIBILITY_SEED: u64 = 20;
 const KEYBOARD_ACCESSIBILITY_PRESET: &str = "Voinicul";
@@ -340,7 +345,7 @@ fn wait_for_screen(
     let (max_frames, max_wall_clock) = if require_boot {
         (READY_MAX_FRAMES, READY_MAX_WALL_CLOCK)
     } else {
-        (900, Duration::from_secs(60))
+        (SCREEN_MAX_FRAMES, SCREEN_MAX_WALL_CLOCK)
     };
     let start = Instant::now();
     let mut last_screen: Option<String> = None;
