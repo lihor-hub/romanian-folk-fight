@@ -118,6 +118,30 @@ impl CharacterCatalog {
         self.parts.get(id)
     }
 
+    /// Returns every part compatible with the requested semantic slot,
+    /// skeleton, and cultural profile.
+    ///
+    /// The returned order intentionally follows no contract: callers that
+    /// make deterministic choices must order records by their stable IDs
+    /// before selecting one.
+    pub fn compatible_parts(
+        &self,
+        region: BodyRegion,
+        skeleton: SkeletonFamily,
+        culture_tags: &[String],
+    ) -> Vec<&PartRecord> {
+        self.parts
+            .values()
+            .filter(|part| {
+                part.region == region
+                    && part.skeletons.contains(&skeleton)
+                    && culture_tags
+                        .iter()
+                        .any(|tag| part.cultural_tags.contains(tag))
+            })
+            .collect()
+    }
+
     /// Validates catalog-wide relationships before a definition is resolved.
     pub fn validate(&self) -> Result<(), CatalogError> {
         if let Some(id) = self.duplicate_ids.first() {

@@ -3,6 +3,7 @@
 
 pub mod catalog;
 pub mod definition;
+pub mod generation;
 pub mod stats;
 
 pub use catalog::{
@@ -11,6 +12,10 @@ pub use catalog::{
 pub use definition::{
     CHARACTER_DEFINITION_VERSION, CharacterDefinition, CulturalProfile, PartId, PartIdError,
     PartSelections, SkeletonFamily,
+};
+pub use generation::{
+    GenerationError, GenerationProfile, GenerationSlot, WeightedPart, fallback_human,
+    generate_character,
 };
 
 use bevy::prelude::*;
