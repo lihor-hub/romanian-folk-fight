@@ -49,6 +49,8 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
+
 use super::super::aggregate::Aggregate;
 use super::super::diagnostics::Diagnostic;
 use super::super::schema::{Kind, Status, expected_extensions};
@@ -70,6 +72,37 @@ use super::rust_scan;
 /// `Diagnostic::StaleRuntimeReferenceExemption` so the list can't
 /// silently drift, mirroring `aggregate`'s `StaleIgnore`.
 pub const RUNTIME_REFERENCE_EXEMPTIONS: &[(&str, &str)] = &[];
+
+const HUMAN_CATALOG_PATH: &str = "fighters/catalog/human-foundation.json";
+const HUMAN_RUNTIME_SIDECAR: &str = "fighters/human/runtime/manifest.toml";
+
+#[derive(Deserialize)]
+struct CatalogMaterialDocument {
+    parts: Vec<CatalogMaterialPart>,
+}
+
+#[derive(Deserialize)]
+struct CatalogMaterialPart {
+    id: String,
+    attachment: CatalogMaterialAttachment,
+    #[serde(default)]
+    material: CatalogMaterialChannels,
+}
+
+#[derive(Deserialize)]
+struct CatalogMaterialAttachment {
+    point: String,
+}
+
+#[derive(Default, Deserialize)]
+struct CatalogMaterialChannels {
+    #[serde(default)]
+    mask_path: Option<String>,
+    #[serde(default)]
+    normal_path: Option<String>,
+    #[serde(default)]
+    shadow_path: Option<String>,
+}
 
 /// One asset-path-like string literal found in a production source file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,6 +196,83 @@ pub fn check(workspace_root: &Path, aggregate: &Aggregate) -> Vec<Diagnostic> {
         }
     }
 
+    diagnostics.extend(check_catalog_material_channels(&assets_root, aggregate));
+
+    diagnostics
+}
+
+/// Validates the optional material channels authored with every human part.
+/// The regular catalog validator owns the albedo and pivot contract; this
+/// reference pass owns the additional channel-to-sidecar relationship.
+fn check_catalog_material_channels(assets_root: &Path, aggregate: &Aggregate) -> Vec<Diagnostic> {
+    let relative_catalog = Path::new(HUMAN_CATALOG_PATH);
+    let catalog_path = assets_root.join(relative_catalog);
+    let json = match fs::read_to_string(&catalog_path) {
+        Ok(json) => json,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => {
+            return vec![Diagnostic::CatalogContent {
+                catalog: Path::new("assets").join(relative_catalog),
+                part_id: "<catalog>".to_owned(),
+                detail: format!("could not read material channels: {error}"),
+            }];
+        }
+    };
+    let document: CatalogMaterialDocument = match serde_json::from_str(&json) {
+        Ok(document) => document,
+        Err(_) => return Vec::new(),
+    };
+    let display_catalog = Path::new("assets").join(relative_catalog);
+    let human_runtime_sidecar = assets_root.join(HUMAN_RUNTIME_SIDECAR);
+    let mut diagnostics = Vec::new();
+
+    for part in document.parts {
+        for (channel, asset_path) in [
+            ("mask_path", part.material.mask_path),
+            ("normal_path", part.material.normal_path),
+            ("shadow_path", part.material.shadow_path),
+        ] {
+            let Some(asset_path) = asset_path else {
+                continue;
+            };
+            let Some(record) = aggregate
+                .records
+                .iter()
+                .find(|record| record.full_path.as_path() == Path::new(&asset_path))
+            else {
+                diagnostics.push(Diagnostic::CatalogContent {
+                    catalog: display_catalog.clone(),
+                    part_id: part.id.clone(),
+                    detail: format!(
+                        "material `{channel}` asset {asset_path:?} is not registered in the human runtime sidecar"
+                    ),
+                });
+                continue;
+            };
+            if record.sidecar != human_runtime_sidecar || record.record.status != Status::Runtime {
+                diagnostics.push(Diagnostic::CatalogContent {
+                    catalog: display_catalog.clone(),
+                    part_id: part.id.clone(),
+                    detail: format!(
+                        "material `{channel}` asset {asset_path:?} is not registered in the human runtime sidecar"
+                    ),
+                });
+                continue;
+            }
+            if record.record.attachment.as_deref() != Some(part.attachment.point.as_str()) {
+                diagnostics.push(Diagnostic::CatalogContent {
+                    catalog: display_catalog.clone(),
+                    part_id: part.id.clone(),
+                    detail: format!(
+                        "material `{channel}` attachment {:?} disagrees with part attachment {:?}",
+                        record.record.attachment.as_deref().unwrap_or("<missing>"),
+                        part.attachment.point,
+                    ),
+                });
+            }
+        }
+    }
+
     diagnostics
 }
 
@@ -236,10 +346,13 @@ fn looks_like_asset_path(text: &str) -> bool {
         return false;
     }
     let extension = text.rsplit('.').next().unwrap_or_default();
+    let file_name = text.rsplit('/').next().unwrap_or_default();
+    let has_file_stem = file_name.len() > extension.len() + 1 && !file_name.starts_with('.');
     let has_known_extension = ASSET_KINDS
         .iter()
         .any(|kind| expected_extensions(*kind).contains(&extension));
-    has_known_extension
+    has_file_stem
+        && has_known_extension
         && text
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/'))
@@ -380,6 +493,42 @@ mod tests {
         )
     }
 
+    fn runtime_part_sidecar(id: &str, file_name: &str, attachment: &str) -> String {
+        format!(
+            r#"
+            version = 1
+            [[record]]
+            id = "{id}"
+            path = "{file_name}"
+            kind = "image"
+            category = "fighter-runtime-part"
+            status = "runtime"
+            provenance = "repo-generated"
+            generator = "scripts/generate-placeholder-sprites.py"
+            license = "CC0 1.0"
+            dimensions = [512, 512]
+            sampler = "linear"
+            attachment = "{attachment}"
+            pivot = [0.0, 0.0]
+            display = [1.0, 1.0]
+            "#
+        )
+    }
+
+    fn catalog_with_material(channel: &str, path: &str) -> String {
+        format!(
+            r#"{{
+              "version": 2,
+              "parts": [{{
+                "id": "human.hair.test.v1",
+                "asset_path": "fighters/human/runtime/hair.png",
+                "attachment": {{ "point": "hair", "pivot": [0.0, 0.0] }},
+                "material": {{ "{channel}": "{path}" }}
+              }}]
+            }}"#
+        )
+    }
+
     #[test]
     fn a_production_reference_to_a_runtime_asset_is_clean() {
         let ws = TempWorkspace::new("clean");
@@ -404,6 +553,72 @@ mod tests {
                 .map(|d| d.to_string())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn a_bare_asset_extension_is_not_an_asset_reference() {
+        assert!(
+            scan_rust_file(
+                Path::new("src/lib.rs"),
+                "const PNG_EXTENSION: &str = \".png\";\n",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn catalog_material_channels_must_be_registered_in_the_human_runtime_sidecar() {
+        let ws = TempWorkspace::new("catalog-material-unregistered");
+        ws.write("assets/fighters/human/runtime/hair.png", "fake-png");
+        ws.write(
+            "assets/fighters/human/runtime/manifest.toml",
+            &runtime_part_sidecar("fighters.human.runtime.hair", "hair.png", "hair"),
+        );
+        ws.write(
+            "assets/fighters/catalog/human-foundation.json",
+            &catalog_with_material("mask_path", "fighters/human/runtime/missing-mask.png"),
+        );
+
+        let aggregate = aggregate::build(&ws.root.join("assets"));
+        let diagnostics = check(&ws.root, &aggregate);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .to_string()
+                .contains("material `mask_path` asset \"fighters/human/runtime/missing-mask.png\" is not registered")
+        }));
+    }
+
+    #[test]
+    fn catalog_material_channels_must_match_the_owning_part_attachment() {
+        let ws = TempWorkspace::new("catalog-material-attachment");
+        ws.write("assets/fighters/human/runtime/hair.png", "fake-png");
+        ws.write("assets/fighters/human/runtime/head-normal.png", "fake-png");
+        ws.write(
+            "assets/fighters/human/runtime/manifest.toml",
+            &format!(
+                "{}\n{}",
+                runtime_part_sidecar("fighters.human.runtime.hair", "hair.png", "hair"),
+                runtime_part_sidecar(
+                    "fighters.human.runtime.head-normal",
+                    "head-normal.png",
+                    "head"
+                ),
+            ),
+        );
+        ws.write(
+            "assets/fighters/catalog/human-foundation.json",
+            &catalog_with_material("normal_path", "fighters/human/runtime/head-normal.png"),
+        );
+
+        let aggregate = aggregate::build(&ws.root.join("assets"));
+        let diagnostics = check(&ws.root, &aggregate);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .to_string()
+                .contains("material `normal_path` attachment \"head\" disagrees with part attachment \"hair\"")
+        }));
     }
 
     #[test]

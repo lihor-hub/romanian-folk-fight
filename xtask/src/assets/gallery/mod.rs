@@ -251,6 +251,25 @@ pub fn generate_filtered(
                 &html,
             )?;
         }
+
+        for channel in model::identity_material_channels(&records, identity) {
+            let composition_links = vec![(
+                format!("{identity} albedo composition"),
+                format!("{comp_id}.html"),
+            )];
+            let html = pages::render_part_page(
+                channel,
+                None,
+                &representative_background_href(&by_id),
+                &composition_links,
+            );
+            writer.emit(
+                out_dir,
+                &format!("Fighter material channels: {identity}"),
+                &channel.record.id,
+                &html,
+            )?;
+        }
     }
 
     // --- Gear: composable (rig-attached) items get a composition + part page ---

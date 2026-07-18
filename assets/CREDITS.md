@@ -43,6 +43,63 @@ shop, and arena flows without introducing a new production generator pipeline.
 | `fighters/human/runtime/upper_arm_back.png` | Derived runtime human cutout part (upper arm back) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
 | `fighters/human/runtime/upper_arm_front.png` | Derived runtime human cutout part (upper arm front) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
 
+#### Human hybrid material channels
+
+These technical maps are deterministically derived from the corresponding
+runtime albedo by `scripts/generate-human-material-channels.py`; they preserve
+the source dimensions and alpha silhouette exactly. The cultural and lighting
+reference prompt/source, SHA-256, rights record, and repository-size exclusion
+decision are preserved in
+`docs/art-references/known-good-human-material-reference.md`.
+
+| File | Depicts | Source | License |
+| --- | --- | --- | --- |
+| `fighters/human/runtime/foot_back_mask.png` | Known-good human mask channel (foot back) | Deterministically derived from `fighters/human/runtime/foot_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/foot_back_normal.png` | Known-good human normal channel (foot back) | Deterministically derived from `fighters/human/runtime/foot_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/foot_back_shadow.png` | Known-good human shadow channel (foot back) | Deterministically derived from `fighters/human/runtime/foot_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/foot_front_mask.png` | Known-good human mask channel (foot front) | Deterministically derived from `fighters/human/runtime/foot_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/foot_front_normal.png` | Known-good human normal channel (foot front) | Deterministically derived from `fighters/human/runtime/foot_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/foot_front_shadow.png` | Known-good human shadow channel (foot front) | Deterministically derived from `fighters/human/runtime/foot_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/forearm_back_mask.png` | Known-good human mask channel (forearm back) | Deterministically derived from `fighters/human/runtime/forearm_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/forearm_back_normal.png` | Known-good human normal channel (forearm back) | Deterministically derived from `fighters/human/runtime/forearm_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/forearm_back_shadow.png` | Known-good human shadow channel (forearm back) | Deterministically derived from `fighters/human/runtime/forearm_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/forearm_front_mask.png` | Known-good human mask channel (forearm front) | Deterministically derived from `fighters/human/runtime/forearm_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/forearm_front_normal.png` | Known-good human normal channel (forearm front) | Deterministically derived from `fighters/human/runtime/forearm_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/forearm_front_shadow.png` | Known-good human shadow channel (forearm front) | Deterministically derived from `fighters/human/runtime/forearm_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/hair_mask.png` | Known-good human mask channel (hair) | Deterministically derived from `fighters/human/runtime/hair.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/hair_normal.png` | Known-good human normal channel (hair) | Deterministically derived from `fighters/human/runtime/hair.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/hair_shadow.png` | Known-good human shadow channel (hair) | Deterministically derived from `fighters/human/runtime/hair.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/hand_back_mask.png` | Known-good human mask channel (hand back) | Deterministically derived from `fighters/human/runtime/hand_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/hand_back_normal.png` | Known-good human normal channel (hand back) | Deterministically derived from `fighters/human/runtime/hand_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/hand_back_shadow.png` | Known-good human shadow channel (hand back) | Deterministically derived from `fighters/human/runtime/hand_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/hand_front_mask.png` | Known-good human mask channel (hand front) | Deterministically derived from `fighters/human/runtime/hand_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/hand_front_normal.png` | Known-good human normal channel (hand front) | Deterministically derived from `fighters/human/runtime/hand_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/hand_front_shadow.png` | Known-good human shadow channel (hand front) | Deterministically derived from `fighters/human/runtime/hand_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/head_mask.png` | Known-good human mask channel (head) | Deterministically derived from `fighters/human/runtime/head.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/head_normal.png` | Known-good human normal channel (head) | Deterministically derived from `fighters/human/runtime/head.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/head_shadow.png` | Known-good human shadow channel (head) | Deterministically derived from `fighters/human/runtime/head.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/shin_back_mask.png` | Known-good human mask channel (shin back) | Deterministically derived from `fighters/human/runtime/shin_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/shin_back_normal.png` | Known-good human normal channel (shin back) | Deterministically derived from `fighters/human/runtime/shin_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/shin_back_shadow.png` | Known-good human shadow channel (shin back) | Deterministically derived from `fighters/human/runtime/shin_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/shin_front_mask.png` | Known-good human mask channel (shin front) | Deterministically derived from `fighters/human/runtime/shin_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/shin_front_normal.png` | Known-good human normal channel (shin front) | Deterministically derived from `fighters/human/runtime/shin_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/shin_front_shadow.png` | Known-good human shadow channel (shin front) | Deterministically derived from `fighters/human/runtime/shin_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/thigh_back_mask.png` | Known-good human mask channel (thigh back) | Deterministically derived from `fighters/human/runtime/thigh_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/thigh_back_normal.png` | Known-good human normal channel (thigh back) | Deterministically derived from `fighters/human/runtime/thigh_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/thigh_back_shadow.png` | Known-good human shadow channel (thigh back) | Deterministically derived from `fighters/human/runtime/thigh_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/thigh_front_mask.png` | Known-good human mask channel (thigh front) | Deterministically derived from `fighters/human/runtime/thigh_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/thigh_front_normal.png` | Known-good human normal channel (thigh front) | Deterministically derived from `fighters/human/runtime/thigh_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/thigh_front_shadow.png` | Known-good human shadow channel (thigh front) | Deterministically derived from `fighters/human/runtime/thigh_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/torso_mask.png` | Known-good human mask channel (torso) | Deterministically derived from `fighters/human/runtime/torso.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/torso_normal.png` | Known-good human normal channel (torso) | Deterministically derived from `fighters/human/runtime/torso.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/torso_shadow.png` | Known-good human shadow channel (torso) | Deterministically derived from `fighters/human/runtime/torso.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/upper_arm_back_mask.png` | Known-good human mask channel (upper arm back) | Deterministically derived from `fighters/human/runtime/upper_arm_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/upper_arm_back_normal.png` | Known-good human normal channel (upper arm back) | Deterministically derived from `fighters/human/runtime/upper_arm_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/upper_arm_back_shadow.png` | Known-good human shadow channel (upper arm back) | Deterministically derived from `fighters/human/runtime/upper_arm_back.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/upper_arm_front_mask.png` | Known-good human mask channel (upper arm front) | Deterministically derived from `fighters/human/runtime/upper_arm_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/upper_arm_front_normal.png` | Known-good human normal channel (upper arm front) | Deterministically derived from `fighters/human/runtime/upper_arm_front.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/upper_arm_front_shadow.png` | Known-good human shadow channel (upper arm front) | Deterministically derived from `fighters/human/runtime/upper_arm_front.png` | Same as project assets unless superseded |
+
 ### Strigoi runtime parts
 
 | File | Depicts | Source | License |

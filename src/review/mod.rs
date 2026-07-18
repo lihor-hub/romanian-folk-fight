@@ -98,6 +98,7 @@ use rand_chacha::ChaCha8Rng;
 
 use crate::arena::fx::ParallaxLayer;
 use crate::arena::{ENEMY_ANCHOR, FIGHTER_SIZE, PLAYER_ANCHOR};
+use crate::character::material::{HybridCharacterMaterial, PendingHybridCharacterMaterial};
 use crate::character::{EnemyFighter, PlayerFighter, Stamina};
 use crate::combat::action_palette::{
     ActionButton, ActionCostOrReason, CategoryButton, PhonePaletteState,
@@ -113,6 +114,7 @@ use crate::core::{
     screen_point_for_world_point,
 };
 use crate::creation::{CharacterDraft, CreationAction, HeroChoice, HeroPreset};
+use crate::cutout::{CutoutPartKind, CutoutPartMarker, CutoutRig, cutout_rig_owner};
 use crate::items::ItemId;
 use crate::menu::{DisabledButton, MenuAction};
 use crate::progression::result_ui::{GameOverAction, ResultAction};
@@ -181,6 +183,11 @@ pub const REVIEW_ACCESSIBILITY_KEY: &str = "rff_review_a11y_v1";
 /// identity attached to the live combat enemy. The browser journey compares
 /// these exact stable-ID snapshots rather than inferring identity from pixels.
 pub const REVIEW_ENCOUNTER_KEY: &str = "rff_review_encounter_v1";
+/// `localStorage` key publishing the selected human identity and the actual
+/// rendering path used by its visible cutout descendants. The dedicated
+/// hybrid-material browser scenario reads semantic ECS facts here instead of
+/// trying to infer identity or material promotion from screenshot pixels.
+pub const REVIEW_HYBRID_CHARACTER_KEY: &str = "rff_review_hybrid_character_v1";
 
 /// One command the harness can queue through [`REVIEW_COMMAND_KEY`]. Plain
 /// JSON via `serde`, tagged by `cmd` so the wire format is a flat, readable
@@ -238,6 +245,12 @@ pub enum ReviewCommand {
     AdvanceTime {
         seconds: f32,
     },
+    /// Advances the virtual clock to one absolute elapsed-time target. The
+    /// hybrid visual scenario uses this before pausing so periodic idle and
+    /// parallax systems see the same phase regardless of browser boot speed.
+    SetTimeElapsed {
+        seconds: f32,
+    },
 }
 
 /// Applies [`ReviewCommand::AdvanceTime`]: jumps `virtual_time` forward by
@@ -268,6 +281,11 @@ pub enum ReviewCommand {
 /// cannot represent a negative amount and time must never move backwards).
 fn advance_virtual_time(virtual_time: &mut Time<Virtual>, seconds: f32) {
     virtual_time.advance_by(std::time::Duration::from_secs_f32(seconds.max(0.0)));
+}
+
+fn set_virtual_time_elapsed(virtual_time: &mut Time<Virtual>, seconds: f32) {
+    let target = std::time::Duration::from_secs_f32(seconds.max(0.0));
+    virtual_time.advance_by(target.saturating_sub(virtual_time.elapsed()));
 }
 
 /// Whether [`autoplay_player_turn`] is currently scripting the player's
@@ -322,6 +340,7 @@ impl Plugin for ReviewPlugin {
                     publish_theme_state,
                     publish_accessibility_state,
                     publish_encounter_identity_state,
+                    publish_hybrid_character_state,
                     autoplay_player_turn,
                 ),
             );
@@ -392,6 +411,146 @@ fn publish_encounter_identity_state(
     let snapshot = encounter_identity_snapshot(prepared.as_deref(), enemies.single().ok());
     if let Ok(json) = serde_json::to_string(&snapshot) {
         publish_encounter_identity(&json);
+    }
+}
+
+/// Which complete material path the representative selectable parts use in
+/// the frame represented by [`HybridCharacterSnapshot`]. `Mixed` is an
+/// observable transient while asynchronous image promotion is in flight; the
+/// browser acceptance waits for one of the two terminal paths.
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CharacterRenderPath {
+    HybridMaterial,
+    AlbedoFallback,
+    Mixed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CharacterPartSample {
+    kind: CutoutPartKind,
+    source_id: Option<String>,
+    hybrid_material: bool,
+    pending_material: bool,
+}
+
+/// Exact review-facing proof for the shared creation/shop/combat rig.
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+struct HybridCharacterSnapshot {
+    /// Current `GameState` debug name. Prevents a previous screen's storage
+    /// payload from satisfying the next screen's browser wait.
+    screen: String,
+    /// Full Bevy entity identity (index + generation) for the sampled root.
+    /// The generation makes the second `Fight` distinguishable from the first.
+    root_entity: String,
+    /// Six required selections in schema order: body, face, hair, torso,
+    /// legs, feet. Optional layers are deliberately outside this tracer bullet.
+    selected_part_ids: Vec<String>,
+    /// Every articulated cutout descendant, independent of rendering path.
+    part_count: usize,
+    /// Parts backed by the representative catalog material records.
+    material_part_count: usize,
+    render_path: CharacterRenderPath,
+}
+
+fn hybrid_character_snapshot(
+    screen: &str,
+    root_entity: &str,
+    parts: &[CharacterPartSample],
+) -> Option<HybridCharacterSnapshot> {
+    use CutoutPartKind::{FootFront, Hair, Head, ThighFront, Torso, UpperArmFront};
+
+    let selected_part_ids = [UpperArmFront, Head, Hair, Torso, ThighFront, FootFront]
+        .into_iter()
+        .map(|kind| {
+            parts
+                .iter()
+                .find(|part| part.kind == kind)
+                .and_then(|part| part.source_id.clone())
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let hybrid_count = parts.iter().filter(|part| part.hybrid_material).count();
+    let fallback_count = parts.iter().filter(|part| part.pending_material).count();
+    let material_part_count = hybrid_count + fallback_count;
+    let render_path = if material_part_count > 0 && hybrid_count == material_part_count {
+        CharacterRenderPath::HybridMaterial
+    } else if material_part_count > 0 && fallback_count == material_part_count {
+        CharacterRenderPath::AlbedoFallback
+    } else {
+        CharacterRenderPath::Mixed
+    };
+
+    Some(HybridCharacterSnapshot {
+        screen: screen.to_owned(),
+        root_entity: root_entity.to_owned(),
+        selected_part_ids,
+        part_count: parts.len(),
+        material_part_count,
+        render_path,
+    })
+}
+
+/// Chooses the visible player rig for creation/shop/fight and samples its
+/// descendants through their actual ECS rendering components. Creation and
+/// shop each own one non-fighter preview root; fight owns one player root and
+/// one opponent root, so the player marker disambiguates it explicitly.
+type HybridCharacterPartQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static CutoutPartMarker,
+        Has<MeshMaterial2d<HybridCharacterMaterial>>,
+        Has<PendingHybridCharacterMaterial>,
+    ),
+>;
+
+fn publish_hybrid_character_state(
+    state: Res<State<GameState>>,
+    roots: Query<(Entity, Has<PlayerFighter>), With<CutoutRig>>,
+    ancestry: Query<&ChildOf, With<CutoutPartMarker>>,
+    parts: HybridCharacterPartQuery,
+) {
+    let root = match state.get() {
+        GameState::Fight => roots
+            .iter()
+            .find_map(|(entity, player)| player.then_some(entity)),
+        GameState::CharacterCreation | GameState::Shop => roots
+            .iter()
+            .find_map(|(entity, player)| (!player).then_some(entity)),
+        _ => None,
+    };
+    let Some(root) = root else {
+        clear_hybrid_character();
+        return;
+    };
+
+    let samples: Vec<CharacterPartSample> = parts
+        .iter()
+        .filter(|(entity, _, _, _)| {
+            cutout_rig_owner(*entity, |child| {
+                ancestry.get(child).ok().map(ChildOf::parent)
+            }) == root
+        })
+        .map(
+            |(_, marker, hybrid_material, pending_material)| CharacterPartSample {
+                kind: marker.kind,
+                source_id: marker.source_id.as_ref().map(ToString::to_string),
+                hybrid_material,
+                pending_material,
+            },
+        )
+        .collect();
+    let screen = format!("{:?}", state.get());
+    let root_entity = format!("{root:?}");
+    if let Some(snapshot) = hybrid_character_snapshot(&screen, &root_entity, &samples)
+        && let Ok(json) = serde_json::to_string(&snapshot)
+    {
+        publish_hybrid_character(&json);
+    } else {
+        // Never let a previous root's valid payload survive an incomplete or
+        // failed publish from the current root.
+        clear_hybrid_character();
     }
 }
 
@@ -1114,6 +1273,9 @@ fn poll_review_commands(
         Ok(ReviewCommand::AdvanceTime { seconds }) => {
             advance_virtual_time(&mut virtual_time, seconds);
         }
+        Ok(ReviewCommand::SetTimeElapsed { seconds }) => {
+            set_virtual_time_elapsed(&mut virtual_time, seconds);
+        }
         Err(error) => warn!("review: malformed command `{raw}`: {error}"),
     }
 }
@@ -1275,6 +1437,26 @@ fn publish_encounter_identity(json: &str) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn publish_encounter_identity(_json: &str) {}
+
+#[cfg(target_arch = "wasm32")]
+fn publish_hybrid_character(json: &str) {
+    if let Some(storage) = local_storage() {
+        let _ = storage.set_item(REVIEW_HYBRID_CHARACTER_KEY, json);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_hybrid_character(_json: &str) {}
+
+#[cfg(target_arch = "wasm32")]
+fn clear_hybrid_character() {
+    if let Some(storage) = local_storage() {
+        let _ = storage.remove_item(REVIEW_HYBRID_CHARACTER_KEY);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clear_hybrid_character() {}
 
 /// Clears [`REVIEW_MOTION_KEY`] so a scenario polling outside the fight (or
 /// after a snapshot failed to serialize) never reads a stale motion
@@ -1452,6 +1634,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn set_time_elapsed_command_parses() {
+        assert_eq!(
+            serde_json::from_str::<ReviewCommand>(r#"{"cmd":"setTimeElapsed","seconds":10000.0}"#)
+                .unwrap(),
+            ReviewCommand::SetTimeElapsed { seconds: 10_000.0 }
+        );
+    }
+
+    #[test]
+    fn set_virtual_time_elapsed_reaches_the_exact_absolute_target() {
+        let mut virtual_time = Time::<Virtual>::default();
+        advance_virtual_time(&mut virtual_time, 3.0);
+
+        set_virtual_time_elapsed(&mut virtual_time, 10_000.0);
+
+        assert_eq!(
+            virtual_time.elapsed(),
+            std::time::Duration::from_secs_f32(10_000.0)
+        );
+    }
+
     // --- #272: `advance_virtual_time` settles bounded reveal animations ---
 
     /// The core determinism property [`advance_virtual_time`]'s doc comment
@@ -1564,6 +1768,95 @@ mod tests {
 
         let combat = encounter_identity_snapshot(Some(&prepared), Some(&generated));
         assert_eq!(combat.preview, combat.combat);
+    }
+
+    #[test]
+    fn hybrid_character_snapshot_reports_exact_semantic_ids_and_promoted_materials() {
+        let parts = representative_hybrid_part_samples(true);
+
+        let snapshot = hybrid_character_snapshot("CharacterCreation", "42v0", &parts)
+            .expect("the complete rig snapshots");
+
+        assert_eq!(snapshot.screen, "CharacterCreation");
+        assert_eq!(snapshot.root_entity, "42v0");
+        assert_eq!(
+            snapshot.selected_part_ids,
+            vec![
+                "human.body.foundation.v1",
+                "human.face.default.v1",
+                "human.hair.braided.v1",
+                "human.torso.linen.v1",
+                "human.legs.itari.v1",
+                "human.feet.opinci.v1",
+            ]
+        );
+        assert_eq!(snapshot.part_count, 15);
+        assert_eq!(snapshot.material_part_count, 6);
+        assert_eq!(snapshot.render_path, CharacterRenderPath::HybridMaterial);
+    }
+
+    #[test]
+    fn hybrid_character_snapshot_reports_fallback_without_changing_identity_or_silhouette() {
+        let hybrid = hybrid_character_snapshot(
+            "CharacterCreation",
+            "42v0",
+            &representative_hybrid_part_samples(true),
+        )
+        .expect("the promoted rig snapshots");
+        let fallback = hybrid_character_snapshot(
+            "CharacterCreation",
+            "42v0",
+            &representative_hybrid_part_samples(false),
+        )
+        .expect("the fallback rig snapshots");
+
+        assert_eq!(fallback.selected_part_ids, hybrid.selected_part_ids);
+        assert_eq!(fallback.part_count, hybrid.part_count);
+        assert_eq!(fallback.material_part_count, hybrid.material_part_count);
+        assert_eq!(fallback.render_path, CharacterRenderPath::AlbedoFallback);
+    }
+
+    fn representative_hybrid_part_samples(promoted: bool) -> Vec<CharacterPartSample> {
+        use crate::cutout::CutoutPartKind::*;
+
+        let semantic = [
+            (UpperArmFront, "human.body.foundation.v1"),
+            (Head, "human.face.default.v1"),
+            (Hair, "human.hair.braided.v1"),
+            (Torso, "human.torso.linen.v1"),
+            (ThighFront, "human.legs.itari.v1"),
+            (FootFront, "human.feet.opinci.v1"),
+        ];
+        let mut parts: Vec<CharacterPartSample> = semantic
+            .into_iter()
+            .map(|(kind, id)| CharacterPartSample {
+                kind,
+                source_id: Some(id.to_owned()),
+                hybrid_material: promoted,
+                pending_material: !promoted,
+            })
+            .collect();
+        parts.extend(
+            [
+                UpperArmBack,
+                ForearmBack,
+                HandBack,
+                ThighBack,
+                ShinBack,
+                FootBack,
+                ForearmFront,
+                HandFront,
+                ShinFront,
+            ]
+            .into_iter()
+            .map(|kind| CharacterPartSample {
+                kind,
+                source_id: None,
+                hybrid_material: false,
+                pending_material: false,
+            }),
+        );
+        parts
     }
 
     #[test]
