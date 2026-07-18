@@ -382,16 +382,22 @@ struct MotionSnapshot {
     generated_opponent: Option<GeneratedOpponentSnapshot>,
 }
 
+/// Enemy root and optional generated identity sampled by
+/// [`publish_motion_state`].
+type EnemyMotionQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static Transform, Option<&'static SeededOpponent>),
+    (With<EnemyFighter>, Without<PlayerFighter>),
+>;
+
 /// Publishes a [`MotionSnapshot`] every frame the arena's fighters/camera
 /// exist (outside the fight, e.g. on the menu, clears the key instead so a
 /// scenario can't mistake a stale snapshot from a previous fight for the
 /// current one).
 fn publish_motion_state(
     players: Query<&Transform, (With<PlayerFighter>, Without<EnemyFighter>)>,
-    enemies: Query<
-        (&Transform, Option<&SeededOpponent>),
-        (With<EnemyFighter>, Without<PlayerFighter>),
-    >,
+    enemies: EnemyMotionQuery,
     cameras: Query<&Transform, With<WorldCamera>>,
     parallax: Query<(&ParallaxLayer, &Transform)>,
 ) {
