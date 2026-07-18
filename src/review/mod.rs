@@ -117,7 +117,7 @@ use crate::items::ItemId;
 use crate::menu::{DisabledButton, MenuAction};
 use crate::progression::result_ui::{GameOverAction, ResultAction};
 use crate::progression::victory_ui::VictoryAction;
-use crate::roster::{CampaignSeed, SeededOpponent};
+use crate::roster::{CampaignSeed, PreparedEncounter, SeededOpponent};
 use crate::settings::AccessibilityPreferences;
 use crate::shop::ShopAction;
 use crate::theme::Palette;
@@ -177,6 +177,10 @@ pub const REVIEW_THEME_KEY: &str = "rff_review_theme_v1";
 /// doc comment for why the key itself is duplicated as a plain string on the
 /// `xtask` side.
 pub const REVIEW_ACCESSIBILITY_KEY: &str = "rff_review_a11y_v1";
+/// `localStorage` key publishing the prepared pre-fight identity beside the
+/// identity attached to the live combat enemy. The browser journey compares
+/// these exact stable-ID snapshots rather than inferring identity from pixels.
+pub const REVIEW_ENCOUNTER_KEY: &str = "rff_review_encounter_v1";
 
 /// One command the harness can queue through [`REVIEW_COMMAND_KEY`]. Plain
 /// JSON via `serde`, tagged by `cmd` so the wire format is a flat, readable
@@ -317,6 +321,7 @@ impl Plugin for ReviewPlugin {
                     publish_palette_state,
                     publish_theme_state,
                     publish_accessibility_state,
+                    publish_encounter_identity_state,
                     autoplay_player_turn,
                 ),
             );
@@ -361,6 +366,32 @@ fn generated_opponent_snapshot(generated: &SeededOpponent) -> GeneratedOpponentS
         encounter_id: generated.encounter_id.to_owned(),
         seed: generated.seed,
         resolved_part_ids,
+    }
+}
+
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+struct EncounterIdentitySnapshot {
+    preview: Option<GeneratedOpponentSnapshot>,
+    combat: Option<GeneratedOpponentSnapshot>,
+}
+
+fn encounter_identity_snapshot(
+    prepared: Option<&PreparedEncounter>,
+    combat: Option<&SeededOpponent>,
+) -> EncounterIdentitySnapshot {
+    EncounterIdentitySnapshot {
+        preview: prepared.map(|prepared| generated_opponent_snapshot(&prepared.0)),
+        combat: combat.map(generated_opponent_snapshot),
+    }
+}
+
+fn publish_encounter_identity_state(
+    prepared: Option<Res<PreparedEncounter>>,
+    enemies: Query<&SeededOpponent, With<EnemyFighter>>,
+) {
+    let snapshot = encounter_identity_snapshot(prepared.as_deref(), enemies.single().ok());
+    if let Ok(json) = serde_json::to_string(&snapshot) {
+        publish_encounter_identity(&json);
     }
 }
 
@@ -1235,6 +1266,16 @@ fn publish_motion(json: &str) {
 #[cfg(not(target_arch = "wasm32"))]
 fn publish_motion(_json: &str) {}
 
+#[cfg(target_arch = "wasm32")]
+fn publish_encounter_identity(json: &str) {
+    if let Some(storage) = local_storage() {
+        let _ = storage.set_item(REVIEW_ENCOUNTER_KEY, json);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_encounter_identity(_json: &str) {}
+
 /// Clears [`REVIEW_MOTION_KEY`] so a scenario polling outside the fight (or
 /// after a snapshot failed to serialize) never reads a stale motion
 /// snapshot from a previous fight.
@@ -1502,9 +1543,27 @@ mod tests {
                 "human.torso.linen.v1",
                 "human.legs.itari.v1",
                 "human.feet.opinci.v1",
-                "human.waist.chimir.v1",
             ]
         );
+    }
+
+    #[test]
+    fn encounter_telemetry_exposes_pre_fight_and_matching_combat_identity() {
+        let generated = crate::roster::LadderProgress(0)
+            .seeded_opponent(CampaignSeed::default())
+            .expect("the first ladder rung is generated")
+            .expect("the bundled profile resolves");
+        let prepared = crate::roster::PreparedEncounter(generated.clone());
+
+        let preview = encounter_identity_snapshot(Some(&prepared), None);
+        assert_eq!(
+            preview.preview,
+            Some(generated_opponent_snapshot(&generated))
+        );
+        assert_eq!(preview.combat, None);
+
+        let combat = encounter_identity_snapshot(Some(&prepared), Some(&generated));
+        assert_eq!(combat.preview, combat.combat);
     }
 
     #[test]

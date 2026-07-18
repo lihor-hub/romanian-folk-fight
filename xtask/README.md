@@ -276,15 +276,17 @@ The runtime human catalog lives at
 `assets/fighters/catalog/human-foundation.json`. It is intentionally ignored by
 its local asset sidecar: it is typed runtime metadata, while every PNG it names
 continues to be registered by the runtime asset sidecar that owns that media.
+The catalog-aware `assets check` pass still reads this JSON and validates its
+references against those owning media records.
 An author adds the media record (including provenance, exact credit/license,
 dimensions, sampler, and rig metadata), then adds a catalog part with a stable
 ID, semantic region, asset path, compatible skeletons and cultural tags, and
 an attachment point/pivot/draw layer. In this tracer bullet only
 `attachment.point` is wired into rendering; `pivot` and `draw_layer` are
 reserved metadata, while the existing cutout template continues to own
-transforms and z ordering. `cargo xtask assets check` validates the media
-contract; the character catalog and generation tests validate the JSON contract
-and compatibility rules:
+transforms and z ordering. `cargo xtask assets check` validates the media and
+catalog-reference contract; the character catalog and generation tests validate
+the runtime schema, compatibility rules, and deterministic selection:
 
 ```bash
 cargo xtask assets check
@@ -299,43 +301,38 @@ relationships. The mandatory human regions are body, face, hair, torso, legs,
 and feet. Keep IDs stable because resolved selections are persisted; create a
 new versioned ID rather than renaming or repurposing old content.
 
-These commands do **not** cross-check catalog `asset_path` values against
-registered runtime records, nor `attachment.point` strings against rendered rig
-parts. For each new catalog record, manually confirm that `assets/<asset_path>`
-exists, its owning sidecar records the exact file with `status = "runtime"`, and
-its point is one of the exact mappings in `src/cutout.rs::attachment_kind`:
-`hair`, `head`, `torso`, or the back/front variants of `upper_arm`, `forearm`,
-`hand`, `thigh`, `shin`, and `foot`. Then check
-`selected_record_for_kind` in the same file to ensure the record's semantic
-region supplies that `CutoutPartKind`: hair supplies `Hair`, face supplies
-`Head`, torso supplies `Torso`, body supplies both arm chains, legs supplies
-thighs and shins, and feet supplies both feet. The current adapter does not map
-facial-hair, waist, or accessory selections. An unknown or semantically
-mismatched point can retain legacy art without failing current validation.
+`assets check` rejects a catalog `asset_path` that is absent from the aggregate
+runtime records, or whose attachment point/pivot differs from its owning
+sidecar. Runtime catalog validation independently rejects unregistered paths,
+unknown or region-incompatible attachment points, unsupported catalog or
+definition versions, and invalid required-region/relationship content. The
+current adapter still does not render facial-hair, waist, or accessory
+selections; those optional slots require explicit renderer work before a
+profile may claim them as visible identity.
 
 `assets review` is the visual inspection step for catalog-backed art. Open the
 printed gallery index and check the right-facing and mirrored rig-part pages,
 the human composition, pivot/attachment diagrams, draw order, and equipped
 gear composition. It validates/reviews art records, not the generated identity
 itself. For that identity, the review build publishes the seeded opponent's
-encounter ID, seed, and semantic-order resolved stable IDs as
-`generated_opponent` inside `rff_review_motion_v1` while a fight is active.
-`cargo xtask web-smoke --scenario gold-journey` exercises this path; the
-focused review assertion is:
+encounter ID, seed, and semantic-order resolved stable IDs in
+`rff_review_encounter_v1`: `preview` comes from the persisted prepared encounter
+before combat and `combat` from the live spawned opponent. The gold journey
+(`cargo xtask web-smoke --scenario gold-journey`) requires those identities to
+match exactly; the focused review assertion is:
 
 ```bash
 cargo test --features review --lib \
-  review::tests::generated_opponent_snapshot_exposes_seed_and_resolved_stable_ids
+  review::tests::encounter_telemetry_exposes_pre_fight_and_matching_combat_identity
 ```
 
-Generation and development validation report errors rather than swapping in a
-different result. To inspect the safe explicit specimen, call
+Generation and development validation report errors rather than hiding an
+invalid requested result. To inspect the safe explicit specimen, call
 `character::fallback_human(&catalog)` and resolve the returned definition. At
-scene runtime, `spawn_character_definition_rig` automatically renders the
-catalog's versioned `known_good_human` only when a persisted human definition
-cannot resolve, logs the diagnostic, and never mutates the saved identity. A
-broken bundled catalog falls back one level further to the legacy human cutout
-template for that frame.
+scene runtime, generation and persisted-definition failures both render the
+catalog's versioned `known_good_human`, log the diagnostic, and never mutate a
+saved identity. A broken bundled catalog falls back one level further to the
+legacy human cutout template for that frame.
 
 For the 2.5D material and wardrobe phases, the stable interface is the
 versioned `CharacterDefinition`/`PartId` selection plus the existing cutout

@@ -60,7 +60,9 @@ The human tracer bullet is authored in
 `assets/fighters/catalog/human-foundation.json`. It is runtime-readable
 character metadata, separate from the media sidecars: the catalog sidecar
 intentionally ignores the JSON while each referenced PNG remains owned by its
-runtime asset manifest. A catalog record selects one semantic character region,
+runtime asset manifest. `cargo xtask assets check` still reads the ignored JSON
+through its catalog-aware validator and cross-checks every reference against
+those media records. A catalog record selects one semantic character region,
 not an arbitrary full-frame overlay.
 
 ### Add a part
@@ -138,26 +140,14 @@ cargo test --lib character::generation
 ```
 
 The asset command verifies sidecars, credits, runtime references, image
-dimensions, alpha integrity, and attachment metadata. The catalog JSON is
-runtime metadata rather than a media record, so the focused catalog and
-generation tests validate its typed schema, required regions, cultural
-compatibility, relationships, and deterministic selection.
-
-Current automation has two deliberate gaps: neither `assets check` nor
-`CharacterCatalog::validate` cross-checks a catalog `asset_path` against a
-registered `status = "runtime"` asset record, and neither checks
-`attachment.point` against the rendered rig mapping above. Until those checks
-are automated, verify both manually for every new record:
-
-1. Confirm the exact file exists under `assets/`; for example,
-   `test -f assets/fighters/human/runtime/torso.png`.
-2. Open the owning runtime `manifest.toml` and confirm its record names that
-   exact file with `status = "runtime"`.
-3. Match `attachment.point` exactly to the table above, then inspect
-   `selected_record_for_kind` in `src/cutout.rs` to confirm the record's
-   semantic `region` supplies that `CutoutPartKind`. A valid but mismatched or
-   unknown point otherwise retains the legacy part art without a validation
-   error.
+dimensions, alpha integrity, and attachment metadata. Its catalog-aware pass
+also verifies that every catalog `asset_path` is a registered runtime record
+and that the authored attachment point and pivot match the owning sidecar.
+Runtime `CharacterCatalog::validate` independently rejects unregistered paths,
+unknown or region-incompatible attachment points, future schema versions,
+invalid required regions, cultural incompatibilities, and broken relationships.
+The focused generation tests pin deterministic selection on top of that
+validated content.
 
 ### Review a resolved character
 
@@ -168,14 +158,16 @@ pixel finish, pivot, draw layer, and gear overlap.
 
 For a generated identity, the review build publishes the representative
 opponent's `encounter_id`, derived `seed`, and semantic-order
-`resolved_part_ids` in the `generated_opponent` field of the
-`rff_review_motion_v1` local-storage snapshot while the fight is active. Run
+`resolved_part_ids` in `rff_review_encounter_v1`. Its `preview` field is
+available before combat from the persisted prepared encounter; its `combat`
+field reports the live spawned opponent. Run
 `cargo xtask web-smoke --scenario gold-journey` to exercise that review build
-through creation and combat, or run the focused review assertion:
+through creation and combat and require those identities to match exactly, or
+run the focused review assertion:
 
 ```bash
 cargo test --features review --lib \
-  review::tests::generated_opponent_snapshot_exposes_seed_and_resolved_stable_ids
+  review::tests::encounter_telemetry_exposes_pre_fight_and_matching_combat_identity
 ```
 
 Compare those stable IDs with the intended profile and catalog records; do not
@@ -189,12 +181,12 @@ the catalog's explicit fallback with `character::fallback_human(&catalog)` and
 resolve that returned `CharacterDefinition`; it is the versioned
 `known_good_human` selection and its matching cultural tags from the catalog.
 
-The scene adapter `spawn_character_definition_rig` invokes the same policy for
-persisted human definitions: an unresolvable definition renders the catalog's
-known-good human, emits a diagnostic, and leaves the saved definition unchanged
-for repair. If the bundled catalog itself cannot be read or its fallback cannot
-resolve, it retains the pre-catalog human cutout template for that frame rather
-than blocking a scene transition.
+The scene adapters invoke the same policy for generated and persisted humans:
+a generation or resolution error first renders the catalog's known-good human,
+emits a diagnostic, and leaves any saved definition unchanged for repair. Only
+if the bundled catalog itself cannot be read or its fallback cannot resolve do
+they retain the pre-catalog human cutout template for that frame rather than
+blocking a scene transition.
 
 ### Stable handoff for material and wardrobe phases
 

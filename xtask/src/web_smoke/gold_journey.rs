@@ -190,6 +190,8 @@ const REVIEW_COMMAND_KEY: &str = "rff_review_cmd_v1";
 /// `localStorage` key the game publishes the current screen's name to.
 /// Mirrors `crate::review::REVIEW_SCREEN_KEY`.
 const REVIEW_SCREEN_KEY: &str = "rff_review_screen_v1";
+/// Mirrors `crate::review::REVIEW_ENCOUNTER_KEY`.
+const REVIEW_ENCOUNTER_KEY: &str = "rff_review_encounter_v1";
 
 /// Fixed combat seed for a deterministic, winnable first duel. Kept equal to
 /// `src/review/mod.rs`'s `gold_journey_seed::GOLD_JOURNEY_SEED`, which pins
@@ -500,6 +502,41 @@ fn read_screen(checkpoint: &Checkpoint) -> Result<Option<String>, String> {
     checkpoint.eval_string(&format!("localStorage.getItem('{REVIEW_SCREEN_KEY}')"))
 }
 
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, PartialEq, Eq)]
+struct GeneratedOpponentSnapshot {
+    encounter_id: String,
+    seed: u64,
+    resolved_part_ids: Vec<String>,
+}
+
+#[derive(serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+struct EncounterIdentitySnapshot {
+    preview: Option<GeneratedOpponentSnapshot>,
+    combat: Option<GeneratedOpponentSnapshot>,
+}
+
+fn read_encounter_identity(checkpoint: &Checkpoint) -> Result<EncounterIdentitySnapshot, String> {
+    let json = checkpoint
+        .eval_string(&format!("localStorage.getItem('{REVIEW_ENCOUNTER_KEY}')"))?
+        .ok_or_else(|| "review encounter telemetry was not published".to_owned())?;
+    serde_json::from_str(&json)
+        .map_err(|error| format!("review encounter telemetry was invalid: {error}"))
+}
+
+fn identity_consistency_error(preview_json: &str, combat_json: &str) -> Option<String> {
+    let preview: GeneratedOpponentSnapshot = match serde_json::from_str(preview_json) {
+        Ok(preview) => preview,
+        Err(error) => return Some(format!("invalid preview identity telemetry: {error}")),
+    };
+    let combat: GeneratedOpponentSnapshot = match serde_json::from_str(combat_json) {
+        Ok(combat) => combat,
+        Err(error) => return Some(format!("invalid combat identity telemetry: {error}")),
+    };
+    (preview != combat).then(|| {
+        format!("preview/combat identity mismatch: preview={preview:?}, combat={combat:?}")
+    })
+}
+
 struct Readiness {
     reached_screen: bool,
     stabilized: bool,
@@ -588,6 +625,19 @@ fn run_viewport_journey(
         strict_visual,
         missing_baseline,
     )?;
+    let preview_identity = read_encounter_identity(&checkpoint)
+        .and_then(|snapshot| {
+            snapshot.preview.ok_or_else(|| {
+                "creation checkpoint exposed no prepared opponent identity".to_owned()
+            })
+        })
+        .map_err(|error| {
+            SmokeError::scenario(
+                format!("web-smoke gold-journey[{}][creation]", viewport.name),
+                error,
+                artifacts::scenario_dir(SCENARIO),
+            )
+        })?;
 
     // Press the real "Începe lupta" button: its production handler stores
     // the PlayerCharacter + starter loadout, requests the autosave, then
@@ -612,6 +662,46 @@ fn run_viewport_journey(
         strict_visual,
         missing_baseline,
     )?;
+    let combat_identity = read_encounter_identity(&checkpoint)
+        .and_then(|snapshot| {
+            snapshot
+                .combat
+                .ok_or_else(|| "fight checkpoint exposed no generated combat identity".to_owned())
+        })
+        .map_err(|error| {
+            SmokeError::scenario(
+                format!("web-smoke gold-journey[{}][fight]", viewport.name),
+                error,
+                artifacts::scenario_dir(SCENARIO),
+            )
+        })?;
+    let preview_json = serde_json::to_string(&preview_identity).map_err(|error| {
+        SmokeError::scenario(
+            "gold-journey identity",
+            error.to_string(),
+            artifacts::scenario_dir(SCENARIO),
+        )
+    })?;
+    let combat_json = serde_json::to_string(&combat_identity).map_err(|error| {
+        SmokeError::scenario(
+            "gold-journey identity",
+            error.to_string(),
+            artifacts::scenario_dir(SCENARIO),
+        )
+    })?;
+    if let Some(problem) = identity_consistency_error(&preview_json, &combat_json) {
+        return Err(SmokeError::scenario(
+            format!("web-smoke gold-journey[{}][identity]", viewport.name),
+            problem,
+            artifacts::scenario_dir(SCENARIO),
+        ));
+    }
+    println!(
+        "gold-journey[{}]: preview identity matches combat identity ({} stable IDs, seed {})",
+        viewport.name,
+        combat_identity.resolved_part_ids.len(),
+        combat_identity.seed
+    );
 
     step(viewport, || {
         send_command(
@@ -1276,6 +1366,21 @@ mod tests {
         assert_eq!(
             names,
             vec!["menu", "creation", "fight", "fight-result", "shop"]
+        );
+    }
+
+    #[test]
+    fn identity_consistency_rejects_a_preview_to_combat_mismatch() {
+        let preview =
+            r#"{"encounter_id":"ladder.hot_de_codru.v1","seed":7,"resolved_part_ids":["hair.a"]}"#;
+        let combat =
+            r#"{"encounter_id":"ladder.hot_de_codru.v1","seed":7,"resolved_part_ids":["hair.b"]}"#;
+
+        assert!(identity_consistency_error(preview, preview).is_none());
+        assert!(
+            identity_consistency_error(preview, combat)
+                .expect("different resolved IDs are an acceptance failure")
+                .contains("preview/combat identity mismatch")
         );
     }
 
