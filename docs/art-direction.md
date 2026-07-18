@@ -87,6 +87,33 @@ not an arbitrary full-frame overlay.
    PNG only when that point names the rendered rig part. One selected `body`
    supplies both arm chains and one selected `legs` supplies both leg chains.
 
+The tracer-bullet adapter consumes only `attachment.point`; `attachment.pivot`
+and `attachment.draw_layer` are required, reserved metadata for later renderers.
+They do not currently move or reorder a sprite. `rig_template_for` keeps the
+legacy human template's transforms, pivots, sizes, rotations, and z offsets,
+then replaces only the matching part's asset path and records its stable
+`source_id`.
+
+The accepted point-to-rig mapping is closed in `src/cutout.rs`'s
+`attachment_kind` function:
+
+| Catalog `attachment.point` | `CutoutPartKind` | Selected catalog `region` |
+| --- | --- | --- |
+| `hair` | `Hair` | `hair` |
+| `head` | `Head` | `face` |
+| `torso` | `Torso` | `torso` |
+| `upper_arm_back` / `upper_arm_front` | `UpperArmBack` / `UpperArmFront` | `body` |
+| `forearm_back` / `forearm_front` | `ForearmBack` / `ForearmFront` | `body` |
+| `hand_back` / `hand_front` | `HandBack` / `HandFront` | `body` |
+| `thigh_back` / `thigh_front` | `ThighBack` / `ThighFront` | `legs` |
+| `shin_back` / `shin_front` | `ShinBack` / `ShinFront` | `legs` |
+| `foot_back` / `foot_front` | `FootBack` / `FootFront` | `feet` |
+
+Any other string is parsed but does not replace rendered art. The current
+adapter likewise does not map selected `facial_hair`, `waist`, or `accessory`
+records to a `CutoutPartKind`; those slots need explicit renderer support in a
+later wardrobe phase.
+
 Stable IDs are saved in `CharacterDefinition`; never rename or reuse one to
 mean different content. Add a new versioned ID instead, then migrate saved
 definitions deliberately if that is required.
@@ -115,6 +142,22 @@ dimensions, alpha integrity, and attachment metadata. The catalog JSON is
 runtime metadata rather than a media record, so the focused catalog and
 generation tests validate its typed schema, required regions, cultural
 compatibility, relationships, and deterministic selection.
+
+Current automation has two deliberate gaps: neither `assets check` nor
+`CharacterCatalog::validate` cross-checks a catalog `asset_path` against a
+registered `status = "runtime"` asset record, and neither checks
+`attachment.point` against the rendered rig mapping above. Until those checks
+are automated, verify both manually for every new record:
+
+1. Confirm the exact file exists under `assets/`; for example,
+   `test -f assets/fighters/human/runtime/torso.png`.
+2. Open the owning runtime `manifest.toml` and confirm its record names that
+   exact file with `status = "runtime"`.
+3. Match `attachment.point` exactly to the table above, then inspect
+   `selected_record_for_kind` in `src/cutout.rs` to confirm the record's
+   semantic `region` supplies that `CutoutPartKind`. A valid but mismatched or
+   unknown point otherwise retains the legacy part art without a validation
+   error.
 
 ### Review a resolved character
 
@@ -166,8 +209,13 @@ The existing cutout semantic kinds, rest-pose hierarchy, `CutoutPartMarker`
 contracts. Material work should add rendering data without changing those
 selected IDs or silhouettes, and wardrobe work should add compatible catalog
 records and profiles without creating a second character format. New skeleton
-families, material channels, and richer wardrobe metadata require a deliberate
-catalog/schema version rather than unrecognized JSON fields.
+families, material channels, and richer wardrobe metadata require more than a
+catalog version bump: extend the closed Rust enums and mappings (`SkeletonFamily`,
+`BodyRegion`, `CutoutPartKind`, `attachment_kind`, and
+`selected_record_for_kind`) and add the matching rig templates, attachments,
+and pose support. Extend and version the typed catalog schema for new metadata;
+when persisted definition meaning or shape changes, increment the
+`CharacterDefinition` schema version and provide an explicit save migration.
 
 ## First playable asset table
 

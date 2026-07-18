@@ -279,9 +279,12 @@ continues to be registered by the runtime asset sidecar that owns that media.
 An author adds the media record (including provenance, exact credit/license,
 dimensions, sampler, and rig metadata), then adds a catalog part with a stable
 ID, semantic region, asset path, compatible skeletons and cultural tags, and
-an attachment point/pivot/draw layer. `cargo xtask assets check` validates the
-media contract; the character catalog and generation tests validate the JSON
-contract and compatibility rules:
+an attachment point/pivot/draw layer. In this tracer bullet only
+`attachment.point` is wired into rendering; `pivot` and `draw_layer` are
+reserved metadata, while the existing cutout template continues to own
+transforms and z ordering. `cargo xtask assets check` validates the media
+contract; the character catalog and generation tests validate the JSON contract
+and compatibility rules:
 
 ```bash
 cargo xtask assets check
@@ -295,6 +298,20 @@ least one open-ended authored tag with the definition's cultural profile.
 relationships. The mandatory human regions are body, face, hair, torso, legs,
 and feet. Keep IDs stable because resolved selections are persisted; create a
 new versioned ID rather than renaming or repurposing old content.
+
+These commands do **not** cross-check catalog `asset_path` values against
+registered runtime records, nor `attachment.point` strings against rendered rig
+parts. For each new catalog record, manually confirm that `assets/<asset_path>`
+exists, its owning sidecar records the exact file with `status = "runtime"`, and
+its point is one of the exact mappings in `src/cutout.rs::attachment_kind`:
+`hair`, `head`, `torso`, or the back/front variants of `upper_arm`, `forearm`,
+`hand`, `thigh`, `shin`, and `foot`. Then check
+`selected_record_for_kind` in the same file to ensure the record's semantic
+region supplies that `CutoutPartKind`: hair supplies `Hair`, face supplies
+`Head`, torso supplies `Torso`, body supplies both arm chains, legs supplies
+thighs and shins, and feet supplies both feet. The current adapter does not map
+facial-hair, waist, or accessory selections. An unknown or semantically
+mismatched point can retain legacy art without failing current validation.
 
 `assets review` is the visual inspection step for catalog-backed art. Open the
 printed gallery index and check the right-facing and mirrored rig-part pages,
@@ -324,8 +341,12 @@ For the 2.5D material and wardrobe phases, the stable interface is the
 versioned `CharacterDefinition`/`PartId` selection plus the existing cutout
 semantic attachment and `source_id` contracts. Consumers must not derive
 identity from file paths. Add material channels, new skeletons, or richer
-wardrobe metadata through an intentional catalog/schema version; the current
-catalog document, part-record, and attachment parsers reject unknown fields.
+wardrobe metadata by extending the closed Rust enums, attachment/selection
+mappings, rig templates, and pose support as well as intentionally versioning
+the typed catalog schema; the current catalog document, part-record, and
+attachment parsers reject unknown fields. If persisted definition shape or
+meaning changes, increment the `CharacterDefinition` version and add an
+explicit save migration instead of relying on a catalog-only version bump.
 
 ### `assets review --changed` -- the focused changed-asset gallery (#211, a child of #141)
 
