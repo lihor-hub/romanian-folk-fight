@@ -112,6 +112,7 @@ mod fight_palette_desktop;
 mod fight_palette_phone;
 mod gold_journey;
 mod high_contrast;
+mod hybrid_2_5d_character;
 mod keyboard_accessibility;
 mod reduced_motion_fight;
 mod save_reload;
@@ -143,6 +144,7 @@ pub const SCENARIOS: &[&str] = &[
     "corrupt-save-recovery",
     "save-reload",
     "abandon-forfeit",
+    "hybrid-2-5d-character",
 ];
 
 /// Dispatches `--scenario <name>` to the matching scenario module. Known
@@ -180,6 +182,7 @@ pub fn run_scenario(
         "corrupt-save-recovery" => corrupt_save_recovery::run(update_baselines),
         "save-reload" => save_reload::run(update_baselines),
         "abandon-forfeit" => abandon_forfeit::run(update_baselines),
+        "hybrid-2-5d-character" => hybrid_2_5d_character::run(update_baselines, strict_visual),
         other => Err(SmokeError::usage(format!(
             "unknown --scenario `{other}` (known scenarios: {})",
             SCENARIOS.join(", ")

@@ -63,11 +63,11 @@ const STRICT_VISUAL_ENV_VAR: &str = "XTASK_WEB_SMOKE_STRICT_VISUAL";
 pub const SUBCOMMANDS: &[(&str, &str)] = &[
     (
         "--scenario",
-        "Run a named scenario (cold-menu, gold-journey, accessibility-settings-reload, reduced-motion-fight, fight-palette-desktop, fight-palette-phone, high-contrast). Usage: cargo xtask web-smoke --scenario cold-menu [--update-baselines] [--strict-visual]",
+        "Run a named scenario (cold-menu, gold-journey, hybrid-2-5d-character, accessibility-settings-reload, reduced-motion-fight, fight-palette-desktop, fight-palette-phone, high-contrast). Usage: cargo xtask web-smoke --scenario cold-menu [--update-baselines] [--strict-visual]",
     ),
     (
         "--all",
-        "Run every registered scenario (cold-menu, gold-journey's full DPR matrix, accessibility-settings-reload, reduced-motion-fight, fight-palette-desktop, fight-palette-phone, high-contrast). Usage: cargo xtask web-smoke --all [--update-baselines] [--strict-visual]",
+        "Run every registered scenario (including gold-journey and hybrid-2-5d-character). Usage: cargo xtask web-smoke --all [--update-baselines] [--strict-visual]",
     ),
 ];
 
