@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::character::{
     AttributeKind, Attributes, BodyRegion, CharacterDefinition, CulturalProfile, GenerationError,
-    GenerationProfile, GenerationSlot, HairStyle, PartId, PlayerAppearance, SkeletonFamily,
-    WeightedPart, bundled_human_catalog, generate_character,
+    GenerationProfile, GenerationSlot, PartId, PlayerAppearance, SkeletonFamily, WeightedPart,
+    WeightedWardrobe, bundled_human_catalog, generate_character,
 };
 use crate::cutout::CutoutTemplate;
 use crate::items::ItemId;
@@ -500,35 +500,60 @@ fn hot_de_codru(campaign_seed: CampaignSeed) -> Result<SeededOpponent, Generatio
 
 fn hot_de_codru_profile() -> GenerationProfile {
     let appearance = PlayerAppearance::default();
-    let legacy = CharacterDefinition::legacy_human(appearance);
-    let hair_candidates = HairStyle::ALL
-        .into_iter()
-        .map(|hair| {
-            let definition =
-                CharacterDefinition::legacy_human(PlayerAppearance { hair, ..appearance });
-            WeightedPart::new(definition.parts.hair, 1)
-        })
-        .collect();
     let slots = vec![
-        locked_slot(BodyRegion::Body, legacy.parts.body),
-        locked_slot(BodyRegion::Face, legacy.parts.face),
-        GenerationSlot::new(BodyRegion::Hair, hair_candidates),
-        locked_slot(BodyRegion::Torso, legacy.parts.torso),
-        locked_slot(BodyRegion::Legs, legacy.parts.legs),
-        locked_slot(BodyRegion::Feet, legacy.parts.feet),
+        weighted_slot(
+            BodyRegion::Body,
+            &["human.body.zvelt.v1", "human.body.vanjos.v1"],
+        ),
+        weighted_slot(
+            BodyRegion::Face,
+            &["human.face.haiduc.v1", "human.face.cioban.v1"],
+        ),
+        weighted_slot(
+            BodyRegion::Hair,
+            &[
+                "human.hair.plete.v1",
+                "human.hair.prins.v1",
+                "human.hair.scurt.v1",
+            ],
+        ),
     ];
-    GenerationProfile::new(
+    let mut profile = GenerationProfile::new(
         SkeletonFamily::Human,
         CulturalProfile {
             tags: vec!["romanian".to_owned()],
         },
         appearance,
         slots,
+    );
+    profile.wardrobes = vec![
+        WeightedWardrobe::new(
+            authored_part("human.torso.ie_altita.v1"),
+            authored_part("human.legs.itari.v1"),
+            authored_part("human.feet.opinci.v1"),
+            1,
+        ),
+        WeightedWardrobe::new(
+            authored_part("human.torso.camasa_ciobaneasca.v1"),
+            authored_part("human.legs.cioareci.v1"),
+            authored_part("human.feet.opinci.v1"),
+            1,
+        ),
+    ];
+    profile
+}
+
+fn weighted_slot(region: BodyRegion, ids: &[&'static str]) -> GenerationSlot {
+    GenerationSlot::new(
+        region,
+        ids.iter()
+            .map(|id| WeightedPart::new(authored_part(id), 1))
+            .collect(),
     )
 }
 
-fn locked_slot(region: BodyRegion, id: PartId) -> GenerationSlot {
-    GenerationSlot::new(region, vec![WeightedPart::new(id, 1)])
+fn authored_part(value: &'static str) -> PartId {
+    PartId::new(value).unwrap_or_else(|_| unreachable!("authored part IDs are non-blank"))
 }
 
 /// Stable FNV-1a derivation over the little-endian campaign seed followed by
@@ -598,6 +623,76 @@ fn prepare_seeded_opponent(
 mod tests {
     use super::*;
     use crate::items::Slot;
+
+    #[test]
+    fn hot_de_codru_profile_uses_the_complete_authored_identity_pools() {
+        let profile = hot_de_codru_profile();
+        let candidate_ids = |region| {
+            profile
+                .slots
+                .iter()
+                .find(|slot| slot.region == region)
+                .expect("required slot exists")
+                .candidates
+                .iter()
+                .map(|candidate| candidate.id.as_str())
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+
+        assert_eq!(
+            candidate_ids(BodyRegion::Body),
+            ["human.body.vanjos.v1", "human.body.zvelt.v1"]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(
+            candidate_ids(BodyRegion::Face),
+            ["human.face.cioban.v1", "human.face.haiduc.v1"]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(
+            candidate_ids(BodyRegion::Hair),
+            [
+                "human.hair.plete.v1",
+                "human.hair.prins.v1",
+                "human.hair.scurt.v1",
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert_eq!(profile.wardrobes.len(), 2);
+    }
+
+    #[test]
+    fn campaign_golden_seeds_pin_both_correlated_wardrobes() {
+        let haiduc = LadderProgress(0)
+            .seeded_opponent(CampaignSeed(0))
+            .unwrap()
+            .unwrap();
+        let cioban = LadderProgress(0)
+            .seeded_opponent(CampaignSeed(2))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            (
+                haiduc.definition.parts.torso.as_str(),
+                haiduc.definition.parts.legs.as_str()
+            ),
+            ("human.torso.ie_altita.v1", "human.legs.itari.v1")
+        );
+        assert_eq!(
+            (
+                cioban.definition.parts.torso.as_str(),
+                cioban.definition.parts.legs.as_str()
+            ),
+            (
+                "human.torso.camasa_ciobaneasca.v1",
+                "human.legs.cioareci.v1"
+            )
+        );
+    }
 
     #[test]
     fn representative_profile_does_not_claim_an_unrendered_waist_part() {

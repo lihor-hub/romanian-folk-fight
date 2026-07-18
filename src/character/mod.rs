@@ -17,8 +17,8 @@ pub use definition::{
     PartSelections, SkeletonFamily,
 };
 pub use generation::{
-    GenerationError, GenerationProfile, GenerationSlot, WeightedPart, fallback_human,
-    generate_character,
+    GenerationError, GenerationProfile, GenerationSlot, WeightedPart, WeightedWardrobe,
+    fallback_human, generate_character,
 };
 
 use bevy::prelude::*;
