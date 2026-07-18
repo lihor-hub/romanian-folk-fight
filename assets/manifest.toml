@@ -1,7 +1,9 @@
 # Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs for the full
 # field reference. This root sidecar only ever documents files that sit
 # directly in `assets/` itself (currently just CREDITS.md); every
-# subdirectory owns its own `manifest.toml` beside the files it describes.
+# subdirectory owns its own `manifest.toml` beside the files it describes,
+# including metadata-only catalog directories that explicitly ignore their
+# runtime-readable JSON while their referenced media remains separately owned.
 version = 1
 
 [[ignore]]

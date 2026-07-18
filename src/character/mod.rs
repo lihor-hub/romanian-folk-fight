@@ -1,9 +1,13 @@
 //! Character model: folk-flavored attributes, resource pools, and fighter
 //! markers shared by combat, character creation, shop, and progression.
 
+pub mod catalog;
 pub mod definition;
 pub mod stats;
 
+pub use catalog::{
+    AttachmentMetadata, BodyRegion, CatalogError, CharacterCatalog, PartRecord, ResolvedCharacter,
+};
 pub use definition::{
     CHARACTER_DEFINITION_VERSION, CharacterDefinition, CulturalProfile, PartId, PartIdError,
     PartSelections, SkeletonFamily,

@@ -1,0 +1,7 @@
+# The character catalog is runtime-readable metadata, not a media asset. Its
+# referenced PNGs remain owned by their existing human runtime sidecar.
+version = 1
+
+[[ignore]]
+path = "human-foundation.json"
+reason = "Runtime-readable character catalog metadata; the sidecar schema only records media/document assets, while this JSON's referenced human runtime PNGs retain their existing records."

@@ -147,7 +147,9 @@ impl CharacterDefinition {
 }
 
 fn legacy_id(value: &'static str) -> PartId {
-    PartId::new(value).expect("legacy part IDs are non-blank literals")
+    // Every caller supplies a private, vetted non-blank literal. Constructing
+    // the owned key directly keeps legacy migration free of a panic path.
+    PartId(value.to_owned())
 }
 
 fn legacy_hair_id(hair: HairStyle) -> PartId {
@@ -190,6 +192,23 @@ mod tests {
         });
 
         assert_ne!(braided.parts.hair, long.parts.hair);
+    }
+
+    #[test]
+    fn every_legacy_hair_style_maps_to_a_nonblank_stable_id() {
+        for hair in [
+            crate::character::HairStyle::Braided,
+            crate::character::HairStyle::Long,
+            crate::character::HairStyle::Short,
+            crate::character::HairStyle::Tied,
+        ] {
+            let definition = CharacterDefinition::legacy_human(PlayerAppearance {
+                hair,
+                ..PlayerAppearance::default()
+            });
+
+            assert!(!definition.parts.hair.as_str().trim().is_empty());
+        }
     }
 
     #[test]

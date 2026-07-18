@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "parts": [
+    {
+      "id": "human.body.foundation.v1",
+      "region": "body",
+      "asset_path": "fighters/human/runtime/torso.png",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "foundation"],
+      "attachment": { "point": "torso", "pivot": [0.0, 6.0], "draw_layer": 0 },
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.face.default.v1",
+      "region": "face",
+      "asset_path": "fighters/human/runtime/head.png",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "foundation"],
+      "attachment": { "point": "head", "pivot": [4.0, 60.0], "draw_layer": 1 },
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.hair.braided.v1",
+      "region": "hair",
+      "asset_path": "fighters/human/runtime/hair.png",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "braided"],
+      "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.hair.long.v1",
+      "region": "hair",
+      "asset_path": "fighters/human/runtime/hair.png",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "long_hair"],
+      "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.hair.short.v1",
+      "region": "hair",
+      "asset_path": "fighters/human/runtime/hair.png",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "short_hair"],
+      "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.hair.tied.v1",
+      "region": "hair",
+      "asset_path": "fighters/human/runtime/hair.png",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "tied_hair"],
+      "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.torso.linen.v1",
+      "region": "torso",
+      "asset_path": "fighters/human/runtime/torso.png",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "linen"],
+      "attachment": { "point": "torso", "pivot": [0.0, 6.0], "draw_layer": 3 },
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.legs.itari.v1",
+      "region": "legs",
+      "asset_path": "fighters/human/runtime/thigh_front.png",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "itari"],
+      "attachment": { "point": "thigh_front", "pivot": [13.0, -42.0], "draw_layer": 0 },
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.feet.opinci.v1",
+      "region": "feet",
+      "asset_path": "fighters/human/runtime/foot_front.png",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "opinci"],
+      "attachment": { "point": "foot_front", "pivot": [8.0, -102.0], "draw_layer": 0 },
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.waist.chimir.v1",
+      "region": "waist",
+      "asset_path": "fighters/human/runtime/torso.png",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "chimir"],
+      "attachment": { "point": "torso", "pivot": [0.0, 6.0], "draw_layer": 4 },
+      "exclusions": [],
+      "companions": []
+    }
+  ],
+  "known_good_human": {
+    "body": "human.body.foundation.v1",
+    "face": "human.face.default.v1",
+    "hair": "human.hair.braided.v1",
+    "facial_hair": null,
+    "torso": "human.torso.linen.v1",
+    "legs": "human.legs.itari.v1",
+    "feet": "human.feet.opinci.v1",
+    "waist": "human.waist.chimir.v1",
+    "accessories": []
+  }
+}
