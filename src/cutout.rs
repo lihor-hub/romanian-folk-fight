@@ -6,10 +6,15 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
+use bevy::sprite_render::Material2dPlugin;
 
 use crate::character::{
     AccentColor, BodyBuild, CatalogError, CharacterCatalog, CharacterDefinition, HairStyle, PartId,
     PartRecord, PlayerAppearance, ResolvedCharacter, SkinTone, bundled_human_catalog,
+    material::{
+        HybridCharacterMaterial, PendingHybridCharacterMaterial, ResolvedPartMaterial,
+        pending_hybrid_material_for, promote_ready_hybrid_materials, resolve_material_for_part,
+    },
 };
 use crate::items::{Equipment, GearAttachment, GearMotion, ItemId, ItemVisual, Slot, item_visual};
 
@@ -19,7 +24,15 @@ use crate::items::{Equipment, GearAttachment, GearMotion, ItemId, ItemVisual, Sl
 pub struct CutoutRigPlugin;
 
 impl Plugin for CutoutRigPlugin {
-    fn build(&self, _app: &mut App) {}
+    fn build(&self, app: &mut App) {
+        // Material asset registration needs `AssetPlugin`, which exists in
+        // every real game app but is deliberately absent from lightweight
+        // headless unit-test apps.
+        if app.world().contains_resource::<AssetServer>() {
+            app.add_plugins(Material2dPlugin::<HybridCharacterMaterial>::default());
+        }
+        app.add_systems(Update, promote_ready_hybrid_materials);
+    }
 }
 
 /// Which authored rig template a root entity carries.
@@ -86,6 +99,10 @@ pub struct CutoutPart {
     pub z_offset: f32,
     pub color: Color,
     pub asset_path: Option<String>,
+    /// Renderer-ready settings resolved from the same catalog record as this
+    /// part's albedo. Stable identity and authored path ownership remain on
+    /// the catalog record and `source_id`.
+    pub material: Option<ResolvedPartMaterial>,
 }
 
 impl CutoutPart {
@@ -292,6 +309,7 @@ pub fn rig_template_for(character: &ResolvedCharacter) -> CutoutRigTemplate {
         part.source_id = Some(record.id.clone());
         if attachment_kind(&record.attachment.point) == Some(part.kind) {
             part.asset_path = Some(record.asset_path.clone());
+            part.material = Some(resolve_material_for_part(record));
         }
     }
     template
@@ -569,41 +587,49 @@ fn spawn_part_and_children(
     };
     let transform = part_transform(part, flip_x);
     let tint = accent_hue.filter(|_| is_accent_part(kind));
-    parent
-        .spawn((
-            CutoutPartMarker {
-                kind,
-                source_id: part.source_id.clone(),
-            },
-            CutoutPartRestPose {
-                transform,
-                size: part.size,
-            },
-            part_sprite(part, asset_server, flip_x, tint),
-            transform,
-        ))
-        .with_children(|part_children| {
-            if let Some(equipment) = equipment {
-                spawn_gear_children_for_part(
-                    part_children,
-                    kind,
-                    equipment,
-                    asset_server,
-                    &mut |_| (),
-                );
-            }
-            for &child_kind in child_kinds(kind) {
-                spawn_part_and_children(
-                    part_children,
-                    parts_by_kind,
-                    child_kind,
-                    flip_x,
-                    asset_server,
-                    equipment,
-                    accent_hue,
-                );
-            }
+    let sprite = part_sprite(part, asset_server, flip_x, tint);
+    let pending_material: Option<PendingHybridCharacterMaterial> =
+        part.material.as_ref().and_then(|material| {
+            pending_hybrid_material_for(
+                material,
+                sprite.image.clone(),
+                asset_server?,
+                part.size,
+                sprite.color,
+                flip_x,
+            )
         });
+    let mut spawned_part = parent.spawn((
+        CutoutPartMarker {
+            kind,
+            source_id: part.source_id.clone(),
+        },
+        CutoutPartRestPose {
+            transform,
+            size: part.size,
+        },
+        sprite,
+        transform,
+    ));
+    if let Some(pending_material) = pending_material {
+        spawned_part.insert(pending_material);
+    }
+    spawned_part.with_children(|part_children| {
+        if let Some(equipment) = equipment {
+            spawn_gear_children_for_part(part_children, kind, equipment, asset_server, &mut |_| ());
+        }
+        for &child_kind in child_kinds(kind) {
+            spawn_part_and_children(
+                part_children,
+                parts_by_kind,
+                child_kind,
+                flip_x,
+                asset_server,
+                equipment,
+                accent_hue,
+            );
+        }
+    });
 }
 
 /// Which cutout parts count as "clothing/accent" for the #118 opponent tint:
@@ -1139,6 +1165,7 @@ fn part(
         z_offset,
         color: human_color(kind),
         asset_path: None,
+        material: None,
     }
 }
 
@@ -1411,6 +1438,31 @@ mod tests {
             .expect("the test definition resolves against the bundled human catalog")
     }
 
+    fn resolved_human_with_torso_material() -> ResolvedCharacter {
+        let mut document: serde_json::Value = serde_json::from_str(include_str!(
+            "../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("bundled fixture is valid JSON");
+        let torso = document["parts"]
+            .as_array_mut()
+            .expect("fixture has parts")
+            .iter_mut()
+            .find(|part| part["id"] == "human.torso.linen.v1")
+            .expect("fixture has the selected torso");
+        torso["material"] = serde_json::json!({
+            "mask_path": "fighters/human/runtime/torso_mask.png",
+            "normal_path": "fighters/human/runtime/torso_normal.png",
+            "shadow_path": "fighters/human/runtime/torso_shadow.png",
+            "palette": ["cloth", "embroidery"],
+            "depth_offset": 0.25,
+            "highlight": 0.5
+        });
+        CharacterCatalog::from_json(&document.to_string())
+            .expect("material fixture parses")
+            .resolve_known_good_human()
+            .expect("material fixture resolves")
+    }
+
     /// Recursively collects every `CutoutPartMarker` entity under `root`, at
     /// any depth. Forearms/hands/shins/feet are nested several joints deep
     /// rather than being direct children of the root (#117), so callers
@@ -1493,6 +1545,93 @@ mod tests {
                 .unwrap_or_else(|| panic!("adapted template has {kind:?}"));
             assert_eq!(part.source_id.as_ref(), Some(expected_id), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn rig_adapter_transfers_material_without_changing_part_geometry_or_identity() {
+        let resolved = resolved_human_with_torso_material();
+        let baseline = human_template_for(resolved.definition().appearance);
+        let adapted = rig_template_for(&resolved);
+
+        assert_eq!(adapted.parts.len(), baseline.parts.len());
+        for adapted_part in &adapted.parts {
+            let baseline_part = baseline
+                .parts
+                .iter()
+                .find(|part| part.kind == adapted_part.kind)
+                .expect("baseline has the same part kind");
+            assert_eq!(adapted_part.offset, baseline_part.offset);
+            assert_eq!(adapted_part.pivot, baseline_part.pivot);
+            assert_eq!(adapted_part.size, baseline_part.size);
+            assert_eq!(adapted_part.rotation, baseline_part.rotation);
+            assert_eq!(adapted_part.z_offset, baseline_part.z_offset);
+        }
+
+        let torso = adapted
+            .parts
+            .iter()
+            .find(|part| part.kind == CutoutPartKind::Torso)
+            .expect("adapted rig has a torso");
+        assert_eq!(
+            torso.source_id.as_ref(),
+            Some(&resolved.definition().parts.torso)
+        );
+        let material = torso
+            .material
+            .as_ref()
+            .expect("matching selected albedo transfers its material");
+        assert_eq!(material.part_id, resolved.definition().parts.torso);
+        assert_eq!(material.palette.len(), 2);
+        assert_eq!(material.depth_offset, 0.25);
+        assert!(material.shadow.is_some());
+    }
+
+    #[test]
+    fn complete_material_starts_as_the_same_sprite_until_async_images_load() {
+        let resolved = resolved_human_with_torso_material();
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
+        app.init_asset::<Image>();
+        let asset_server = app.world().resource::<AssetServer>().clone();
+        let root = app.world_mut().spawn_empty().id();
+        app.world_mut().commands().queue(move |world: &mut World| {
+            let mut commands = world.commands();
+            spawn_character_rig(
+                &mut commands,
+                root,
+                &resolved,
+                Some(&asset_server),
+                false,
+                None,
+                None,
+            );
+        });
+        app.world_mut().flush();
+
+        let torso = collect_rig_parts(app.world(), root)
+            .into_iter()
+            .find(|(kind, _)| *kind == CutoutPartKind::Torso)
+            .map(|(_, entity)| entity)
+            .expect("spawned rig has a torso");
+        let rest = app
+            .world()
+            .get::<CutoutPartRestPose>(torso)
+            .expect("torso keeps its rest pose");
+        let sprite = app
+            .world()
+            .get::<Sprite>(torso)
+            .expect("pending material keeps the albedo sprite");
+        assert_eq!(sprite.custom_size, Some(rest.size));
+        assert!(
+            app.world()
+                .get::<PendingHybridCharacterMaterial>(torso)
+                .is_some()
+        );
+        assert!(
+            app.world()
+                .get::<MeshMaterial2d<HybridCharacterMaterial>>(torso)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1681,6 +1820,26 @@ mod tests {
                 "{kind:?} keeps y/z placement"
             );
             assert!(!normal_flip && *mirrored_flip, "{kind:?} changes facing");
+            let normal_entity = collect_rig_parts(&world, normal)
+                .into_iter()
+                .find(|(candidate, _)| *candidate == kind)
+                .map(|(_, entity)| entity)
+                .expect("normal rig has the snapshotted part");
+            let mirrored_entity = collect_rig_parts(&world, mirrored)
+                .into_iter()
+                .find(|(candidate, _)| *candidate == kind)
+                .map(|(_, entity)| entity)
+                .expect("mirrored rig has the snapshotted part");
+            assert_eq!(
+                world.get::<Sprite>(normal_entity).unwrap().custom_size,
+                Some(normal_rest.size),
+                "{kind:?} normal fallback silhouette stays exact"
+            );
+            assert_eq!(
+                world.get::<Sprite>(mirrored_entity).unwrap().custom_size,
+                Some(mirrored_rest.size),
+                "{kind:?} mirrored fallback silhouette stays exact"
+            );
         }
     }
 

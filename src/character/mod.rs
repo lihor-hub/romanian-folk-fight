@@ -4,6 +4,7 @@
 pub mod catalog;
 pub mod definition;
 pub mod generation;
+pub mod material;
 pub mod stats;
 
 pub use catalog::{
