@@ -13,9 +13,15 @@
 //! `progression::POINTS_PER_LEVEL`), keeping the opponent-to-player total
 //! ratio close to its pre-#128 curve; #149 may retune.
 
+use std::sync::OnceLock;
+
 use bevy::prelude::*;
 
-use crate::character::{AttributeKind, Attributes};
+use crate::character::{
+    AttributeKind, Attributes, BodyRegion, CatalogError, CharacterCatalog, CharacterDefinition,
+    CulturalProfile, GenerationError, GenerationProfile, GenerationSlot, HairStyle, PartId,
+    PlayerAppearance, SkeletonFamily, WeightedPart, generate_character,
+};
 use crate::cutout::CutoutTemplate;
 use crate::items::ItemId;
 
@@ -29,6 +35,37 @@ const POINTS_PER_LEVEL: u32 = 5;
 const BOSS_POINTS_PER_LEVEL: u32 = 6;
 /// Extra attribute-total percent per completed lap of the ladder.
 const LAP_BONUS_PERCENT: u32 = 20;
+
+/// The reproducible campaign seed used by ordinary runs. Review builds may
+/// replace it before entering an encounter without changing production save
+/// or combat-RNG behavior.
+pub const DEFAULT_CAMPAIGN_SEED: u64 = 0;
+
+/// Stable authored identity of the first generated-human tracer bullet.
+/// This deliberately does not reuse the display name: copy changes and the
+/// Romanian lap suffix must not silently reroll the fighter.
+pub const HOT_DE_CODRU_ENCOUNTER_ID: &str = "ladder.hot_de_codru.v1";
+
+/// Seed shared by every encounter in one campaign. The first generated-human
+/// slice derives its own seed from this value plus its authored encounter ID.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CampaignSeed(pub u64);
+
+impl Default for CampaignSeed {
+    fn default() -> Self {
+        Self(DEFAULT_CAMPAIGN_SEED)
+    }
+}
+
+/// Exact generated identity attached to the representative human opponent.
+/// The resolved stable IDs remain authoritative in `definition`; `seed`
+/// records the deterministic provenance used to select the unlocked parts.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+pub struct SeededOpponent {
+    pub encounter_id: &'static str,
+    pub seed: u64,
+    pub definition: CharacterDefinition,
+}
 
 /// One rung of the opponent ladder: pure static data the arena turns into a
 /// fighter entity (attributes, AI profile, equipment) and the announcer and
@@ -410,6 +447,95 @@ impl LadderProgress {
     pub fn is_final_lap_one_fight(&self) -> bool {
         self.0 == LADDER.len() - 1
     }
+
+    /// Generates the one representative human opponent migrated by #319.
+    /// Every other ladder entry, including the Solomonar human template,
+    /// returns `None` and stays on the existing authored-template path.
+    pub fn seeded_opponent(
+        &self,
+        campaign_seed: CampaignSeed,
+    ) -> Option<Result<SeededOpponent, GenerationError>> {
+        self.0
+            .is_multiple_of(LADDER.len())
+            .then(|| hot_de_codru(campaign_seed))
+    }
+}
+
+fn hot_de_codru(campaign_seed: CampaignSeed) -> Result<SeededOpponent, GenerationError> {
+    let seed = derive_encounter_seed(campaign_seed.0, HOT_DE_CODRU_ENCOUNTER_ID);
+    let profile = hot_de_codru_profile();
+    let definition = generate_character(seed, &profile, bundled_human_catalog()?)?;
+
+    Ok(SeededOpponent {
+        encounter_id: HOT_DE_CODRU_ENCOUNTER_ID,
+        seed,
+        definition,
+    })
+}
+
+fn bundled_human_catalog() -> Result<&'static CharacterCatalog, GenerationError> {
+    static CATALOG: OnceLock<Result<CharacterCatalog, CatalogError>> = OnceLock::new();
+    match CATALOG.get_or_init(|| {
+        CharacterCatalog::from_json(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+    }) {
+        Ok(catalog) => Ok(catalog),
+        Err(error) => Err(error.clone().into()),
+    }
+}
+
+fn hot_de_codru_profile() -> GenerationProfile {
+    let appearance = PlayerAppearance::default();
+    let legacy = CharacterDefinition::legacy_human(appearance);
+    let hair_candidates = HairStyle::ALL
+        .into_iter()
+        .map(|hair| {
+            let definition =
+                CharacterDefinition::legacy_human(PlayerAppearance { hair, ..appearance });
+            WeightedPart::new(definition.parts.hair, 1)
+        })
+        .collect();
+    let mut slots = vec![
+        locked_slot(BodyRegion::Body, legacy.parts.body),
+        locked_slot(BodyRegion::Face, legacy.parts.face),
+        GenerationSlot::new(BodyRegion::Hair, hair_candidates),
+        locked_slot(BodyRegion::Torso, legacy.parts.torso),
+        locked_slot(BodyRegion::Legs, legacy.parts.legs),
+        locked_slot(BodyRegion::Feet, legacy.parts.feet),
+    ];
+    if let Some(waist) = legacy.parts.waist {
+        slots.push(locked_slot(BodyRegion::Waist, waist));
+    }
+
+    GenerationProfile::new(
+        SkeletonFamily::Human,
+        CulturalProfile {
+            tags: vec!["romanian".to_owned()],
+        },
+        appearance,
+        slots,
+    )
+}
+
+fn locked_slot(region: BodyRegion, id: PartId) -> GenerationSlot {
+    GenerationSlot::new(region, vec![WeightedPart::new(id, 1)])
+}
+
+/// Stable FNV-1a derivation over the little-endian campaign seed followed by
+/// the authored encounter ID. This intentionally avoids randomized standard
+/// hashers so the same inputs remain portable across native and wasm builds.
+fn derive_encounter_seed(campaign_seed: u64, encounter_id: &str) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    campaign_seed
+        .to_le_bytes()
+        .into_iter()
+        .chain(encounter_id.bytes())
+        .fold(FNV_OFFSET, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
+        })
 }
 
 /// Registers the ladder-position resource; the ladder itself is static data.
@@ -417,7 +543,8 @@ pub struct RosterPlugin;
 
 impl Plugin for RosterPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<LadderProgress>();
+        app.init_resource::<LadderProgress>()
+            .init_resource::<CampaignSeed>();
     }
 }
 

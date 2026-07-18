@@ -23,7 +23,7 @@ use crate::cutout::{
     spawn_cutout_rig_with_accent, spawn_gear_attachment_layers,
 };
 use crate::items::{Equipment, GearMotion};
-use crate::roster::{Boss, LadderProgress, Opponent};
+use crate::roster::{Boss, CampaignSeed, LadderProgress, Opponent};
 use crate::theme::GROUND_COLOR;
 use animation::{AnimationSet, FighterClip, FighterSpriteSheets};
 use fx::{ArenaBackgrounds, background_tier, spawn_background};
@@ -87,7 +87,7 @@ impl Plugin for ArenaPlugin {
 fn spawn_arena(
     commands: Commands,
     player: Option<Res<PlayerCharacter>>,
-    ladder: Option<Res<LadderProgress>>,
+    encounter: (Option<Res<LadderProgress>>, Option<Res<CampaignSeed>>),
     sheets: Res<FighterSpriteSheets>,
     backgrounds: Res<ArenaBackgrounds>,
     asset_server: Option<Res<AssetServer>>,
@@ -105,7 +105,8 @@ fn spawn_arena(
     spawn_scene(
         commands,
         &player,
-        ladder,
+        encounter.0,
+        encounter.1.map(|seed| *seed).unwrap_or_default(),
         &backgrounds,
         asset_server.as_deref(),
     );
@@ -116,7 +117,7 @@ fn spawn_arena(
 fn spawn_arena_when_ready(
     commands: Commands,
     player: Option<Res<PlayerCharacter>>,
-    ladder: Option<Res<LadderProgress>>,
+    encounter: (Option<Res<LadderProgress>>, Option<Res<CampaignSeed>>),
     sheets: Res<FighterSpriteSheets>,
     backgrounds: Res<ArenaBackgrounds>,
     asset_server: Option<Res<AssetServer>>,
@@ -131,7 +132,8 @@ fn spawn_arena_when_ready(
     spawn_scene(
         commands,
         &player,
-        ladder,
+        encounter.0,
+        encounter.1.map(|seed| *seed).unwrap_or_default(),
         &backgrounds,
         asset_server.as_deref(),
     );
@@ -144,11 +146,24 @@ fn spawn_scene(
     mut commands: Commands,
     player: &PlayerCharacter,
     ladder: Option<Res<LadderProgress>>,
+    campaign_seed: CampaignSeed,
     backgrounds: &ArenaBackgrounds,
     asset_server: Option<&AssetServer>,
 ) {
     let ladder = ladder.map(|ladder| *ladder).unwrap_or_default();
     let opponent = ladder.opponent();
+    let seeded_opponent = match ladder.seeded_opponent(campaign_seed) {
+        Some(Ok(generated)) => Some(generated),
+        Some(Err(error)) => {
+            warn!(
+                "could not generate seeded opponent {} ({error}); preserving the authored \
+                 template path",
+                opponent.name
+            );
+            None
+        }
+        None => None,
+    };
     spawn_background(&mut commands, backgrounds, background_tier(ladder));
     spawn_scenery(&mut commands);
     let player_fighter = spawn_arena_fighter(
@@ -174,7 +189,10 @@ fn spawn_scene(
             },
         ),
         ENEMY_ANCHOR,
-        ArenaRig::Template(opponent_template(opponent)),
+        seeded_opponent
+            .as_ref()
+            .map(|generated| ArenaRig::Character(&generated.definition))
+            .unwrap_or_else(|| ArenaRig::Template(opponent_template(opponent))),
         true,
         asset_server,
         Some(opponent.accent_hue),
@@ -184,6 +202,9 @@ fn spawn_scene(
         equipment.equip(id);
     }
     commands.entity(enemy).insert(equipment);
+    if let Some(generated) = seeded_opponent {
+        commands.entity(enemy).insert(generated);
+    }
     if opponent.is_boss {
         commands.entity(enemy).insert(Boss {
             intro_line: opponent.intro_line,
@@ -493,7 +514,7 @@ mod tests {
         gear_sprite, human_template, human_template_for,
     };
     use crate::items::{ItemId, Slot, item_visual};
-    use crate::roster::LADDER;
+    use crate::roster::{CampaignSeed, LADDER, SeededOpponent};
     use bevy::state::app::StatesPlugin;
 
     const PLAYER_ATTRIBUTES: Attributes = Attributes {
@@ -528,6 +549,20 @@ mod tests {
     /// ladder.
     fn test_app_at(progress: LadderProgress) -> App {
         test_app_with(player_character(), progress)
+    }
+
+    fn test_app_at_with_campaign_seed(progress: LadderProgress, campaign_seed: u64) -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, ArenaPlugin));
+        app.insert_resource(player_character());
+        app.insert_resource(progress);
+        app.insert_resource(CampaignSeed(campaign_seed));
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Fight);
+        app.update();
+        app
     }
 
     fn test_app_with(player: PlayerCharacter, progress: LadderProgress) -> App {
@@ -953,6 +988,59 @@ mod tests {
         let mut app = test_app();
         let labels = app.world_mut().query::<&Text2d>().iter(app.world()).count();
         assert_eq!(labels, 0, "no floating Text2d name labels in the arena");
+    }
+
+    #[test]
+    fn seeded_human_encounter_repeats_and_an_alternate_seed_changes_only_unlocked_choices() {
+        fn generated(app: &mut App) -> SeededOpponent {
+            app.world_mut()
+                .query_filtered::<&SeededOpponent, With<EnemyFighter>>()
+                .single(app.world())
+                .expect("the representative human opponent is generated")
+                .clone()
+        }
+
+        let mut first_entry = test_app_at_with_campaign_seed(LadderProgress(0), 0);
+        let mut repeated_entry = test_app_at_with_campaign_seed(LadderProgress(0), 0);
+        let mut alternate_entry = test_app_at_with_campaign_seed(LadderProgress(0), 1);
+
+        let first = generated(&mut first_entry);
+        let repeated = generated(&mut repeated_entry);
+        let alternate = generated(&mut alternate_entry);
+
+        assert_eq!(first, repeated, "the same encounter seed repeats exactly");
+        assert_ne!(first.seed, alternate.seed);
+        assert_ne!(
+            first.definition.parts.hair, alternate.definition.parts.hair,
+            "the pinned alternate review seed exercises the unlocked hair choice"
+        );
+        assert_eq!(first.definition.parts.body, alternate.definition.parts.body);
+        assert_eq!(first.definition.parts.face, alternate.definition.parts.face);
+        assert_eq!(
+            first.definition.parts.torso,
+            alternate.definition.parts.torso
+        );
+        assert_eq!(first.definition.parts.legs, alternate.definition.parts.legs);
+        assert_eq!(first.definition.parts.feet, alternate.definition.parts.feet);
+        assert_eq!(
+            first.definition.parts.waist,
+            alternate.definition.parts.waist
+        );
+        assert_eq!(
+            first.definition.parts.accessories,
+            alternate.definition.parts.accessories
+        );
+        assert_eq!(first.definition.appearance, alternate.definition.appearance);
+
+        let mut other_human = test_app_at_with_campaign_seed(LadderProgress(6), 0);
+        assert!(
+            other_human
+                .world_mut()
+                .query_filtered::<&SeededOpponent, With<EnemyFighter>>()
+                .single(other_human.world())
+                .is_err(),
+            "Solomonar keeps the existing human template path"
+        );
     }
 
     /// The enemy's `(FighterName, Attributes, Equipment, Option<Boss>)`.
