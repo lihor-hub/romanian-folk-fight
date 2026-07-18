@@ -4,7 +4,7 @@ use std::fmt;
 
 use super::{
     BodyRegion, CHARACTER_DEFINITION_VERSION, CatalogError, CharacterCatalog, CharacterDefinition,
-    CulturalProfile, PartId, PartSelections, PlayerAppearance, SkeletonFamily,
+    CulturalProfile, PartId, PartIdError, PartSelections, PlayerAppearance, SkeletonFamily,
 };
 
 /// One weighted profile-controlled candidate for a semantic character slot.
@@ -92,6 +92,7 @@ impl GenerationProfile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GenerationError {
     Catalog(CatalogError),
+    InvalidPartId(PartIdError),
     MissingRequiredSlot { region: BodyRegion },
     DuplicateSlot { region: BodyRegion },
     NoCompatibleCandidates { region: BodyRegion },
@@ -105,6 +106,7 @@ impl fmt::Display for GenerationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Catalog(error) => write!(formatter, "character catalog error: {error}"),
+            Self::InvalidPartId(error) => write!(formatter, "invalid authored part ID: {error}"),
             Self::MissingRequiredSlot { region } => {
                 write!(
                     formatter,
@@ -140,6 +142,12 @@ impl std::error::Error for GenerationError {}
 impl From<CatalogError> for GenerationError {
     fn from(error: CatalogError) -> Self {
         Self::Catalog(error)
+    }
+}
+
+impl From<PartIdError> for GenerationError {
+    fn from(error: PartIdError) -> Self {
+        Self::InvalidPartId(error)
     }
 }
 

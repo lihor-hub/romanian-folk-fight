@@ -57,8 +57,30 @@ changing encounter-seed derivation or save authority.
 
 Standards and spec were reviewed independently against `AGENTS.md`, the Rust
 skill, and `.superpowers/sdd/task-3-brief.md`. One runtime enum-table
-`.expect` was removed. The remaining static `PartId` conversions are vetted,
-non-blank authored literals using the type's public checked constructor. The
-creator's catalog setup inserts the bundled resource only for standalone
-plugin apps; the production plugin order reuses `CharacterPlugin`'s existing
-resource. No missing Task 3 requirement or unrelated scope expansion remains.
+`.expect` was removed. The creator's catalog setup inserts the bundled
+resource only for standalone plugin apps; the production plugin order reuses
+`CharacterPlugin`'s existing resource. The subsequent review-fix follow-up
+below removes the remaining runtime static-ID conversions. No missing Task 3
+requirement or unrelated scope expansion remains.
+
+## Review-fix follow-up
+
+The post-Task-3 review found that the initial zvelt/plete definition and the
+Ucenicul preset retained stale `Balanced`/`Braided` legacy projections, and
+that old public build/hair mutators could recreate the same drift.
+
+- RED: the new pure draft and ECS preview invariant tests both reported
+  `Balanced` where `human.body.zvelt.v1` requires `Lean`.
+- GREEN: default, presets, reset, and every body/hair selector now run through
+  one stable-ID-to-appearance projection. The appearance-only build/hair
+  mutators were removed; selection and reset accept the catalog and propagate
+  validation failures.
+- Wardrobe selection now clones exact IDs from validated catalog records
+  before its atomic commit, removing runtime `unwrap_or_else(unreachable!)`
+  construction from creation.
+- RED/GREEN: an invalid roster-authored ID now has a focused regression test
+  and propagates `PartIdError` through `GenerationError`; no runtime
+  unreachable-ID panic remains in roster generation.
+- Follow-up verification: creation 44/44, generation 11/11, roster 25/25,
+  save snapshot 23/23, review-feature tests 30/30, logic gate, formatting,
+  default Clippy, and review-feature Clippy all pass.

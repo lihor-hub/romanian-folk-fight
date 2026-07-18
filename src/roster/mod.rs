@@ -484,7 +484,7 @@ impl LadderProgress {
 
 fn hot_de_codru(campaign_seed: CampaignSeed) -> Result<SeededOpponent, GenerationError> {
     let seed = derive_encounter_seed(campaign_seed.0, HOT_DE_CODRU_ENCOUNTER_ID);
-    let profile = hot_de_codru_profile();
+    let profile = hot_de_codru_profile()?;
     let definition = generate_character(
         seed,
         &profile,
@@ -498,17 +498,17 @@ fn hot_de_codru(campaign_seed: CampaignSeed) -> Result<SeededOpponent, Generatio
     })
 }
 
-fn hot_de_codru_profile() -> GenerationProfile {
+fn hot_de_codru_profile() -> Result<GenerationProfile, GenerationError> {
     let appearance = PlayerAppearance::default();
     let slots = vec![
         weighted_slot(
             BodyRegion::Body,
             &["human.body.zvelt.v1", "human.body.vanjos.v1"],
-        ),
+        )?,
         weighted_slot(
             BodyRegion::Face,
             &["human.face.haiduc.v1", "human.face.cioban.v1"],
-        ),
+        )?,
         weighted_slot(
             BodyRegion::Hair,
             &[
@@ -516,7 +516,7 @@ fn hot_de_codru_profile() -> GenerationProfile {
                 "human.hair.prins.v1",
                 "human.hair.scurt.v1",
             ],
-        ),
+        )?,
     ];
     let mut profile = GenerationProfile::new(
         SkeletonFamily::Human,
@@ -528,32 +528,35 @@ fn hot_de_codru_profile() -> GenerationProfile {
     );
     profile.wardrobes = vec![
         WeightedWardrobe::new(
-            authored_part("human.torso.ie_altita.v1"),
-            authored_part("human.legs.itari.v1"),
-            authored_part("human.feet.opinci.v1"),
+            authored_part("human.torso.ie_altita.v1")?,
+            authored_part("human.legs.itari.v1")?,
+            authored_part("human.feet.opinci.v1")?,
             1,
         ),
         WeightedWardrobe::new(
-            authored_part("human.torso.camasa_ciobaneasca.v1"),
-            authored_part("human.legs.cioareci.v1"),
-            authored_part("human.feet.opinci.v1"),
+            authored_part("human.torso.camasa_ciobaneasca.v1")?,
+            authored_part("human.legs.cioareci.v1")?,
+            authored_part("human.feet.opinci.v1")?,
             1,
         ),
     ];
-    profile
+    Ok(profile)
 }
 
-fn weighted_slot(region: BodyRegion, ids: &[&'static str]) -> GenerationSlot {
-    GenerationSlot::new(
+fn weighted_slot(
+    region: BodyRegion,
+    ids: &[&'static str],
+) -> Result<GenerationSlot, GenerationError> {
+    Ok(GenerationSlot::new(
         region,
         ids.iter()
-            .map(|id| WeightedPart::new(authored_part(id), 1))
-            .collect(),
-    )
+            .map(|id| authored_part(id).map(|id| WeightedPart::new(id, 1)))
+            .collect::<Result<Vec<_>, _>>()?,
+    ))
 }
 
-fn authored_part(value: &'static str) -> PartId {
-    PartId::new(value).unwrap_or_else(|_| unreachable!("authored part IDs are non-blank"))
+fn authored_part(value: &'static str) -> Result<PartId, GenerationError> {
+    PartId::new(value).map_err(GenerationError::from)
 }
 
 /// Stable FNV-1a derivation over the little-endian campaign seed followed by
@@ -625,8 +628,13 @@ mod tests {
     use crate::items::Slot;
 
     #[test]
+    fn authored_roster_part_ids_propagate_validation_errors() {
+        assert!(authored_part("").is_err());
+    }
+
+    #[test]
     fn hot_de_codru_profile_uses_the_complete_authored_identity_pools() {
-        let profile = hot_de_codru_profile();
+        let profile = hot_de_codru_profile().unwrap();
         let candidate_ids = |region| {
             profile
                 .slots

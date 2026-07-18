@@ -1218,9 +1218,14 @@ type PressableButton = (
 /// command is logged via `warn!` and otherwise ignored -- never a panic, so
 /// a harness bug fails loudly in `console.log`/the checkpoint's retained
 /// `console.log` artifact rather than crashing the review build.
+// Browser review commands deliberately bridge several independent resources
+// and UI queries in one adapter system; keeping those dependencies explicit
+// is clearer than hiding them behind a review-only aggregate SystemParam.
+#[allow(clippy::too_many_arguments)]
 fn poll_review_commands(
     mut commands: Commands,
     mut draft: ResMut<CharacterDraft>,
+    catalog: Option<Res<crate::character::CharacterCatalog>>,
     mut autoplay: ResMut<ReviewAutoplay>,
     mut campaign_seed: ResMut<CampaignSeed>,
     mut virtual_time: ResMut<Time<Virtual>>,
@@ -1236,7 +1241,15 @@ fn poll_review_commands(
         }
         Ok(ReviewCommand::SeedCampaign { seed }) => campaign_seed.0 = seed,
         Ok(ReviewCommand::SelectPreset { preset }) => match parse_preset(&preset) {
-            Some(preset) => draft.select_choice(HeroChoice::Preset(preset)),
+            Some(preset) => {
+                if let Some(catalog) = catalog.as_deref() {
+                    if let Err(error) = draft.select_choice(HeroChoice::Preset(preset), catalog) {
+                        warn!("review: preset selection failed catalog validation: {error}");
+                    }
+                } else {
+                    warn!("review: selectPreset requires the character catalog resource");
+                }
+            }
             None => warn!("review: selectPreset(\"{preset}\") is not a known hero preset"),
         },
         Ok(ReviewCommand::PressButton { button }) => match parse_button(&button) {
@@ -1741,10 +1754,10 @@ mod tests {
         assert_eq!(
             snapshot.resolved_part_ids,
             vec![
-                "human.body.foundation.v1",
-                "human.face.default.v1",
-                "human.hair.tied.v1",
-                "human.torso.linen.v1",
+                "human.body.zvelt.v1",
+                "human.face.cioban.v1",
+                "human.hair.scurt.v1",
+                "human.torso.ie_altita.v1",
                 "human.legs.itari.v1",
                 "human.feet.opinci.v1",
             ]

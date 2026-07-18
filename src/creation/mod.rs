@@ -764,7 +764,11 @@ fn handle_creation_actions(
             continue;
         }
         match *action {
-            CreationAction::SelectChoice(choice) => draft.select_choice(choice),
+            CreationAction::SelectChoice(choice) => {
+                if let Err(error) = draft.select_choice(choice, &catalog) {
+                    error!("creator rejected incompatible preset selection: {error}");
+                }
+            }
             CreationAction::PreviousName => draft.previous_name(),
             CreationAction::NextName => draft.next_name(),
             CreationAction::Increase(kind) => {
@@ -843,12 +847,16 @@ fn handle_creation_actions(
                     ));
                     commands.insert_resource(PlayerEquipment(equipment));
                     save_requests.write(SaveRequested(ResumeDestination::Fight));
-                    draft.reset();
+                    if let Err(error) = draft.reset(&catalog) {
+                        error!("creator failed to reset after confirmation: {error}");
+                    }
                     flow_intents.write(FlowIntent::ConfirmHero);
                 }
             }
             CreationAction::Back => {
-                draft.reset();
+                if let Err(error) = draft.reset(&catalog) {
+                    error!("creator failed to reset while returning to menu: {error}");
+                }
                 flow_intents.write(FlowIntent::BackToMenu);
             }
         }
@@ -1575,6 +1583,44 @@ mod tests {
         }
     }
 
+    fn assert_preview_ids_match_appearance_bridge(app: &App) {
+        let draft = draft(app);
+        let expected_build = match draft.definition().parts.body.as_str() {
+            "human.body.zvelt.v1" => BodyBuild::Lean,
+            "human.body.vanjos.v1" => BodyBuild::Sturdy,
+            other => panic!("unexpected preview body ID {other}"),
+        };
+        let expected_hair = match draft.definition().parts.hair.as_str() {
+            "human.hair.plete.v1" => HairStyle::Long,
+            "human.hair.prins.v1" => HairStyle::Tied,
+            "human.hair.scurt.v1" => HairStyle::Short,
+            other => panic!("unexpected preview hair ID {other}"),
+        };
+        assert_eq!(draft.appearance().build, expected_build);
+        assert_eq!(draft.appearance().hair, expected_hair);
+    }
+
+    #[test]
+    fn preview_ids_and_appearance_bridge_never_drift() {
+        let mut app = test_app();
+        assert_preview_ids_match_appearance_bridge(&app);
+        press(
+            &mut app,
+            CreationAction::NextAppearance(AppearanceField::Build),
+        );
+        assert_preview_ids_match_appearance_bridge(&app);
+        press(
+            &mut app,
+            CreationAction::NextAppearance(AppearanceField::Hair),
+        );
+        assert_preview_ids_match_appearance_bridge(&app);
+        press(
+            &mut app,
+            CreationAction::SelectChoice(HeroChoice::Preset(HeroPreset::UceniculSolomonar)),
+        );
+        assert_preview_ids_match_appearance_bridge(&app);
+    }
+
     #[test]
     fn appearance_rows_use_the_required_romanian_order() {
         assert_eq!(
@@ -1867,7 +1913,14 @@ mod tests {
                 magie: 0,
             }
         );
-        assert_eq!(player.appearance, HeroPreset::Voinicul.appearance());
+        assert_eq!(
+            player.appearance,
+            PlayerAppearance {
+                build: BodyBuild::Sturdy,
+                hair: HairStyle::Short,
+                ..HeroPreset::Voinicul.appearance()
+            }
+        );
         let loadout = app.world().resource::<PlayerEquipment>();
         assert_eq!(
             loadout.0.equipped(crate::items::Slot::Weapon),
