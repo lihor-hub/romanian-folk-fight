@@ -176,7 +176,7 @@ fn spawn_scene(
         })
         .map(|prepared| SeededEncounterVisual::Generated(prepared.0.clone()))
         .unwrap_or_else(|| match ladder.seeded_opponent(campaign_seed) {
-            Some(generated) => seeded_encounter_visual(generated, bundled_human_catalog()),
+            Some(generated) => seeded_encounter_visual(generated),
             None => SeededEncounterVisual::Legacy,
         });
     spawn_background(&mut commands, backgrounds, background_tier(ladder));
@@ -237,6 +237,12 @@ enum SeededEncounterVisual {
 }
 
 fn seeded_encounter_visual(
+    generated: Result<crate::roster::SeededOpponent, GenerationError>,
+) -> SeededEncounterVisual {
+    seeded_encounter_visual_with_catalog(generated, bundled_human_catalog())
+}
+
+fn seeded_encounter_visual_with_catalog(
     generated: Result<crate::roster::SeededOpponent, GenerationError>,
     catalog: Result<&CharacterCatalog, CatalogError>,
 ) -> SeededEncounterVisual {
@@ -1127,19 +1133,59 @@ mod tests {
 
     #[test]
     fn generation_error_uses_known_good_modular_human_before_legacy_template() {
-        let catalog =
-            crate::character::bundled_human_catalog().expect("bundled catalog is available");
-        let choice = seeded_encounter_visual(
-            Err(crate::character::GenerationError::MissingRequiredSlot {
+        let choice = seeded_encounter_visual(Err(
+            crate::character::GenerationError::MissingRequiredSlot {
                 region: crate::character::BodyRegion::Hair,
-            }),
-            Ok(catalog),
-        );
+            },
+        ));
 
         let SeededEncounterVisual::KnownGood(definition) = choice else {
             panic!("GenerationError must choose the shared known-good modular human first");
         };
-        assert_eq!(definition.parts, catalog.known_good_human().clone());
+        assert_eq!(
+            definition.parts,
+            crate::character::bundled_human_catalog()
+                .expect("bundled catalog is available")
+                .known_good_human()
+                .clone()
+        );
+    }
+
+    #[test]
+    fn production_loader_keeps_known_good_available_when_an_unrelated_record_is_invalid() {
+        let mut value: serde_json::Value = serde_json::from_str(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("bundled catalog is valid JSON");
+        let unrelated_long_hair = value["parts"]
+            .as_array_mut()
+            .expect("catalog has parts")
+            .iter_mut()
+            .find(|part| part["id"] == "human.hair.long.v1")
+            .expect("catalog has unrelated long hair");
+        unrelated_long_hair["asset_path"] =
+            serde_json::json!("fighters/human/runtime/not-registered.png");
+
+        let catalog = crate::character::load_human_catalog(&value.to_string());
+        assert!(
+            catalog
+                .as_ref()
+                .expect("the production loader accepts the schema")
+                .validate()
+                .is_err(),
+            "the unrelated bad record must still fail whole-catalog validation"
+        );
+        let choice = seeded_encounter_visual_with_catalog(
+            Err(crate::character::GenerationError::MissingRequiredSlot {
+                region: crate::character::BodyRegion::Hair,
+            }),
+            catalog.as_ref().map_err(Clone::clone),
+        );
+
+        let SeededEncounterVisual::KnownGood(definition) = choice else {
+            panic!("an unrelated invalid record must not hide the valid known-good human");
+        };
+        assert_eq!(definition.parts.hair.as_str(), "human.hair.braided.v1");
     }
 
     /// The enemy's `(FighterName, Attributes, Equipment, Option<Boss>)`.

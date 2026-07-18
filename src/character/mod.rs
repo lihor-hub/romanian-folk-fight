@@ -8,7 +8,7 @@ pub mod stats;
 
 pub use catalog::{
     AttachmentMetadata, BodyRegion, CHARACTER_CATALOG_VERSION, CatalogError, CharacterCatalog,
-    PartRecord, ResolvedCharacter, bundled_human_catalog,
+    PartRecord, ResolvedCharacter, bundled_human_catalog, load_human_catalog,
 };
 pub use definition::{
     CHARACTER_DEFINITION_VERSION, CharacterDefinition, CulturalProfile, PartId, PartIdError,
@@ -31,7 +31,11 @@ impl Plugin for CharacterPlugin {
     fn build(&self, app: &mut App) {
         match bundled_human_catalog() {
             Ok(catalog) => {
-                app.insert_resource(catalog.clone());
+                if let Err(error) = catalog.validate() {
+                    error!("bundled character catalog is invalid: {error}");
+                } else {
+                    app.insert_resource(catalog.clone());
+                }
             }
             Err(error) => {
                 error!("bundled character catalog is invalid: {error}");

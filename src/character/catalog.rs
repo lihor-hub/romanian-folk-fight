@@ -74,16 +74,23 @@ pub struct CharacterCatalog {
     known_good_human_cultural_tags: Vec<String>,
 }
 
-/// Single parsed and validated catalog instance shared by generation,
+/// Parses and version-checks a human catalog without requiring every authored
+/// record to be valid. Generation and normal resolution still call
+/// [`CharacterCatalog::validate`]; keeping parsing separate lets the runtime
+/// resolve the independently validated known-good slice after an unrelated
+/// record breaks whole-catalog validation.
+pub fn load_human_catalog(json: &str) -> Result<CharacterCatalog, CatalogError> {
+    CharacterCatalog::from_json(json)
+}
+
+/// Single parsed and version-checked catalog instance shared by generation,
 /// rendering, and the ECS resource registered by [`super::CharacterPlugin`].
 pub fn bundled_human_catalog() -> Result<&'static CharacterCatalog, CatalogError> {
     static CATALOG: OnceLock<Result<CharacterCatalog, CatalogError>> = OnceLock::new();
     match CATALOG.get_or_init(|| {
-        let catalog = CharacterCatalog::from_json(include_str!(
+        load_human_catalog(include_str!(
             "../../assets/fighters/catalog/human-foundation.json"
-        ))?;
-        catalog.validate()?;
-        Ok(catalog)
+        ))
     }) {
         Ok(catalog) => Ok(catalog),
         Err(error) => Err(error.clone()),
