@@ -287,35 +287,31 @@ fn read_accessibility(checkpoint: &Checkpoint) -> Result<Option<AccessibilitySna
 }
 
 /// Presses `key` via a real CDP keypress and waits until the published
-/// accessibility snapshot both (a) actually differs from whatever was
-/// published just before the press and (b) names a real focused control
-/// (`focused_entity.is_some()`), up to [`SETTLE_MAX_FRAMES`], returning the
-/// resulting snapshot. See `fight_palette_accessible::press_key_and_wait_for_change`
-/// for the base rationale (comparing against a captured "before" value is
-/// what makes this robust against the harness racing the browser's own
-/// asynchronous dispatch/render loop).
+/// accessibility snapshot names a real focused entity different from the one
+/// focused before the press, up to [`SETTLE_MAX_FRAMES`]. See
+/// `fight_palette_accessible::press_key_and_wait_for_change` for the base
+/// rationale (comparing against a captured "before" value is what makes this
+/// robust against the browser's asynchronous dispatch/render loop).
 ///
 /// Every call site here presses `ArrowRight` to move focus, so a resulting
 /// `focused_entity: None` is never a legitimate settled outcome -- but
-/// requiring *only* "differs from `before`" is not enough to guarantee that:
-/// [`AccessibilitySnapshot::targets`] legitimately changes on frames that
-/// have nothing to do with the just-issued key press (e.g. a focusable
-/// control's on-screen box shifting as the shared widget's scroll-into-view
-/// settles, or one appearing/disappearing as a screen's own UI keeps
-/// finishing spawning) -- see `walk_full_lap`'s own doc comment on why a
-/// wrapped-around lap "need not be byte-identical" to the snapshot it
-/// started from. Read literally, the pre-#268 version of this loop would
-/// return on the *first* such incidental change even if it still carried
-/// `focused_entity: None`, which is exactly the shape of `keyboard-
-/// accessibility`'s "the first ArrowRight press left nothing focused"
-/// failure on a cold-booted MainMenu: the loop gave up one frame too early,
-/// before the press's own effect (focus actually landing) had been
-/// published, mistaking an unrelated field's settling for "done". Requiring
-/// `focused_entity.is_some()` here keeps waiting past that kind of noise
-/// instead of racing ahead of it, while still failing loudly (after
-/// `SETTLE_MAX_FRAMES`) if focus genuinely never lands -- this does not
-/// weaken the gate, it only stops the harness from asserting a false
-/// positive against its own noisy intermediate frames.
+/// requiring only "the whole snapshot differs and focus is `Some`" is not
+/// enough: target rectangles and marker state can settle while the same
+/// entity remains focused. On a slow runner that false completion queues the
+/// next `ArrowRight` before the previous navigation lands, skipping a control
+/// or diverting the following `Enter`. [`arrow_navigation_settled`] therefore
+/// ignores every field except the focused entity transition. `None -> Some`
+/// settles the cold first press; `Some(a) -> Some(b)` settles subsequent
+/// navigation; `Some(a) -> Some(a)` never settles regardless of other motion.
+fn arrow_navigation_settled(
+    before: Option<&AccessibilitySnapshot>,
+    current: &AccessibilitySnapshot,
+) -> bool {
+    current.focused_entity.is_some()
+        && before.and_then(|snapshot| snapshot.focused_entity.as_ref())
+            != current.focused_entity.as_ref()
+}
+
 fn press_key_and_wait_for_change(
     checkpoint: &Checkpoint,
     key: &str,
@@ -325,8 +321,7 @@ fn press_key_and_wait_for_change(
     for _ in 0..SETTLE_MAX_FRAMES {
         checkpoint.wait_for_frame()?;
         if let Some(snapshot) = read_accessibility(checkpoint)?
-            && Some(&snapshot) != before.as_ref()
-            && snapshot.focused_entity.is_some()
+            && arrow_navigation_settled(before.as_ref(), &snapshot)
         {
             return Ok(snapshot);
         }
@@ -1138,6 +1133,42 @@ mod tests {
             targets: Vec::new(),
             min_target_size: 0.0,
         }
+    }
+
+    #[test]
+    fn changed_targets_on_the_same_entity_do_not_settle_arrow_navigation() {
+        let before = snapshot("7v0", "Setări");
+        let mut current = before.clone();
+        current.targets.push(TargetRect {
+            x: 10.0,
+            y: 20.0,
+            width: 44.0,
+            height: 44.0,
+        });
+
+        assert!(!arrow_navigation_settled(Some(&before), &current));
+    }
+
+    #[test]
+    fn a_distinct_focused_entity_settles_arrow_navigation() {
+        let before = snapshot("7v0", "Setări");
+        let current = snapshot("8v0", "Ieșire");
+
+        assert!(arrow_navigation_settled(Some(&before), &current));
+    }
+
+    #[test]
+    fn focus_landing_from_none_settles_arrow_navigation() {
+        let before = AccessibilitySnapshot {
+            focused_entity: None,
+            focused_label: None,
+            focus_marker_visible: false,
+            targets: Vec::new(),
+            min_target_size: 0.0,
+        };
+        let current = snapshot("1v0", "Luptă nouă");
+
+        assert!(arrow_navigation_settled(Some(&before), &current));
     }
 
     // `enter_press_left_no_trace` -- the pure decision behind
