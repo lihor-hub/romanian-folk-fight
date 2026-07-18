@@ -115,6 +115,7 @@ mod high_contrast;
 mod hybrid_2_5d_character;
 mod keyboard_accessibility;
 mod reduced_motion_fight;
+mod romanian_paper_doll_library;
 mod save_reload;
 pub mod server;
 mod touch_targets;
@@ -145,6 +146,7 @@ pub const SCENARIOS: &[&str] = &[
     "save-reload",
     "abandon-forfeit",
     "hybrid-2-5d-character",
+    "romanian-paper-doll-library",
 ];
 
 /// Dispatches `--scenario <name>` to the matching scenario module. Known
@@ -183,6 +185,9 @@ pub fn run_scenario(
         "save-reload" => save_reload::run(update_baselines),
         "abandon-forfeit" => abandon_forfeit::run(update_baselines),
         "hybrid-2-5d-character" => hybrid_2_5d_character::run(update_baselines, strict_visual),
+        "romanian-paper-doll-library" => {
+            romanian_paper_doll_library::run(update_baselines, strict_visual)
+        }
         other => Err(SmokeError::usage(format!(
             "unknown --scenario `{other}` (known scenarios: {})",
             SCENARIOS.join(", ")

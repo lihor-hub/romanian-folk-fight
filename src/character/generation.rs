@@ -4,7 +4,7 @@ use std::fmt;
 
 use super::{
     BodyRegion, CHARACTER_DEFINITION_VERSION, CatalogError, CharacterCatalog, CharacterDefinition,
-    CulturalProfile, PartId, PartSelections, PlayerAppearance, SkeletonFamily,
+    CulturalProfile, PartId, PartIdError, PartSelections, PlayerAppearance, SkeletonFamily,
 };
 
 /// One weighted profile-controlled candidate for a semantic character slot.
@@ -17,6 +17,26 @@ pub struct WeightedPart {
 impl WeightedPart {
     pub const fn new(id: PartId, weight: u32) -> Self {
         Self { id, weight }
+    }
+}
+
+/// One correlated clothing set selected by a single weighted draw.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WeightedWardrobe {
+    pub torso: PartId,
+    pub legs: PartId,
+    pub feet: PartId,
+    pub weight: u32,
+}
+
+impl WeightedWardrobe {
+    pub const fn new(torso: PartId, legs: PartId, feet: PartId, weight: u32) -> Self {
+        Self {
+            torso,
+            legs,
+            feet,
+            weight,
+        }
     }
 }
 
@@ -48,6 +68,7 @@ pub struct GenerationProfile {
     pub culture: CulturalProfile,
     pub appearance: PlayerAppearance,
     pub slots: Vec<GenerationSlot>,
+    pub wardrobes: Vec<WeightedWardrobe>,
 }
 
 impl GenerationProfile {
@@ -62,6 +83,7 @@ impl GenerationProfile {
             culture,
             appearance,
             slots,
+            wardrobes: Vec::new(),
         }
     }
 }
@@ -70,16 +92,21 @@ impl GenerationProfile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GenerationError {
     Catalog(CatalogError),
+    InvalidPartId(PartIdError),
     MissingRequiredSlot { region: BodyRegion },
     DuplicateSlot { region: BodyRegion },
     NoCompatibleCandidates { region: BodyRegion },
     ZeroTotalWeight { region: BodyRegion },
+    ConflictingWardrobeSources,
+    NoCompatibleWardrobes,
+    ZeroTotalWardrobeWeight,
 }
 
 impl fmt::Display for GenerationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Catalog(error) => write!(formatter, "character catalog error: {error}"),
+            Self::InvalidPartId(error) => write!(formatter, "invalid authored part ID: {error}"),
             Self::MissingRequiredSlot { region } => {
                 write!(
                     formatter,
@@ -97,6 +124,15 @@ impl fmt::Display for GenerationError {
                 formatter,
                 "generation profile has zero total candidate weight for `{region:?}`"
             ),
+            Self::ConflictingWardrobeSources => formatter.write_str(
+                "generation profile cannot mix a wardrobe pool with torso, legs, or feet slots",
+            ),
+            Self::NoCompatibleWardrobes => {
+                formatter.write_str("generation profile has no compatible wardrobes")
+            }
+            Self::ZeroTotalWardrobeWeight => {
+                formatter.write_str("generation profile has zero total wardrobe weight")
+            }
         }
     }
 }
@@ -106,6 +142,12 @@ impl std::error::Error for GenerationError {}
 impl From<CatalogError> for GenerationError {
     fn from(error: CatalogError) -> Self {
         Self::Catalog(error)
+    }
+}
+
+impl From<PartIdError> for GenerationError {
+    fn from(error: PartIdError) -> Self {
+        Self::InvalidPartId(error)
     }
 }
 
@@ -129,13 +171,29 @@ pub fn generate_character(
 ) -> Result<CharacterDefinition, GenerationError> {
     catalog.validate()?;
 
+    let has_individual_clothing = profile.slots.iter().any(|slot| {
+        matches!(
+            slot.region,
+            BodyRegion::Torso | BodyRegion::Legs | BodyRegion::Feet
+        )
+    });
+    if !profile.wardrobes.is_empty() && has_individual_clothing {
+        return Err(GenerationError::ConflictingWardrobeSources);
+    }
+
     let mut selector = SeededSelector::new(seed);
     let body = select_required(BodyRegion::Body, profile, catalog, &mut selector)?;
     let face = select_required(BodyRegion::Face, profile, catalog, &mut selector)?;
     let hair = select_required(BodyRegion::Hair, profile, catalog, &mut selector)?;
-    let torso = select_required(BodyRegion::Torso, profile, catalog, &mut selector)?;
-    let legs = select_required(BodyRegion::Legs, profile, catalog, &mut selector)?;
-    let feet = select_required(BodyRegion::Feet, profile, catalog, &mut selector)?;
+    let (torso, legs, feet) = if profile.wardrobes.is_empty() {
+        (
+            select_required(BodyRegion::Torso, profile, catalog, &mut selector)?,
+            select_required(BodyRegion::Legs, profile, catalog, &mut selector)?,
+            select_required(BodyRegion::Feet, profile, catalog, &mut selector)?,
+        )
+    } else {
+        select_wardrobe(profile, catalog, &mut selector)?
+    };
     let facial_hair = select_optional(BodyRegion::FacialHair, profile, catalog, &mut selector)?;
     let waist = select_optional(BodyRegion::Waist, profile, catalog, &mut selector)?;
     let accessories = profile
@@ -166,6 +224,64 @@ pub fn generate_character(
 
     catalog.resolve(&definition)?;
     Ok(definition)
+}
+
+fn select_wardrobe(
+    profile: &GenerationProfile,
+    catalog: &CharacterCatalog,
+    selector: &mut SeededSelector,
+) -> Result<(PartId, PartId, PartId), GenerationError> {
+    let mut compatible = profile
+        .wardrobes
+        .iter()
+        .filter(|wardrobe| {
+            part_is_compatible(&wardrobe.torso, BodyRegion::Torso, profile, catalog)
+                && part_is_compatible(&wardrobe.legs, BodyRegion::Legs, profile, catalog)
+                && part_is_compatible(&wardrobe.feet, BodyRegion::Feet, profile, catalog)
+        })
+        .collect::<Vec<_>>();
+    compatible.sort_unstable_by(|left, right| {
+        (left.torso.as_str(), left.legs.as_str(), left.feet.as_str()).cmp(&(
+            right.torso.as_str(),
+            right.legs.as_str(),
+            right.feet.as_str(),
+        ))
+    });
+    if compatible.is_empty() {
+        return Err(GenerationError::NoCompatibleWardrobes);
+    }
+    let total_weight = compatible
+        .iter()
+        .map(|wardrobe| u64::from(wardrobe.weight))
+        .sum::<u64>();
+    if total_weight == 0 {
+        return Err(GenerationError::ZeroTotalWardrobeWeight);
+    }
+
+    let mut ticket = selector.next_u64() % total_weight;
+    for wardrobe in compatible {
+        if ticket < u64::from(wardrobe.weight) {
+            return Ok((
+                wardrobe.torso.clone(),
+                wardrobe.legs.clone(),
+                wardrobe.feet.clone(),
+            ));
+        }
+        ticket -= u64::from(wardrobe.weight);
+    }
+    unreachable!("a positive weighted wardrobe list contains the selected ticket")
+}
+
+fn part_is_compatible(
+    id: &PartId,
+    region: BodyRegion,
+    profile: &GenerationProfile,
+    catalog: &CharacterCatalog,
+) -> bool {
+    catalog
+        .compatible_parts(region, profile.skeleton, &profile.culture.tags)
+        .into_iter()
+        .any(|part| part.id == *id)
 }
 
 fn select_required(
@@ -272,8 +388,8 @@ impl SeededSelector {
 #[cfg(test)]
 mod tests {
     use super::{
-        GenerationError, GenerationProfile, GenerationSlot, WeightedPart, fallback_human,
-        generate_character,
+        GenerationError, GenerationProfile, GenerationSlot, WeightedPart, WeightedWardrobe,
+        fallback_human, generate_character,
     };
     use crate::character::{
         BodyRegion, CharacterCatalog, CulturalProfile, PartId, PlayerAppearance, SkeletonFamily,
@@ -351,18 +467,102 @@ mod tests {
         )
     }
 
+    fn wardrobe_profile() -> GenerationProfile {
+        let mut profile = GenerationProfile::new(
+            SkeletonFamily::Human,
+            CulturalProfile {
+                tags: vec!["romanian".to_owned()],
+            },
+            PlayerAppearance::default(),
+            vec![
+                fixed(BodyRegion::Body, "human.body.zvelt.v1"),
+                fixed(BodyRegion::Face, "human.face.haiduc.v1"),
+                fixed(BodyRegion::Hair, "human.hair.plete.v1"),
+            ],
+        );
+        profile.wardrobes = vec![
+            WeightedWardrobe::new(
+                id("human.torso.ie_altita.v1"),
+                id("human.legs.itari.v1"),
+                id("human.feet.opinci.v1"),
+                1,
+            ),
+            WeightedWardrobe::new(
+                id("human.torso.camasa_ciobaneasca.v1"),
+                id("human.legs.cioareci.v1"),
+                id("human.feet.opinci.v1"),
+                1,
+            ),
+        ];
+        profile
+    }
+
+    #[test]
+    fn golden_seeds_select_complete_haiduc_and_cioban_wardrobes() {
+        let catalog = catalog();
+        let haiduc = generate_character(0, &wardrobe_profile(), &catalog).unwrap();
+        let cioban = generate_character(2, &wardrobe_profile(), &catalog).unwrap();
+
+        assert_eq!(haiduc.parts.torso.as_str(), "human.torso.ie_altita.v1");
+        assert_eq!(haiduc.parts.legs.as_str(), "human.legs.itari.v1");
+        assert_eq!(
+            cioban.parts.torso.as_str(),
+            "human.torso.camasa_ciobaneasca.v1"
+        );
+        assert_eq!(cioban.parts.legs.as_str(), "human.legs.cioareci.v1");
+    }
+
+    #[test]
+    fn wardrobe_generation_never_cross_pairs_authored_sets() {
+        let catalog = catalog();
+        for seed in 0..128 {
+            let definition = generate_character(seed, &wardrobe_profile(), &catalog).unwrap();
+            let pair = (
+                definition.parts.torso.as_str(),
+                definition.parts.legs.as_str(),
+                definition.parts.feet.as_str(),
+            );
+            assert!(matches!(
+                pair,
+                (
+                    "human.torso.ie_altita.v1",
+                    "human.legs.itari.v1",
+                    "human.feet.opinci.v1"
+                ) | (
+                    "human.torso.camasa_ciobaneasca.v1",
+                    "human.legs.cioareci.v1",
+                    "human.feet.opinci.v1"
+                )
+            ));
+        }
+    }
+
+    #[test]
+    fn profile_rejects_wardrobes_mixed_with_individual_clothing_slots() {
+        let catalog = catalog();
+        let mut profile = wardrobe_profile();
+        profile
+            .slots
+            .push(fixed(BodyRegion::Torso, "human.torso.ie_altita.v1"));
+
+        assert_eq!(
+            generate_character(0, &profile, &catalog),
+            Err(GenerationError::ConflictingWardrobeSources)
+        );
+    }
+
     #[test]
     fn identical_inputs_produce_byte_for_byte_equal_definitions() {
         let catalog = catalog();
-        let profile = human_profile();
+        for profile in [human_profile(), wardrobe_profile()] {
+            let first = generate_character(0xabad_1dea, &profile, &catalog).unwrap();
+            let second = generate_character(0xabad_1dea, &profile, &catalog).unwrap();
 
-        let first = generate_character(0xabad_1dea, &profile, &catalog).unwrap();
-        let second = generate_character(0xabad_1dea, &profile, &catalog).unwrap();
-
-        assert_eq!(
-            serde_json::to_vec(&first).unwrap(),
-            serde_json::to_vec(&second).unwrap()
-        );
+            assert_eq!(
+                serde_json::to_vec(&first).unwrap(),
+                serde_json::to_vec(&second).unwrap()
+            );
+        }
     }
 
     #[test]

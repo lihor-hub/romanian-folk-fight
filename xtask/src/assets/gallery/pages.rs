@@ -349,10 +349,10 @@ pub fn render_part_page(
         "horizontally flipped",
         true,
     ));
-    body.push_str("</div>\n<p class=\"caption\">This is a pixel-flipped preview for spotting asymmetric detail (text, off-center motifs). \
-The live rig does not flip a part's own pixels when mirroring a whole fighter -- it only repositions parts \
-(negates <code>pivot.x</code>; see <code>src/cutout.rs</code>'s <code>part_transform</code>). See the linked \
-composition page(s) below for the true in-rig mirrored placement.</p>\n</section>\n");
+    body.push_str("</div>\n<p class=\"caption\">This pixel-flipped preview matches the artwork-facing change used by the live rig. \
+When mirroring a whole fighter, runtime and gallery both flip each part's pixels and mirror its transform/pivot \
+(including negated <code>pivot.x</code>; see <code>src/cutout.rs</code>'s <code>part_sprite</code> and \
+<code>part_transform</code>). See the linked composition page(s) below for the complete mirrored placement.</p>\n</section>\n");
 
     // --- Pivot / attachment diagram ---
     body.push_str("<section>\n<h2>Pivot / attachment guide</h2>\n");
@@ -490,9 +490,10 @@ fn facing_canvas(
     for layer in ordered {
         let href = asset_href_resolved(layer.record);
         let sampler_cls = sampler_class(layer.record.record.sampler);
+        let mirror_cls = if mirrored { " mirrored" } else { "" };
         let b: Box2D = canvas.place(layer.placement, mirrored);
         inner.push_str(&format!(
-            "<img src=\"{href}\" class=\"{sampler_cls}\" style=\"left:{:.1}px;top:{:.1}px;width:{:.1}px;height:{:.1}px;z-index:{};\" alt=\"{}\">\n",
+            "<img src=\"{href}\" class=\"{sampler_cls}{mirror_cls}\" style=\"left:{:.1}px;top:{:.1}px;width:{:.1}px;height:{:.1}px;z-index:{};\" alt=\"{}\">\n",
             b.left, b.top, b.width, b.height, layer.z, escape_html(&layer.record.record.id),
         ));
     }
@@ -809,6 +810,8 @@ mod tests {
         );
         assert!(html.contains("normal facing"));
         assert!(html.contains("mirrored facing"));
+        assert!(html.contains("scaleX(-1)"));
+        assert!(html.contains("class=\"smooth mirrored\""));
         assert!(html.contains("fighters.human.runtime.head"));
     }
 }

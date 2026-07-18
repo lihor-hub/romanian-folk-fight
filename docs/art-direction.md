@@ -92,6 +92,40 @@ preserved in
 guides palette, material identity, and lighting only. It is not runtime art and
 is never used to redraw the accepted albedo silhouettes.
 
+### Romanian paper-doll v1 library
+
+The first two production-intent human looks are the right-facing **Haiduc**
+and **Cioban** sets under `assets/fighters/human/runtime/{haiduc,cioban}/`,
+with shared opinci and short hair under `runtime/shared/`. They keep the
+established human rig pivots and display boxes and author two raster pixels per
+displayed pixel with nearest sampling. Charcoal outlines, motif clusters, and
+the shallow upper-left light must remain consistent across every attachment;
+the renderer alone produces the mirrored facing.
+
+The Haiduc combines a lean body, loose dark hair, a cream ie with restrained
+red/black altiță-inspired geometry, white ițari, and wrapped leather opinci.
+The Cioban combines a sturdier body, tied hair, a cream shepherd shirt with
+black/brown edging, dark wool cioareci, and the same opinci grammar. The
+replacement bâtă, topor, cojoc, căciulă, and opinci equipment follows the same
+wood, wool, sheepskin, and leather material language. These are a deliberate
+pan-Romanian folkloric remix for the game, not an assertion that one precise
+historical regional costume combined all of these forms.
+
+Research anchors, exact built-in image-generation prompts, full-resolution
+source paths and SHA-256 values, rights, the under-1-MB tracked-source decision,
+chroma-key settings, accepted crop map, and rejected duplicates are preserved
+in `assets/fighters/human/source/romanian-paper-doll-v1/README.md`. The cited
+Romanian National Heritage Institute/cIMeC records guide cultural grammar only;
+no museum image is copied into the generated pixels.
+
+`scripts/extract-romanian-paper-doll-v1.py` is the deterministic technical
+curation boundary. Every accepted albedo has mask/normal/shadow companions with
+byte-identical alpha. RGB mask positions follow catalog palette order: red is
+the first declared skin, hair, cloth, or leather region; green is the second,
+normally embroidery or cloth; blue is leather only on three-region shin maps;
+black means no recolour. Technical maps inherit their albedo's attachment,
+pivot, display, outline, and alpha, and never redraw the silhouette.
+
 ## Modular character catalog
 
 The human tracer bullet is authored in

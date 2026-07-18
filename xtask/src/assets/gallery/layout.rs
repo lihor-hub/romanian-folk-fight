@@ -22,13 +22,10 @@
 //! correct proportions, placement, and gear attachment, not a pixel-exact
 //! game screenshot. Every composition page states this explicitly.
 //!
-//! Mirroring (`flip_x`) matches `src/cutout.rs`'s `part_transform`: only the
-//! `x` component of `pivot` is negated. The engine does not flip the
-//! sprite's own pixels when mirroring a whole rig (see that function) --
-//! this module reproduces that exactly for composition pages. Standalone
-//! part pages additionally show a *pixel*-flipped preview as a separate,
-//! clearly labeled review aid (see `pages.rs`), since a lone part has no
-//! rig position to demonstrate.
+//! Mirroring (`flip_x`) matches both runtime operations in `src/cutout.rs`:
+//! `part_transform` mirrors the transform/pivot, while `part_sprite` flips
+//! the sprite's own pixels. Composition pages reproduce both effects.
+//! Standalone pages isolate the same pixel flip as a review aid.
 
 /// One part's placement input: rig-space pivot (translation) and display
 /// size (both already `f32` straight from the sidecar aggregate).
@@ -62,8 +59,8 @@ const MARGIN: f32 = 16.0;
 
 /// Computes the shared canvas for a set of parts. The horizontal extent is
 /// made symmetric (`+/-extent_x`) so the same canvas works unmodified for
-/// both the normal and mirrored facing (mirroring only negates each part's
-/// `pivot.x`, per this module's doc comment).
+/// both the normal and mirrored facing (placement negates each part's
+/// `pivot.x`; the caller also mirrors each sprite's pixels).
 pub fn rig_canvas(parts: &[PartPlacement]) -> RigCanvas {
     let mut extent_x: f32 = 1.0;
     let mut min_y: f32 = 0.0;
@@ -100,8 +97,8 @@ impl RigCanvas {
     }
 
     /// The CSS box for one part placed on this canvas. `mirrored` negates
-    /// the rig-space `x` component only, matching `src/cutout.rs`'s
-    /// `part_transform`.
+    /// the rig-space `x` component, matching the translation portion of
+    /// `src/cutout.rs`'s `part_transform`; the caller mirrors the pixels.
     pub fn place(&self, part: PartPlacement, mirrored: bool) -> Box2D {
         let rig_x = if mirrored {
             -part.pivot[0]

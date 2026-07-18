@@ -272,6 +272,68 @@ pub fn generate_filtered(
         }
     }
 
+    // --- Exact authored human catalog selections ---
+    let catalog_json =
+        fs::read_to_string(assets_root.join("fighters/catalog/human-foundation.json"))
+            .unwrap_or_default();
+    let human_looks = model::human_look_compositions(&records, &catalog_json);
+    let mut authored_part_links: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
+    for composition in &human_looks {
+        let layers = composition
+            .layers
+            .iter()
+            .map(|record| CompositionLayer {
+                record,
+                placement: PartPlacement {
+                    pivot: record.record.pivot.unwrap_or([0.0, 0.0]),
+                    display: record.record.display.unwrap_or([1.0, 1.0]),
+                },
+                z: model::draw_order_index(record.record.attachment.as_deref().unwrap_or("")),
+            })
+            .collect::<Vec<_>>();
+        let comp_id = format!("composition.human.{}", composition.spec.slug);
+        let resolved = composition.spec.resolved_ids.join(", ");
+        let note = format!(
+            "Exact v3 catalog selection: {resolved}. Both specimens use the existing human rig pivots, display boxes, anatomical draw order, and renderer-owned mirroring."
+        );
+        writer.emit(
+            out_dir,
+            "Authored human compositions",
+            &comp_id,
+            &pages::render_composition_page(composition.spec.title, &comp_id, &layers, &note),
+        )?;
+
+        for record in &composition.layers {
+            authored_part_links
+                .entry(&record.record.id)
+                .or_default()
+                .push((
+                    format!("{} composition", composition.spec.title),
+                    format!("{comp_id}.html"),
+                ));
+        }
+    }
+    for composition in &human_looks {
+        for record in &composition.layers {
+            let Some(links) = authored_part_links.remove(record.record.id.as_str()) else {
+                continue;
+            };
+            let source_sheet = record
+                .record
+                .source_sheet
+                .as_deref()
+                .and_then(|id| by_id.get(id))
+                .copied();
+            let html = pages::render_part_page(
+                record,
+                source_sheet,
+                &representative_background_href(&by_id),
+                &links,
+            );
+            writer.emit(out_dir, "Authored human parts", &record.record.id, &html)?;
+        }
+    }
+
     // --- Gear: composable (rig-attached) items get a composition + part page ---
     let human_parts = model::identity_parts(&records, "human");
     let human_by_attachment: BTreeMap<&str, PartPlacement> = human_parts
@@ -638,6 +700,47 @@ mod tests {
         assert!(out.root.join("fonts.alegreya-variable.html").exists());
         // Audio metadata page.
         assert!(out.root.join("audio.music-menu.html").exists());
+    }
+
+    #[test]
+    fn generate_produces_both_authored_human_look_compositions() {
+        let assets_root = real_assets_root();
+        let out = TempOut::new("romanian-human-looks");
+        generate(&assets_root, &out.root).unwrap();
+
+        for (role, expected_ids) in [
+            (
+                "haiduc",
+                [
+                    "human.body.zvelt.v1",
+                    "human.face.haiduc.v1",
+                    "human.hair.plete.v1",
+                    "human.torso.ie_altita.v1",
+                    "human.legs.itari.v1",
+                    "human.feet.opinci.v1",
+                ],
+            ),
+            (
+                "cioban",
+                [
+                    "human.body.vanjos.v1",
+                    "human.face.cioban.v1",
+                    "human.hair.prins.v1",
+                    "human.torso.camasa_ciobaneasca.v1",
+                    "human.legs.cioareci.v1",
+                    "human.feet.opinci.v1",
+                ],
+            ),
+        ] {
+            let page = out.root.join(format!("composition.human.{role}.html"));
+            let html = fs::read_to_string(&page)
+                .unwrap_or_else(|error| panic!("{}: {error}", page.display()));
+            assert!(html.contains("normal facing"));
+            assert!(html.contains("mirrored facing"));
+            for stable_id in expected_ids {
+                assert!(html.contains(stable_id), "{role} page omits {stable_id}");
+            }
+        }
     }
 
     #[test]

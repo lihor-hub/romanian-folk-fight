@@ -7,7 +7,9 @@
 use bevy::prelude::*;
 
 use crate::character::{
-    AccentColor, Attributes, BodyBuild, CharacterDefinition, HairStyle, PlayerAppearance, SkinTone,
+    AccentColor, Attributes, BodyBuild, BodyRegion, CHARACTER_DEFINITION_VERSION, CatalogError,
+    CharacterCatalog, CharacterDefinition, CulturalProfile, HairStyle, PartId, PartSelections,
+    PlayerAppearance, SkeletonFamily, SkinTone, bundled_human_catalog,
 };
 use crate::items::ItemId;
 // Re-exported so existing `creation::AttributeKind` users keep working after
@@ -32,6 +34,105 @@ pub const FOLK_NAMES: &[&str] = &[
 /// fight 1 (see `combat::engine`'s fixed-seed survivability test); #149 may
 /// retune it.
 pub const FREE_POINTS: u32 = 16;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CycleDirection {
+    Previous,
+    Next,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreatorPartField {
+    Body,
+    Face,
+    Hair,
+    Wardrobe,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WardrobeChoice {
+    Haiduc,
+    Cioban,
+}
+
+impl WardrobeChoice {
+    pub const ALL: [Self; 2] = [Self::Haiduc, Self::Cioban];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Haiduc => "Haiduc",
+            Self::Cioban => "Cioban",
+        }
+    }
+
+    /// Applies all authored clothing slots as one indivisible selection.
+    pub fn apply(
+        self,
+        parts: &mut PartSelections,
+        catalog: &CharacterCatalog,
+    ) -> Result<(), CatalogError> {
+        let (torso, legs, feet) = match self {
+            Self::Haiduc => (
+                "human.torso.ie_altita.v1",
+                "human.legs.itari.v1",
+                "human.feet.opinci.v1",
+            ),
+            Self::Cioban => (
+                "human.torso.camasa_ciobaneasca.v1",
+                "human.legs.cioareci.v1",
+                "human.feet.opinci.v1",
+            ),
+        };
+        let torso = catalog_id(catalog, BodyRegion::Torso, torso)?;
+        let legs = catalog_id(catalog, BodyRegion::Legs, legs)?;
+        let feet = catalog_id(catalog, BodyRegion::Feet, feet)?;
+        parts.torso = torso;
+        parts.legs = legs;
+        parts.feet = feet;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CreatorPartOption {
+    id: &'static str,
+    label: &'static str,
+}
+
+const BODY_OPTIONS: [CreatorPartOption; 2] = [
+    CreatorPartOption {
+        id: "human.body.zvelt.v1",
+        label: "Zvelt",
+    },
+    CreatorPartOption {
+        id: "human.body.vanjos.v1",
+        label: "Vânjos",
+    },
+];
+const FACE_OPTIONS: [CreatorPartOption; 2] = [
+    CreatorPartOption {
+        id: "human.face.haiduc.v1",
+        label: "Haiduc",
+    },
+    CreatorPartOption {
+        id: "human.face.cioban.v1",
+        label: "Cioban",
+    },
+];
+const HAIR_OPTIONS: [CreatorPartOption; 3] = [
+    CreatorPartOption {
+        id: "human.hair.plete.v1",
+        label: "Plete",
+    },
+    CreatorPartOption {
+        id: "human.hair.prins.v1",
+        label: "Prins",
+    },
+    CreatorPartOption {
+        id: "human.hair.scurt.v1",
+        label: "Scurt",
+    },
+];
 
 /// The five starting points on the hero-creation path chooser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,21 +298,34 @@ pub struct CharacterDraft {
     choice: HeroChoice,
     custom_name_index: usize,
     attributes: Attributes,
-    appearance: PlayerAppearance,
+    definition: CharacterDefinition,
+    wardrobe: WardrobeChoice,
 }
 
 impl Default for CharacterDraft {
     fn default() -> Self {
-        Self {
-            choice: HeroChoice::Custom,
-            custom_name_index: 0,
-            attributes: Attributes::default(),
-            appearance: PlayerAppearance::default(),
+        match bundled_human_catalog().and_then(Self::default_with_catalog) {
+            Ok(draft) => draft,
+            Err(error) => {
+                panic!("bundled catalog cannot initialize character creation: {error}")
+            }
         }
     }
 }
 
 impl CharacterDraft {
+    pub fn default_with_catalog(catalog: &CharacterCatalog) -> Result<Self, CatalogError> {
+        let draft = Self {
+            choice: HeroChoice::Custom,
+            custom_name_index: 0,
+            attributes: Attributes::default(),
+            definition: default_definition(catalog)?,
+            wardrobe: WardrobeChoice::Haiduc,
+        };
+        catalog.resolve(draft.definition())?;
+        Ok(draft)
+    }
+
     /// The currently selected hero choice.
     pub fn choice(&self) -> HeroChoice {
         self.choice
@@ -219,18 +333,28 @@ impl CharacterDraft {
 
     /// Apply one starter choice, resetting stats and appearance to that
     /// template while keeping the draft editable afterward.
-    pub fn select_choice(&mut self, choice: HeroChoice) {
+    pub fn select_choice(
+        &mut self,
+        choice: HeroChoice,
+        catalog: &CharacterCatalog,
+    ) -> Result<(), CatalogError> {
+        let (attributes, definition, wardrobe) = match choice {
+            HeroChoice::Custom => (
+                Attributes::default(),
+                default_definition(catalog)?,
+                WardrobeChoice::Haiduc,
+            ),
+            HeroChoice::Preset(preset) => (
+                preset.attributes(),
+                definition_for_preset(preset, catalog)?,
+                wardrobe_for_preset(preset),
+            ),
+        };
         self.choice = choice;
-        match choice {
-            HeroChoice::Custom => {
-                self.attributes = Attributes::default();
-                self.appearance = PlayerAppearance::default();
-            }
-            HeroChoice::Preset(preset) => {
-                self.attributes = preset.attributes();
-                self.appearance = preset.appearance();
-            }
-        }
+        self.attributes = attributes;
+        self.definition = definition;
+        self.wardrobe = wardrobe;
+        Ok(())
     }
 
     /// The name shown on the screen and confirmed into the player resource.
@@ -287,17 +411,75 @@ impl CharacterDraft {
 
     /// The appearance as configured so far.
     pub fn appearance(&self) -> PlayerAppearance {
-        self.appearance
+        self.definition.appearance
     }
 
     /// The stable resolved identity represented by the current preview.
-    ///
-    /// The first modular player tracer bullet maps the existing appearance
-    /// controls onto the versioned human definition. Later catalog-backed
-    /// selectors can replace this adapter without changing confirmation or
-    /// persistence consumers.
-    pub fn definition(&self) -> CharacterDefinition {
-        CharacterDefinition::legacy_human(self.appearance)
+    pub fn definition(&self) -> &CharacterDefinition {
+        &self.definition
+    }
+
+    pub fn wardrobe(&self) -> WardrobeChoice {
+        self.wardrobe
+    }
+
+    pub fn part_label(&self, field: CreatorPartField) -> &'static str {
+        match field {
+            CreatorPartField::Body => option_label(&self.definition.parts.body, &BODY_OPTIONS),
+            CreatorPartField::Face => option_label(&self.definition.parts.face, &FACE_OPTIONS),
+            CreatorPartField::Hair => option_label(&self.definition.parts.hair, &HAIR_OPTIONS),
+            CreatorPartField::Wardrobe => self.wardrobe.label(),
+        }
+    }
+
+    pub fn cycle_part(
+        &mut self,
+        field: CreatorPartField,
+        direction: CycleDirection,
+        catalog: &CharacterCatalog,
+    ) -> Result<(), CatalogError> {
+        if field == CreatorPartField::Wardrobe {
+            let wardrobe = cycle_value(self.wardrobe, &WardrobeChoice::ALL, direction);
+            return self.select_wardrobe(wardrobe, catalog);
+        }
+
+        let (current, options) = match field {
+            CreatorPartField::Body => (&self.definition.parts.body, &BODY_OPTIONS[..]),
+            CreatorPartField::Face => (&self.definition.parts.face, &FACE_OPTIONS[..]),
+            CreatorPartField::Hair => (&self.definition.parts.hair, &HAIR_OPTIONS[..]),
+            CreatorPartField::Wardrobe => unreachable!("wardrobe handled above"),
+        };
+        let next = cycle_option(current, options, direction);
+        let mut candidate = self.definition.clone();
+        match field {
+            CreatorPartField::Body => {
+                candidate.parts.body = catalog_id(catalog, BodyRegion::Body, next.id)?;
+            }
+            CreatorPartField::Face => {
+                candidate.parts.face = catalog_id(catalog, BodyRegion::Face, next.id)?;
+            }
+            CreatorPartField::Hair => {
+                candidate.parts.hair = catalog_id(catalog, BodyRegion::Hair, next.id)?;
+            }
+            CreatorPartField::Wardrobe => unreachable!("wardrobe handled above"),
+        }
+        synchronize_appearance_projection(&mut candidate);
+        catalog.resolve(&candidate)?;
+        self.definition = candidate;
+        Ok(())
+    }
+
+    pub fn select_wardrobe(
+        &mut self,
+        wardrobe: WardrobeChoice,
+        catalog: &CharacterCatalog,
+    ) -> Result<(), CatalogError> {
+        let mut candidate = self.definition.clone();
+        wardrobe.apply(&mut candidate.parts, catalog)?;
+        catalog.resolve(&candidate)?;
+        self.definition = candidate;
+        self.wardrobe = wardrobe;
+        Ok(())
     }
 
     /// Current value of one attribute.
@@ -346,51 +528,27 @@ impl CharacterDraft {
     }
 
     pub fn skin_tone(&self) -> SkinTone {
-        self.appearance.skin_tone
+        self.definition.appearance.skin_tone
     }
 
     pub fn next_skin_tone(&mut self) {
-        cycle_next(&mut self.appearance.skin_tone, &SkinTone::ALL);
+        cycle_next(&mut self.definition.appearance.skin_tone, &SkinTone::ALL);
     }
 
     pub fn previous_skin_tone(&mut self) {
-        cycle_previous(&mut self.appearance.skin_tone, &SkinTone::ALL);
-    }
-
-    pub fn build(&self) -> BodyBuild {
-        self.appearance.build
-    }
-
-    pub fn next_build(&mut self) {
-        cycle_next(&mut self.appearance.build, &BodyBuild::ALL);
-    }
-
-    pub fn previous_build(&mut self) {
-        cycle_previous(&mut self.appearance.build, &BodyBuild::ALL);
-    }
-
-    pub fn hair(&self) -> HairStyle {
-        self.appearance.hair
-    }
-
-    pub fn next_hair(&mut self) {
-        cycle_next(&mut self.appearance.hair, &HairStyle::ALL);
-    }
-
-    pub fn previous_hair(&mut self) {
-        cycle_previous(&mut self.appearance.hair, &HairStyle::ALL);
+        cycle_previous(&mut self.definition.appearance.skin_tone, &SkinTone::ALL);
     }
 
     pub fn accent(&self) -> AccentColor {
-        self.appearance.accent
+        self.definition.appearance.accent
     }
 
     pub fn next_accent(&mut self) {
-        cycle_next(&mut self.appearance.accent, &AccentColor::ALL);
+        cycle_next(&mut self.definition.appearance.accent, &AccentColor::ALL);
     }
 
     pub fn previous_accent(&mut self) {
-        cycle_previous(&mut self.appearance.accent, &AccentColor::ALL);
+        cycle_previous(&mut self.definition.appearance.accent, &AccentColor::ALL);
     }
 
     /// Confirm is allowed only when all free points are spent.
@@ -399,8 +557,143 @@ impl CharacterDraft {
     }
 
     /// Restores the fresh custom-draft state.
-    pub fn reset(&mut self) {
-        *self = Self::default();
+    pub fn reset(&mut self, catalog: &CharacterCatalog) -> Result<(), CatalogError> {
+        *self = Self::default_with_catalog(catalog)?;
+        Ok(())
+    }
+}
+
+fn default_definition(catalog: &CharacterCatalog) -> Result<CharacterDefinition, CatalogError> {
+    let mut parts = PartSelections {
+        body: catalog_id(catalog, BodyRegion::Body, "human.body.zvelt.v1")?,
+        face: catalog_id(catalog, BodyRegion::Face, "human.face.haiduc.v1")?,
+        hair: catalog_id(catalog, BodyRegion::Hair, "human.hair.plete.v1")?,
+        facial_hair: None,
+        torso: catalog_id(catalog, BodyRegion::Torso, "human.torso.ie_altita.v1")?,
+        legs: catalog_id(catalog, BodyRegion::Legs, "human.legs.itari.v1")?,
+        feet: catalog_id(catalog, BodyRegion::Feet, "human.feet.opinci.v1")?,
+        waist: None,
+        accessories: Vec::new(),
+    };
+    WardrobeChoice::Haiduc.apply(&mut parts, catalog)?;
+    Ok(CharacterDefinition {
+        version: CHARACTER_DEFINITION_VERSION,
+        seed: None,
+        skeleton: SkeletonFamily::Human,
+        culture: CulturalProfile {
+            tags: vec!["romanian".to_owned()],
+        },
+        parts,
+        appearance: PlayerAppearance {
+            build: BodyBuild::Lean,
+            hair: HairStyle::Long,
+            ..PlayerAppearance::default()
+        },
+    })
+}
+
+fn definition_for_preset(
+    preset: HeroPreset,
+    catalog: &CharacterCatalog,
+) -> Result<CharacterDefinition, CatalogError> {
+    let mut definition = default_definition(catalog)?;
+    definition.appearance = preset.appearance();
+    let (body, face, hair) = match preset {
+        HeroPreset::Haiducul => (
+            "human.body.zvelt.v1",
+            "human.face.haiduc.v1",
+            "human.hair.plete.v1",
+        ),
+        HeroPreset::Voinicul => (
+            "human.body.vanjos.v1",
+            "human.face.haiduc.v1",
+            "human.hair.scurt.v1",
+        ),
+        HeroPreset::Ciobanul => (
+            "human.body.vanjos.v1",
+            "human.face.cioban.v1",
+            "human.hair.prins.v1",
+        ),
+        HeroPreset::UceniculSolomonar => (
+            "human.body.zvelt.v1",
+            "human.face.cioban.v1",
+            "human.hair.plete.v1",
+        ),
+    };
+    definition.parts.body = catalog_id(catalog, BodyRegion::Body, body)?;
+    definition.parts.face = catalog_id(catalog, BodyRegion::Face, face)?;
+    definition.parts.hair = catalog_id(catalog, BodyRegion::Hair, hair)?;
+    wardrobe_for_preset(preset).apply(&mut definition.parts, catalog)?;
+    synchronize_appearance_projection(&mut definition);
+    catalog.resolve(&definition)?;
+    Ok(definition)
+}
+
+fn synchronize_appearance_projection(definition: &mut CharacterDefinition) {
+    definition.appearance.build = match definition.parts.body.as_str() {
+        "human.body.zvelt.v1" => BodyBuild::Lean,
+        "human.body.vanjos.v1" => BodyBuild::Sturdy,
+        _ => definition.appearance.build,
+    };
+    definition.appearance.hair = match definition.parts.hair.as_str() {
+        "human.hair.plete.v1" => HairStyle::Long,
+        "human.hair.prins.v1" => HairStyle::Tied,
+        "human.hair.scurt.v1" => HairStyle::Short,
+        _ => definition.appearance.hair,
+    };
+}
+
+const fn wardrobe_for_preset(preset: HeroPreset) -> WardrobeChoice {
+    match preset {
+        HeroPreset::Haiducul | HeroPreset::Voinicul => WardrobeChoice::Haiduc,
+        HeroPreset::Ciobanul | HeroPreset::UceniculSolomonar => WardrobeChoice::Cioban,
+    }
+}
+
+fn catalog_id(
+    catalog: &CharacterCatalog,
+    region: BodyRegion,
+    value: &'static str,
+) -> Result<PartId, CatalogError> {
+    catalog
+        .compatible_parts(region, SkeletonFamily::Human, &["romanian".to_owned()])
+        .into_iter()
+        .find(|part| part.id.as_str() == value)
+        .map(|part| part.id.clone())
+        .ok_or(CatalogError::MissingRequiredRegion(region))
+}
+
+fn option_label(current: &PartId, options: &[CreatorPartOption]) -> &'static str {
+    options
+        .iter()
+        .find(|option| option.id == current.as_str())
+        .map_or("Necunoscut", |option| option.label)
+}
+
+fn cycle_option<'a>(
+    current: &PartId,
+    options: &'a [CreatorPartOption],
+    direction: CycleDirection,
+) -> &'a CreatorPartOption {
+    let index = options
+        .iter()
+        .position(|option| option.id == current.as_str())
+        .unwrap_or(0);
+    let next = match direction {
+        CycleDirection::Previous => (index + options.len() - 1) % options.len(),
+        CycleDirection::Next => (index + 1) % options.len(),
+    };
+    &options[next]
+}
+
+fn cycle_value<T: Copy + Eq>(value: T, all: &[T], direction: CycleDirection) -> T {
+    let index = all
+        .iter()
+        .position(|candidate| *candidate == value)
+        .map_or(0, |index| index);
+    match direction {
+        CycleDirection::Previous => all[(index + all.len() - 1) % all.len()],
+        CycleDirection::Next => all[(index + 1) % all.len()],
     }
 }
 
@@ -424,12 +717,150 @@ fn cycle_previous<T: Copy + Eq>(value: &mut T, all: &[T]) {
 mod tests {
     use super::*;
 
+    fn catalog() -> CharacterCatalog {
+        CharacterCatalog::from_json(include_str!(
+            "../../assets/fighters/catalog/human-foundation.json"
+        ))
+        .expect("human foundation fixture is valid JSON")
+    }
+
+    #[test]
+    fn cycling_face_changes_the_resolved_part_id() {
+        let catalog = catalog();
+        let mut draft = CharacterDraft::default_with_catalog(&catalog).unwrap();
+        let before = draft.definition().parts.face.clone();
+
+        draft
+            .cycle_part(CreatorPartField::Face, CycleDirection::Next, &catalog)
+            .unwrap();
+
+        assert_ne!(draft.definition().parts.face, before);
+        assert!(catalog.resolve(draft.definition()).is_ok());
+    }
+
+    fn assert_stable_ids_match_appearance_projection(draft: &CharacterDraft) {
+        let expected_build = match draft.definition().parts.body.as_str() {
+            "human.body.zvelt.v1" => BodyBuild::Lean,
+            "human.body.vanjos.v1" => BodyBuild::Sturdy,
+            other => panic!("unexpected creator body ID {other}"),
+        };
+        let expected_hair = match draft.definition().parts.hair.as_str() {
+            "human.hair.plete.v1" => HairStyle::Long,
+            "human.hair.prins.v1" => HairStyle::Tied,
+            "human.hair.scurt.v1" => HairStyle::Short,
+            other => panic!("unexpected creator hair ID {other}"),
+        };
+        assert_eq!(draft.appearance().build, expected_build);
+        assert_eq!(draft.appearance().hair, expected_hair);
+    }
+
+    #[test]
+    fn default_and_ucenicul_ids_match_the_legacy_appearance_projection() {
+        let catalog = catalog();
+        let mut draft = CharacterDraft::default_with_catalog(&catalog).unwrap();
+        assert_stable_ids_match_appearance_projection(&draft);
+
+        draft
+            .select_choice(HeroChoice::Preset(HeroPreset::UceniculSolomonar), &catalog)
+            .unwrap();
+        assert_stable_ids_match_appearance_projection(&draft);
+    }
+
+    #[test]
+    fn every_body_and_hair_cycle_keeps_the_appearance_projection_in_sync() {
+        let catalog = catalog();
+        let mut draft = CharacterDraft::default_with_catalog(&catalog).unwrap();
+
+        for _ in 0..BODY_OPTIONS.len() {
+            assert_stable_ids_match_appearance_projection(&draft);
+            draft
+                .cycle_part(CreatorPartField::Body, CycleDirection::Next, &catalog)
+                .unwrap();
+        }
+        for _ in 0..HAIR_OPTIONS.len() {
+            assert_stable_ids_match_appearance_projection(&draft);
+            draft
+                .cycle_part(CreatorPartField::Hair, CycleDirection::Next, &catalog)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn cioban_wardrobe_changes_a_complete_compatible_set() {
+        let catalog = catalog();
+        let mut draft = CharacterDraft::default_with_catalog(&catalog).unwrap();
+
+        draft
+            .select_wardrobe(WardrobeChoice::Cioban, &catalog)
+            .unwrap();
+
+        assert_eq!(
+            draft.definition().parts.torso.as_str(),
+            "human.torso.camasa_ciobaneasca.v1"
+        );
+        assert_eq!(
+            draft.definition().parts.legs.as_str(),
+            "human.legs.cioareci.v1"
+        );
+        assert_eq!(
+            draft.definition().parts.feet.as_str(),
+            "human.feet.opinci.v1"
+        );
+        assert_eq!(draft.wardrobe(), WardrobeChoice::Cioban);
+        assert!(catalog.resolve(draft.definition()).is_ok());
+    }
+
+    #[test]
+    fn preset_and_reset_keep_catalog_backed_definition_ids() {
+        let catalog = catalog();
+        let mut draft = CharacterDraft::default_with_catalog(&catalog).unwrap();
+
+        draft
+            .select_choice(HeroChoice::Preset(HeroPreset::Ciobanul), &catalog)
+            .unwrap();
+        assert_eq!(
+            draft.definition().parts.body.as_str(),
+            "human.body.vanjos.v1"
+        );
+        assert_eq!(
+            draft.definition().parts.face.as_str(),
+            "human.face.cioban.v1"
+        );
+        assert_eq!(
+            draft.definition().parts.hair.as_str(),
+            "human.hair.prins.v1"
+        );
+        assert!(catalog.resolve(draft.definition()).is_ok());
+
+        draft.reset(&catalog).unwrap();
+        assert_eq!(
+            draft.definition().parts.body.as_str(),
+            "human.body.zvelt.v1"
+        );
+        assert_eq!(
+            draft.definition().parts.face.as_str(),
+            "human.face.haiduc.v1"
+        );
+        assert_eq!(
+            draft.definition().parts.hair.as_str(),
+            "human.hair.plete.v1"
+        );
+        assert!(catalog.resolve(draft.definition()).is_ok());
+    }
+
     #[test]
     fn fresh_draft_is_custom_with_base_attributes_and_default_appearance() {
         let draft = CharacterDraft::default();
         assert_eq!(draft.choice(), HeroChoice::Custom);
         assert_eq!(draft.attributes(), Attributes::default());
-        assert_eq!(draft.appearance(), PlayerAppearance::default());
+        assert_eq!(
+            draft.appearance(),
+            PlayerAppearance {
+                build: BodyBuild::Lean,
+                hair: HairStyle::Long,
+                ..PlayerAppearance::default()
+            }
+        );
         assert_eq!(draft.points_spent(), 0);
         assert_eq!(draft.points_remaining(), FREE_POINTS);
         assert_eq!(draft.name(), FOLK_NAMES[0]);
@@ -464,11 +895,14 @@ mod tests {
     /// carry it and the draft floors magie at 0, never normalizing upward.
     #[test]
     fn a_magie_zero_preset_is_a_valid_non_caster() {
+        let catalog = catalog();
         let attrs = HeroPreset::Voinicul.attributes();
         assert_eq!(attrs.magie, 0);
         assert_eq!(crate::character::stats::max_mana(&attrs), 0);
         let mut draft = CharacterDraft::default();
-        draft.select_choice(HeroChoice::Preset(HeroPreset::Voinicul));
+        draft
+            .select_choice(HeroChoice::Preset(HeroPreset::Voinicul), &catalog)
+            .unwrap();
         assert!(
             !draft.can_decrease(AttributeKind::Magie),
             "magie floors at 0"
@@ -478,8 +912,11 @@ mod tests {
 
     #[test]
     fn selecting_a_preset_populates_name_attributes_appearance_and_loadout() {
+        let catalog = catalog();
         let mut draft = CharacterDraft::default();
-        draft.select_choice(HeroChoice::Preset(HeroPreset::Ciobanul));
+        draft
+            .select_choice(HeroChoice::Preset(HeroPreset::Ciobanul), &catalog)
+            .unwrap();
         assert_eq!(draft.choice(), HeroChoice::Preset(HeroPreset::Ciobanul));
         assert_eq!(draft.name(), "Ciobanul");
         assert_eq!(draft.attributes(), HeroPreset::Ciobanul.attributes());
@@ -494,12 +931,22 @@ mod tests {
 
     #[test]
     fn switching_back_to_custom_restores_the_custom_baseline() {
+        let catalog = catalog();
         let mut draft = CharacterDraft::default();
-        draft.select_choice(HeroChoice::Preset(HeroPreset::Voinicul));
-        draft.select_choice(HeroChoice::Custom);
+        draft
+            .select_choice(HeroChoice::Preset(HeroPreset::Voinicul), &catalog)
+            .unwrap();
+        draft.select_choice(HeroChoice::Custom, &catalog).unwrap();
         assert_eq!(draft.choice(), HeroChoice::Custom);
         assert_eq!(draft.attributes(), Attributes::default());
-        assert_eq!(draft.appearance(), PlayerAppearance::default());
+        assert_eq!(
+            draft.appearance(),
+            PlayerAppearance {
+                build: BodyBuild::Lean,
+                hair: HairStyle::Long,
+                ..PlayerAppearance::default()
+            }
+        );
         assert_eq!(draft.name(), FOLK_NAMES[0]);
         assert_eq!(draft.points_remaining(), FREE_POINTS);
     }
@@ -586,23 +1033,13 @@ mod tests {
     }
 
     #[test]
-    fn appearance_cycles_wrap_for_every_field() {
+    fn palette_cycles_wrap_for_every_field() {
         let mut draft = CharacterDraft::default();
 
         draft.previous_skin_tone();
         assert_eq!(draft.skin_tone(), SkinTone::Fair);
         draft.next_skin_tone();
         assert_eq!(draft.skin_tone(), SkinTone::Warm);
-
-        draft.previous_build();
-        assert_eq!(draft.build(), BodyBuild::Lean);
-        draft.next_build();
-        assert_eq!(draft.build(), BodyBuild::Balanced);
-
-        draft.previous_hair();
-        assert_eq!(draft.hair(), HairStyle::Tied);
-        draft.next_hair();
-        assert_eq!(draft.hair(), HairStyle::Braided);
 
         draft.previous_accent();
         assert_eq!(draft.accent(), AccentColor::Storm);
@@ -636,11 +1073,14 @@ mod tests {
 
     #[test]
     fn reset_restores_the_fresh_custom_draft() {
+        let catalog = catalog();
         let mut draft = CharacterDraft::default();
-        draft.select_choice(HeroChoice::Preset(HeroPreset::Haiducul));
+        draft
+            .select_choice(HeroChoice::Preset(HeroPreset::Haiducul), &catalog)
+            .unwrap();
         draft.previous_accent();
         draft.decrease(AttributeKind::Noroc);
-        draft.reset();
+        draft.reset(&catalog).unwrap();
         assert_eq!(draft, CharacterDraft::default());
         assert_eq!(draft.points_remaining(), FREE_POINTS);
     }

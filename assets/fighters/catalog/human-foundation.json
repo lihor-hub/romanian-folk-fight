@@ -1,144 +1,398 @@
 {
-  "version": 2,
+  "version": 3,
   "parts": [
     {
       "id": "human.body.foundation.v1",
       "region": "body",
-      "asset_path": "fighters/human/runtime/upper_arm_front.png",
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "foundation"],
-      "attachment": { "point": "upper_arm_front", "pivot": [21.0, 25.0], "draw_layer": 0 },
-      "material": {
-        "mask_path": "fighters/human/runtime/upper_arm_front_mask.png",
-        "normal_path": "fighters/human/runtime/upper_arm_front_normal.png",
-        "shadow_path": "fighters/human/runtime/upper_arm_front_shadow.png",
-        "palette": ["cloth", "embroidery"],
-        "depth_offset": 0.04,
-        "highlight": 0.18
-      },
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/upper_arm_back.png",
+          "attachment": { "point": "upper_arm_back", "pivot": [-20.0, 26.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/upper_arm_back_mask.png", "normal_path": "fighters/human/runtime/upper_arm_back_normal.png", "shadow_path": "fighters/human/runtime/upper_arm_back_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": -0.08, "highlight": 0.18 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/forearm_back.png",
+          "attachment": { "point": "forearm_back", "pivot": [-28.0, -2.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/forearm_back_mask.png", "normal_path": "fighters/human/runtime/forearm_back_normal.png", "shadow_path": "fighters/human/runtime/forearm_back_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": -0.07, "highlight": 0.18 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/hand_back.png",
+          "attachment": { "point": "hand_back", "pivot": [-32.0, -26.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/hand_back_mask.png", "normal_path": "fighters/human/runtime/hand_back_normal.png", "shadow_path": "fighters/human/runtime/hand_back_shadow.png", "palette": ["skin"], "depth_offset": -0.06, "highlight": 0.14 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/upper_arm_front.png",
+          "attachment": { "point": "upper_arm_front", "pivot": [21.0, 25.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/upper_arm_front_mask.png", "normal_path": "fighters/human/runtime/upper_arm_front_normal.png", "shadow_path": "fighters/human/runtime/upper_arm_front_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": 0.04, "highlight": 0.18 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/forearm_front.png",
+          "attachment": { "point": "forearm_front", "pivot": [29.0, -3.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/forearm_front_mask.png", "normal_path": "fighters/human/runtime/forearm_front_normal.png", "shadow_path": "fighters/human/runtime/forearm_front_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": 0.05, "highlight": 0.18 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/hand_front.png",
+          "attachment": { "point": "hand_front", "pivot": [33.0, -28.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/hand_front_mask.png", "normal_path": "fighters/human/runtime/hand_front_normal.png", "shadow_path": "fighters/human/runtime/hand_front_shadow.png", "palette": ["skin"], "depth_offset": 0.06, "highlight": 0.14 }
+        }
+      ],
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.body.zvelt.v1",
+      "region": "body",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "haiduc", "zvelt"],
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/haiduc/upper_arm_back.png",
+          "attachment": { "point": "upper_arm_back", "pivot": [-20.0, 26.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/haiduc/upper_arm_back_mask.png", "normal_path": "fighters/human/runtime/haiduc/upper_arm_back_normal.png", "shadow_path": "fighters/human/runtime/haiduc/upper_arm_back_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": -0.08, "highlight": 0.18 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/haiduc/forearm_back.png",
+          "attachment": { "point": "forearm_back", "pivot": [-28.0, -2.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/haiduc/forearm_back_mask.png", "normal_path": "fighters/human/runtime/haiduc/forearm_back_normal.png", "shadow_path": "fighters/human/runtime/haiduc/forearm_back_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": -0.07, "highlight": 0.18 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/haiduc/hand_back.png",
+          "attachment": { "point": "hand_back", "pivot": [-32.0, -26.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/haiduc/hand_back_mask.png", "normal_path": "fighters/human/runtime/haiduc/hand_back_normal.png", "shadow_path": "fighters/human/runtime/haiduc/hand_back_shadow.png", "palette": ["skin"], "depth_offset": -0.06, "highlight": 0.14 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/haiduc/upper_arm_front.png",
+          "attachment": { "point": "upper_arm_front", "pivot": [21.0, 25.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/haiduc/upper_arm_front_mask.png", "normal_path": "fighters/human/runtime/haiduc/upper_arm_front_normal.png", "shadow_path": "fighters/human/runtime/haiduc/upper_arm_front_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": 0.04, "highlight": 0.18 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/haiduc/forearm_front.png",
+          "attachment": { "point": "forearm_front", "pivot": [29.0, -3.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/haiduc/forearm_front_mask.png", "normal_path": "fighters/human/runtime/haiduc/forearm_front_normal.png", "shadow_path": "fighters/human/runtime/haiduc/forearm_front_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": 0.05, "highlight": 0.18 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/haiduc/hand_front.png",
+          "attachment": { "point": "hand_front", "pivot": [33.0, -28.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/haiduc/hand_front_mask.png", "normal_path": "fighters/human/runtime/haiduc/hand_front_normal.png", "shadow_path": "fighters/human/runtime/haiduc/hand_front_shadow.png", "palette": ["skin"], "depth_offset": 0.06, "highlight": 0.14 }
+        }
+      ],
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.body.vanjos.v1",
+      "region": "body",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "cioban", "vanjos"],
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/cioban/upper_arm_back.png",
+          "attachment": { "point": "upper_arm_back", "pivot": [-20.0, 26.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/cioban/upper_arm_back_mask.png", "normal_path": "fighters/human/runtime/cioban/upper_arm_back_normal.png", "shadow_path": "fighters/human/runtime/cioban/upper_arm_back_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": -0.08, "highlight": 0.18 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/cioban/forearm_back.png",
+          "attachment": { "point": "forearm_back", "pivot": [-28.0, -2.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/cioban/forearm_back_mask.png", "normal_path": "fighters/human/runtime/cioban/forearm_back_normal.png", "shadow_path": "fighters/human/runtime/cioban/forearm_back_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": -0.07, "highlight": 0.18 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/cioban/hand_back.png",
+          "attachment": { "point": "hand_back", "pivot": [-32.0, -26.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/cioban/hand_back_mask.png", "normal_path": "fighters/human/runtime/cioban/hand_back_normal.png", "shadow_path": "fighters/human/runtime/cioban/hand_back_shadow.png", "palette": ["skin"], "depth_offset": -0.06, "highlight": 0.14 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/cioban/upper_arm_front.png",
+          "attachment": { "point": "upper_arm_front", "pivot": [21.0, 25.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/cioban/upper_arm_front_mask.png", "normal_path": "fighters/human/runtime/cioban/upper_arm_front_normal.png", "shadow_path": "fighters/human/runtime/cioban/upper_arm_front_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": 0.04, "highlight": 0.18 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/cioban/forearm_front.png",
+          "attachment": { "point": "forearm_front", "pivot": [29.0, -3.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/cioban/forearm_front_mask.png", "normal_path": "fighters/human/runtime/cioban/forearm_front_normal.png", "shadow_path": "fighters/human/runtime/cioban/forearm_front_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": 0.05, "highlight": 0.18 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/cioban/hand_front.png",
+          "attachment": { "point": "hand_front", "pivot": [33.0, -28.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/cioban/hand_front_mask.png", "normal_path": "fighters/human/runtime/cioban/hand_front_normal.png", "shadow_path": "fighters/human/runtime/cioban/hand_front_shadow.png", "palette": ["skin"], "depth_offset": 0.06, "highlight": 0.14 }
+        }
+      ],
       "exclusions": [],
       "companions": []
     },
     {
       "id": "human.face.default.v1",
       "region": "face",
-      "asset_path": "fighters/human/runtime/head.png",
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "foundation"],
-      "attachment": { "point": "head", "pivot": [4.0, 60.0], "draw_layer": 1 },
-      "material": {
-        "mask_path": "fighters/human/runtime/head_mask.png",
-        "normal_path": "fighters/human/runtime/head_normal.png",
-        "shadow_path": "fighters/human/runtime/head_shadow.png",
-        "palette": ["skin"],
-        "depth_offset": 0.08,
-        "highlight": 0.14
-      },
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/head.png",
+          "attachment": { "point": "head", "pivot": [4.0, 60.0], "draw_layer": 1 },
+          "material": { "mask_path": "fighters/human/runtime/head_mask.png", "normal_path": "fighters/human/runtime/head_normal.png", "shadow_path": "fighters/human/runtime/head_shadow.png", "palette": ["skin"], "depth_offset": 0.08, "highlight": 0.14 }
+        }
+      ],
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.face.haiduc.v1",
+      "region": "face",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "haiduc"],
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/haiduc/head.png",
+          "attachment": { "point": "head", "pivot": [4.0, 60.0], "draw_layer": 1 },
+          "material": { "mask_path": "fighters/human/runtime/haiduc/head_mask.png", "normal_path": "fighters/human/runtime/haiduc/head_normal.png", "shadow_path": "fighters/human/runtime/haiduc/head_shadow.png", "palette": ["skin"], "depth_offset": 0.08, "highlight": 0.14 }
+        }
+      ],
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.face.cioban.v1",
+      "region": "face",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "cioban"],
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/cioban/head.png",
+          "attachment": { "point": "head", "pivot": [4.0, 60.0], "draw_layer": 1 },
+          "material": { "mask_path": "fighters/human/runtime/cioban/head_mask.png", "normal_path": "fighters/human/runtime/cioban/head_normal.png", "shadow_path": "fighters/human/runtime/cioban/head_shadow.png", "palette": ["skin"], "depth_offset": 0.08, "highlight": 0.14 }
+        }
+      ],
       "exclusions": [],
       "companions": []
     },
     {
       "id": "human.hair.braided.v1",
       "region": "hair",
-      "asset_path": "fighters/human/runtime/hair.png",
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "braided"],
-      "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
-      "material": {
-        "mask_path": "fighters/human/runtime/hair_mask.png",
-        "normal_path": "fighters/human/runtime/hair_normal.png",
-        "shadow_path": "fighters/human/runtime/hair_shadow.png",
-        "palette": ["hair"],
-        "depth_offset": 0.16,
-        "highlight": 0.2
-      },
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/hair.png",
+          "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
+          "material": { "mask_path": "fighters/human/runtime/hair_mask.png", "normal_path": "fighters/human/runtime/hair_normal.png", "shadow_path": "fighters/human/runtime/hair_shadow.png", "palette": ["hair"], "depth_offset": 0.16, "highlight": 0.2 }
+        }
+      ],
       "exclusions": [],
       "companions": []
     },
     {
       "id": "human.hair.long.v1",
       "region": "hair",
-      "asset_path": "fighters/human/runtime/hair.png",
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "long_hair"],
-      "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
-      "material": {},
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/hair.png",
+          "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
+          "material": {}
+        }
+      ],
       "exclusions": [],
       "companions": []
     },
     {
       "id": "human.hair.short.v1",
       "region": "hair",
-      "asset_path": "fighters/human/runtime/hair.png",
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "short_hair"],
-      "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
-      "material": {},
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/hair.png",
+          "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
+          "material": {}
+        }
+      ],
       "exclusions": [],
       "companions": []
     },
     {
       "id": "human.hair.tied.v1",
       "region": "hair",
-      "asset_path": "fighters/human/runtime/hair.png",
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "tied_hair"],
-      "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
-      "material": {},
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/hair.png",
+          "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
+          "material": {}
+        }
+      ],
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.hair.plete.v1",
+      "region": "hair",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "haiduc", "plete"],
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/haiduc/hair.png",
+          "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
+          "material": { "mask_path": "fighters/human/runtime/haiduc/hair_mask.png", "normal_path": "fighters/human/runtime/haiduc/hair_normal.png", "shadow_path": "fighters/human/runtime/haiduc/hair_shadow.png", "palette": ["hair"], "depth_offset": 0.16, "highlight": 0.2 }
+        }
+      ],
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.hair.prins.v1",
+      "region": "hair",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "cioban", "prins"],
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/cioban/hair.png",
+          "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
+          "material": { "mask_path": "fighters/human/runtime/cioban/hair_mask.png", "normal_path": "fighters/human/runtime/cioban/hair_normal.png", "shadow_path": "fighters/human/runtime/cioban/hair_shadow.png", "palette": ["hair"], "depth_offset": 0.16, "highlight": 0.2 }
+        }
+      ],
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.hair.scurt.v1",
+      "region": "hair",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "scurt"],
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/shared/hair_scurt.png",
+          "attachment": { "point": "hair", "pivot": [1.0, 71.0], "draw_layer": 2 },
+          "material": { "mask_path": "fighters/human/runtime/shared/hair_scurt_mask.png", "normal_path": "fighters/human/runtime/shared/hair_scurt_normal.png", "shadow_path": "fighters/human/runtime/shared/hair_scurt_shadow.png", "palette": ["hair"], "depth_offset": 0.16, "highlight": 0.2 }
+        }
+      ],
       "exclusions": [],
       "companions": []
     },
     {
       "id": "human.torso.linen.v1",
       "region": "torso",
-      "asset_path": "fighters/human/runtime/torso.png",
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "linen"],
-      "attachment": { "point": "torso", "pivot": [0.0, 6.0], "draw_layer": 3 },
-      "material": {
-        "mask_path": "fighters/human/runtime/torso_mask.png",
-        "normal_path": "fighters/human/runtime/torso_normal.png",
-        "shadow_path": "fighters/human/runtime/torso_shadow.png",
-        "palette": ["cloth", "embroidery"],
-        "depth_offset": 0.1,
-        "highlight": 0.18
-      },
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/torso.png",
+          "attachment": { "point": "torso", "pivot": [0.0, 6.0], "draw_layer": 3 },
+          "material": { "mask_path": "fighters/human/runtime/torso_mask.png", "normal_path": "fighters/human/runtime/torso_normal.png", "shadow_path": "fighters/human/runtime/torso_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": 0.1, "highlight": 0.18 }
+        }
+      ],
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.torso.ie_altita.v1",
+      "region": "torso",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "haiduc", "ie", "altita"],
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/haiduc/torso.png",
+          "attachment": { "point": "torso", "pivot": [0.0, 6.0], "draw_layer": 3 },
+          "material": { "mask_path": "fighters/human/runtime/haiduc/torso_mask.png", "normal_path": "fighters/human/runtime/haiduc/torso_normal.png", "shadow_path": "fighters/human/runtime/haiduc/torso_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": 0.1, "highlight": 0.18 }
+        }
+      ],
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.torso.camasa_ciobaneasca.v1",
+      "region": "torso",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "cioban", "camasa_ciobaneasca"],
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/cioban/torso.png",
+          "attachment": { "point": "torso", "pivot": [0.0, 6.0], "draw_layer": 3 },
+          "material": { "mask_path": "fighters/human/runtime/cioban/torso_mask.png", "normal_path": "fighters/human/runtime/cioban/torso_normal.png", "shadow_path": "fighters/human/runtime/cioban/torso_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": 0.1, "highlight": 0.18 }
+        }
+      ],
       "exclusions": [],
       "companions": []
     },
     {
       "id": "human.legs.itari.v1",
       "region": "legs",
-      "asset_path": "fighters/human/runtime/thigh_front.png",
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "itari"],
-      "attachment": { "point": "thigh_front", "pivot": [13.0, -42.0], "draw_layer": 0 },
-      "material": {
-        "mask_path": "fighters/human/runtime/thigh_front_mask.png",
-        "normal_path": "fighters/human/runtime/thigh_front_normal.png",
-        "shadow_path": "fighters/human/runtime/thigh_front_shadow.png",
-        "palette": ["cloth", "embroidery"],
-        "depth_offset": 0.04,
-        "highlight": 0.14
-      },
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/haiduc/thigh_back.png",
+          "attachment": { "point": "thigh_back", "pivot": [-13.0, -42.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/haiduc/thigh_back_mask.png", "normal_path": "fighters/human/runtime/haiduc/thigh_back_normal.png", "shadow_path": "fighters/human/runtime/haiduc/thigh_back_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": -0.05, "highlight": 0.14 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/haiduc/shin_back.png",
+          "attachment": { "point": "shin_back", "pivot": [-15.0, -76.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/haiduc/shin_back_mask.png", "normal_path": "fighters/human/runtime/haiduc/shin_back_normal.png", "shadow_path": "fighters/human/runtime/haiduc/shin_back_shadow.png", "palette": ["cloth", "embroidery", "leather"], "depth_offset": -0.04, "highlight": 0.14 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/haiduc/thigh_front.png",
+          "attachment": { "point": "thigh_front", "pivot": [13.0, -42.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/haiduc/thigh_front_mask.png", "normal_path": "fighters/human/runtime/haiduc/thigh_front_normal.png", "shadow_path": "fighters/human/runtime/haiduc/thigh_front_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": 0.04, "highlight": 0.14 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/haiduc/shin_front.png",
+          "attachment": { "point": "shin_front", "pivot": [15.0, -76.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/haiduc/shin_front_mask.png", "normal_path": "fighters/human/runtime/haiduc/shin_front_normal.png", "shadow_path": "fighters/human/runtime/haiduc/shin_front_shadow.png", "palette": ["cloth", "embroidery", "leather"], "depth_offset": 0.05, "highlight": 0.14 }
+        }
+      ],
+      "exclusions": [],
+      "companions": []
+    },
+    {
+      "id": "human.legs.cioareci.v1",
+      "region": "legs",
+      "skeletons": ["human"],
+      "cultural_tags": ["romanian", "cioban", "cioareci"],
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/cioban/thigh_back.png",
+          "attachment": { "point": "thigh_back", "pivot": [-13.0, -42.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/cioban/thigh_back_mask.png", "normal_path": "fighters/human/runtime/cioban/thigh_back_normal.png", "shadow_path": "fighters/human/runtime/cioban/thigh_back_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": -0.05, "highlight": 0.14 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/cioban/shin_back.png",
+          "attachment": { "point": "shin_back", "pivot": [-15.0, -76.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/cioban/shin_back_mask.png", "normal_path": "fighters/human/runtime/cioban/shin_back_normal.png", "shadow_path": "fighters/human/runtime/cioban/shin_back_shadow.png", "palette": ["cloth", "embroidery", "leather"], "depth_offset": -0.04, "highlight": 0.14 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/cioban/thigh_front.png",
+          "attachment": { "point": "thigh_front", "pivot": [13.0, -42.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/cioban/thigh_front_mask.png", "normal_path": "fighters/human/runtime/cioban/thigh_front_normal.png", "shadow_path": "fighters/human/runtime/cioban/thigh_front_shadow.png", "palette": ["cloth", "embroidery"], "depth_offset": 0.04, "highlight": 0.14 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/cioban/shin_front.png",
+          "attachment": { "point": "shin_front", "pivot": [15.0, -76.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/cioban/shin_front_mask.png", "normal_path": "fighters/human/runtime/cioban/shin_front_normal.png", "shadow_path": "fighters/human/runtime/cioban/shin_front_shadow.png", "palette": ["cloth", "embroidery", "leather"], "depth_offset": 0.05, "highlight": 0.14 }
+        }
+      ],
       "exclusions": [],
       "companions": []
     },
     {
       "id": "human.feet.opinci.v1",
       "region": "feet",
-      "asset_path": "fighters/human/runtime/foot_front.png",
       "skeletons": ["human"],
       "cultural_tags": ["romanian", "opinci"],
-      "attachment": { "point": "foot_front", "pivot": [23.0, -102.0], "draw_layer": 0 },
-      "material": {
-        "mask_path": "fighters/human/runtime/foot_front_mask.png",
-        "normal_path": "fighters/human/runtime/foot_front_normal.png",
-        "shadow_path": "fighters/human/runtime/foot_front_shadow.png",
-        "palette": ["leather", "cloth"],
-        "depth_offset": -0.04,
-        "highlight": 0.1
-      },
+      "layers": [
+        {
+          "asset_path": "fighters/human/runtime/shared/foot_back.png",
+          "attachment": { "point": "foot_back", "pivot": [-8.0, -102.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/shared/foot_back_mask.png", "normal_path": "fighters/human/runtime/shared/foot_back_normal.png", "shadow_path": "fighters/human/runtime/shared/foot_back_shadow.png", "palette": ["leather", "cloth"], "depth_offset": -0.05, "highlight": 0.1 }
+        },
+        {
+          "asset_path": "fighters/human/runtime/shared/foot_front.png",
+          "attachment": { "point": "foot_front", "pivot": [23.0, -102.0], "draw_layer": 0 },
+          "material": { "mask_path": "fighters/human/runtime/shared/foot_front_mask.png", "normal_path": "fighters/human/runtime/shared/foot_front_normal.png", "shadow_path": "fighters/human/runtime/shared/foot_front_shadow.png", "palette": ["leather", "cloth"], "depth_offset": -0.04, "highlight": 0.1 }
+        }
+      ],
       "exclusions": [],
       "companions": []
     }

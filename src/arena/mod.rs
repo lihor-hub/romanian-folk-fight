@@ -570,10 +570,13 @@ mod tests {
     use crate::core::CorePlugin;
     use crate::cutout::{
         CutoutPartKind, CutoutPartMarker, CutoutRig, CutoutTemplate, boss_template, enemy_template,
-        gear_sprite, human_template, human_template_for,
+        gear_sprite, human_template,
     };
     use crate::items::{ItemId, Slot, item_visual};
-    use crate::roster::{CampaignSeed, LADDER, PreparedEncounter, SeededOpponent};
+    use crate::roster::{
+        ALTERNATE_UNLOCKED_HAIR_CAMPAIGN_SEED, CampaignSeed, LADDER, PreparedEncounter,
+        SeededOpponent,
+    };
     use bevy::state::app::StatesPlugin;
 
     const PLAYER_ATTRIBUTES: Attributes = Attributes {
@@ -981,29 +984,22 @@ mod tests {
             .query_filtered::<Entity, With<PlayerFighter>>()
             .single(app.world())
             .expect("player fighter exists");
-        let expected_torso = human_template_for(definition_appearance)
-            .parts
-            .into_iter()
-            .find(|part| part.kind == CutoutPartKind::Torso)
-            .expect("human template has a torso");
         let part_parents = cutout_part_parents(&mut app);
-        let torso_size = app
+        let rendered_hair_id = app
             .world_mut()
-            .query::<(
-                Entity,
-                &CutoutPartMarker,
-                &crate::cutout::CutoutPartRestPose,
-            )>()
+            .query::<(Entity, &CutoutPartMarker)>()
             .iter(app.world())
-            .find_map(|(entity, marker, rest)| {
-                (marker.kind == CutoutPartKind::Torso
+            .find_map(|(entity, marker)| {
+                (marker.kind == CutoutPartKind::Hair
                     && cutout_rig_owner(entity, |part| part_parents.get(&part).copied()) == player)
-                    .then_some(rest.size)
+                    .then(|| marker.source_id.clone())
+                    .flatten()
             })
-            .expect("player rig has a torso");
+            .expect("player rig has catalog-backed hair");
 
         assert_eq!(
-            torso_size, expected_torso.size,
+            rendered_hair_id.as_str(),
+            "human.hair.tied.v1",
             "the persisted definition, not its legacy projection, drives the arena rig"
         );
     }
@@ -1061,7 +1057,10 @@ mod tests {
 
         let mut first_entry = test_app_at_with_campaign_seed(LadderProgress(0), 0);
         let mut repeated_entry = test_app_at_with_campaign_seed(LadderProgress(0), 0);
-        let mut alternate_entry = test_app_at_with_campaign_seed(LadderProgress(0), 1);
+        let mut alternate_entry = test_app_at_with_campaign_seed(
+            LadderProgress(0),
+            ALTERNATE_UNLOCKED_HAIR_CAMPAIGN_SEED,
+        );
 
         let first = generated(&mut first_entry);
         let repeated = generated(&mut repeated_entry);
@@ -1163,7 +1162,7 @@ mod tests {
             .iter_mut()
             .find(|part| part["id"] == "human.hair.long.v1")
             .expect("catalog has unrelated long hair");
-        unrelated_long_hair["asset_path"] =
+        unrelated_long_hair["layers"][0]["asset_path"] =
             serde_json::json!("fighters/human/runtime/not-registered.png");
 
         let catalog = crate::character::load_human_catalog(&value.to_string());

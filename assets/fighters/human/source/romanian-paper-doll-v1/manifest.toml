@@ -1,0 +1,37 @@
+# Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs.
+version = 1
+
+[[ignore]]
+path = "README.md"
+reason = "Production provenance, cultural-reference, extraction, rights, and authoring contract for this source master."
+
+[[record]]
+id = "fighters.human.source.romanian-paper-doll-v1"
+path = "romanian-paper-doll-v1.png"
+kind = "image"
+category = "fighter-source-sheet"
+status = "source"
+provenance = "derived-preview-of-tracked-openai-generated-masters"
+license = "Same as project assets unless superseded"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+dimensions = [768, 922]
+
+[[record]]
+id = "fighters.human.source.romanian-paper-doll-v1-human-master"
+path = "human-chroma-master.png"
+kind = "image"
+category = "fighter-source-sheet"
+status = "source"
+provenance = "sensibly-quantized-openai-built-in-image-generation-master"
+license = "Same as project assets unless superseded"
+dimensions = [1536, 1024]
+
+[[record]]
+id = "fighters.human.source.romanian-paper-doll-v1-equipment-master"
+path = "equipment-chroma-master.png"
+kind = "image"
+category = "fighter-source-sheet"
+status = "source"
+provenance = "sensibly-quantized-openai-built-in-image-generation-master"
+license = "Same as project assets unless superseded"
+dimensions = [1717, 916]

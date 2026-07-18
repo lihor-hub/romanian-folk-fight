@@ -9,16 +9,16 @@ pub mod stats;
 
 pub use catalog::{
     AttachmentMetadata, BodyRegion, CHARACTER_CATALOG_VERSION, CatalogError, CharacterCatalog,
-    MaterialMetadata, PaletteRegion, PartRecord, ResolvedCharacter, bundled_human_catalog,
-    load_human_catalog,
+    MaterialMetadata, PaletteRegion, PartLayerRecord, PartRecord, ResolvedCharacter,
+    bundled_human_catalog, load_human_catalog, required_attachment_points,
 };
 pub use definition::{
     CHARACTER_DEFINITION_VERSION, CharacterDefinition, CulturalProfile, PartId, PartIdError,
     PartSelections, SkeletonFamily,
 };
 pub use generation::{
-    GenerationError, GenerationProfile, GenerationSlot, WeightedPart, fallback_human,
-    generate_character,
+    GenerationError, GenerationProfile, GenerationSlot, WeightedPart, WeightedWardrobe,
+    fallback_human, generate_character,
 };
 
 use bevy::prelude::*;

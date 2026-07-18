@@ -6,9 +6,9 @@
 # sidecars, these are not at risk of drifting out of sync by construction --
 # a future value change there still requires a human to update this sidecar
 # alongside it, though; `cargo xtask assets check` does not cross-reference
-# the two. `crop` is "unknown" for the same reason documented in
-# `fighters/human/runtime/manifest.toml`. Two-part attachments (feet) list
-# both attachment points comma-separated.
+# the two. New Romanian paper-doll records use exact authoritative-master
+# crop rectangles; legacy records retain `crop = "unknown"`. Two-part
+# attachments (feet) list both attachment points comma-separated.
 version = 1
 
 [[record]]
@@ -17,15 +17,15 @@ path = "bata_ciobaneasca.png"
 kind = "image"
 category = "gear-runtime-part"
 status = "runtime"
-provenance = "cropped-from-source-sheet"
-source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+provenance = "cropped-from-openai-generated-source-sheet"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-equipment-master"
 license = "Same as project assets unless superseded"
-dimensions = [56, 489]
-sampler = "linear"
+dimensions = [36, 272]
+sampler = "nearest"
 attachment = "hand_front"
 pivot = [-2.0, 42.0]
 display = [18.0, 136.0]
-crop = "unknown"
+crop = "83,98,136,731"
 
 [[record]]
 id = "fighters.gear.runtime.topor-de-padurar"
@@ -33,15 +33,15 @@ path = "topor_de_padurar.png"
 kind = "image"
 category = "gear-runtime-part"
 status = "runtime"
-provenance = "cropped-from-source-sheet"
-source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+provenance = "cropped-from-openai-generated-source-sheet"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-equipment-master"
 license = "Same as project assets unless superseded"
-dimensions = [96, 183]
-sampler = "linear"
+dimensions = [84, 164]
+sampler = "nearest"
 attachment = "hand_front"
 pivot = [8.0, 20.0]
 display = [42.0, 82.0]
-crop = "unknown"
+crop = "326,221,193,517"
 
 [[record]]
 id = "fighters.gear.runtime.palos"
@@ -113,15 +113,15 @@ path = "cojoc_gros.png"
 kind = "image"
 category = "gear-runtime-part"
 status = "runtime"
-provenance = "cropped-from-source-sheet"
-source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+provenance = "cropped-from-openai-generated-source-sheet"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-equipment-master"
 license = "Same as project assets unless superseded"
-dimensions = [144, 161]
-sampler = "linear"
+dimensions = [108, 144]
+sampler = "nearest"
 attachment = "torso"
 pivot = [0.0, 2.0]
 display = [54.0, 72.0]
-crop = "unknown"
+crop = "566,211,376,535"
 
 [[record]]
 id = "fighters.gear.runtime.camasa-de-zale"
@@ -145,15 +145,15 @@ path = "caciula_de_oaie.png"
 kind = "image"
 category = "gear-runtime-part"
 status = "runtime"
-provenance = "cropped-from-source-sheet"
-source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+provenance = "cropped-from-openai-generated-source-sheet"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-equipment-master"
 license = "Same as project assets unless superseded"
-dimensions = [92, 90]
-sampler = "linear"
+dimensions = [80, 60]
+sampler = "nearest"
 attachment = "head"
 pivot = [0.0, 18.0]
 display = [40.0, 30.0]
-crop = "unknown"
+crop = "998,290,300,346"
 
 [[record]]
 id = "fighters.gear.runtime.coif-de-ostean"
@@ -177,15 +177,15 @@ path = "opinci_iuti.png"
 kind = "image"
 category = "gear-runtime-part"
 status = "runtime"
-provenance = "cropped-from-source-sheet"
-source_sheet = "fighters.gear.source.starter-gear-cutout-parts-v1"
+provenance = "cropped-from-openai-generated-source-sheet"
+source_sheet = "fighters.human.source.romanian-paper-doll-v1-equipment-master"
 license = "Same as project assets unless superseded"
-dimensions = [121, 73]
-sampler = "linear"
+dimensions = [60, 36]
+sampler = "nearest"
 attachment = "foot_back,foot_front"
 pivot = [0.0, -2.0]
 display = [30.0, 18.0]
-crop = "unknown"
+crop = "1353,512,348,226"
 
 [[record]]
 id = "fighters.gear.runtime.cizme-de-voinic"
@@ -201,4 +201,244 @@ sampler = "linear"
 attachment = "foot_back,foot_front"
 pivot = [0.0, -1.0]
 display = [28.0, 24.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.bata-ciobaneasca-mask"
+path = "bata_ciobaneasca_mask.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "deterministic-technical-map-from-accepted-albedo"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+license = "Same as project assets unless superseded"
+dimensions = [36, 272]
+sampler = "nearest"
+attachment = "hand_front"
+pivot = [-2.0, 42.0]
+display = [18.0, 136.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.bata-ciobaneasca-normal"
+path = "bata_ciobaneasca_normal.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "deterministic-technical-map-from-accepted-albedo"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+license = "Same as project assets unless superseded"
+dimensions = [36, 272]
+sampler = "nearest"
+attachment = "hand_front"
+pivot = [-2.0, 42.0]
+display = [18.0, 136.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.bata-ciobaneasca-shadow"
+path = "bata_ciobaneasca_shadow.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "deterministic-technical-map-from-accepted-albedo"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+license = "Same as project assets unless superseded"
+dimensions = [36, 272]
+sampler = "nearest"
+attachment = "hand_front"
+pivot = [-2.0, 42.0]
+display = [18.0, 136.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.topor-de-padurar-mask"
+path = "topor_de_padurar_mask.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "deterministic-technical-map-from-accepted-albedo"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+license = "Same as project assets unless superseded"
+dimensions = [84, 164]
+sampler = "nearest"
+attachment = "hand_front"
+pivot = [8.0, 20.0]
+display = [42.0, 82.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.topor-de-padurar-normal"
+path = "topor_de_padurar_normal.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "deterministic-technical-map-from-accepted-albedo"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+license = "Same as project assets unless superseded"
+dimensions = [84, 164]
+sampler = "nearest"
+attachment = "hand_front"
+pivot = [8.0, 20.0]
+display = [42.0, 82.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.topor-de-padurar-shadow"
+path = "topor_de_padurar_shadow.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "deterministic-technical-map-from-accepted-albedo"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+license = "Same as project assets unless superseded"
+dimensions = [84, 164]
+sampler = "nearest"
+attachment = "hand_front"
+pivot = [8.0, 20.0]
+display = [42.0, 82.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.cojoc-gros-mask"
+path = "cojoc_gros_mask.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "deterministic-technical-map-from-accepted-albedo"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+license = "Same as project assets unless superseded"
+dimensions = [108, 144]
+sampler = "nearest"
+attachment = "torso"
+pivot = [0.0, 2.0]
+display = [54.0, 72.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.cojoc-gros-normal"
+path = "cojoc_gros_normal.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "deterministic-technical-map-from-accepted-albedo"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+license = "Same as project assets unless superseded"
+dimensions = [108, 144]
+sampler = "nearest"
+attachment = "torso"
+pivot = [0.0, 2.0]
+display = [54.0, 72.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.cojoc-gros-shadow"
+path = "cojoc_gros_shadow.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "deterministic-technical-map-from-accepted-albedo"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+license = "Same as project assets unless superseded"
+dimensions = [108, 144]
+sampler = "nearest"
+attachment = "torso"
+pivot = [0.0, 2.0]
+display = [54.0, 72.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.caciula-de-oaie-mask"
+path = "caciula_de_oaie_mask.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "deterministic-technical-map-from-accepted-albedo"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+license = "Same as project assets unless superseded"
+dimensions = [80, 60]
+sampler = "nearest"
+attachment = "head"
+pivot = [0.0, 18.0]
+display = [40.0, 30.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.caciula-de-oaie-normal"
+path = "caciula_de_oaie_normal.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "deterministic-technical-map-from-accepted-albedo"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+license = "Same as project assets unless superseded"
+dimensions = [80, 60]
+sampler = "nearest"
+attachment = "head"
+pivot = [0.0, 18.0]
+display = [40.0, 30.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.caciula-de-oaie-shadow"
+path = "caciula_de_oaie_shadow.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "deterministic-technical-map-from-accepted-albedo"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+license = "Same as project assets unless superseded"
+dimensions = [80, 60]
+sampler = "nearest"
+attachment = "head"
+pivot = [0.0, 18.0]
+display = [40.0, 30.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.opinci-iuti-mask"
+path = "opinci_iuti_mask.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "deterministic-technical-map-from-accepted-albedo"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+license = "Same as project assets unless superseded"
+dimensions = [60, 36]
+sampler = "nearest"
+attachment = "foot_back,foot_front"
+pivot = [0.0, -2.0]
+display = [30.0, 18.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.opinci-iuti-normal"
+path = "opinci_iuti_normal.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "deterministic-technical-map-from-accepted-albedo"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+license = "Same as project assets unless superseded"
+dimensions = [60, 36]
+sampler = "nearest"
+attachment = "foot_back,foot_front"
+pivot = [0.0, -2.0]
+display = [30.0, 18.0]
+crop = "unknown"
+
+[[record]]
+id = "fighters.gear.runtime.opinci-iuti-shadow"
+path = "opinci_iuti_shadow.png"
+kind = "image"
+category = "gear-runtime-part"
+status = "runtime"
+provenance = "deterministic-technical-map-from-accepted-albedo"
+generator = "scripts/extract-romanian-paper-doll-v1.py"
+license = "Same as project assets unless superseded"
+dimensions = [60, 36]
+sampler = "nearest"
+attachment = "foot_back,foot_front"
+pivot = [0.0, -2.0]
+display = [30.0, 18.0]
 crop = "unknown"

@@ -10,9 +10,15 @@ pub mod draft;
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 
-pub use draft::{AttributeKind, CharacterDraft, FOLK_NAMES, FREE_POINTS, HeroChoice, HeroPreset};
+pub use draft::{
+    AttributeKind, CharacterDraft, CreatorPartField, CycleDirection, FOLK_NAMES, FREE_POINTS,
+    HeroChoice, HeroPreset, WardrobeChoice,
+};
 
-use crate::character::{Attributes, CharacterDefinition, PlayerAppearance, stats};
+use crate::character::{
+    Attributes, CharacterCatalog, CharacterDefinition, PlayerAppearance, bundled_human_catalog,
+    stats,
+};
 use crate::core::{
     GameState, LetterboxRect, UiFont, despawn_screen, letterbox_zoom, logical_node_rect,
     world_point_for_screen_point,
@@ -86,16 +92,29 @@ enum CreationLayoutRole {
 pub(crate) enum AppearanceField {
     SkinTone,
     Build,
+    Face,
     Hair,
+    Wardrobe,
     Accent,
 }
 
 impl AppearanceField {
+    const ALL: [Self; 6] = [
+        Self::SkinTone,
+        Self::Build,
+        Self::Face,
+        Self::Hair,
+        Self::Wardrobe,
+        Self::Accent,
+    ];
+
     fn label(self) -> &'static str {
         match self {
             Self::SkinTone => "Piele",
             Self::Build => "Trup",
+            Self::Face => "Chip",
             Self::Hair => "Păr",
+            Self::Wardrobe => "Port",
             Self::Accent => "Accent",
         }
     }
@@ -146,6 +165,16 @@ pub struct CreationPlugin;
 
 impl Plugin for CreationPlugin {
     fn build(&self, app: &mut App) {
+        if !app.world().contains_resource::<CharacterCatalog>() {
+            match bundled_human_catalog() {
+                Ok(catalog) => {
+                    app.insert_resource(catalog.clone());
+                }
+                Err(error) => {
+                    error!("bundled character catalog is invalid: {error}");
+                }
+            }
+        }
         app.add_message::<SaveRequested>()
             .add_message::<FlowIntent>()
             .init_resource::<CharacterDraft>()
@@ -262,7 +291,7 @@ fn spawn_creation_screen(
     spawn_character_definition_rig(
         &mut commands,
         preview,
-        &draft.definition(),
+        draft.definition(),
         asset_server.as_deref(),
         false,
         Some(&equipment),
@@ -484,12 +513,7 @@ fn spawn_control_deck(
                 CreationLayoutRole::AppearanceControls,
             ))
             .with_children(|appearance| {
-                for field in [
-                    AppearanceField::SkinTone,
-                    AppearanceField::Build,
-                    AppearanceField::Hair,
-                    AppearanceField::Accent,
-                ] {
+                for field in AppearanceField::ALL {
                     spawn_option_row(
                         appearance,
                         field.label(),
@@ -709,8 +733,10 @@ fn update_preview_transform(
 fn appearance_text(draft: &CharacterDraft, field: AppearanceField) -> String {
     match field {
         AppearanceField::SkinTone => draft.skin_tone().label().to_string(),
-        AppearanceField::Build => draft.build().label().to_string(),
-        AppearanceField::Hair => draft.hair().label().to_string(),
+        AppearanceField::Build => draft.part_label(CreatorPartField::Body).to_string(),
+        AppearanceField::Face => draft.part_label(CreatorPartField::Face).to_string(),
+        AppearanceField::Hair => draft.part_label(CreatorPartField::Hair).to_string(),
+        AppearanceField::Wardrobe => draft.part_label(CreatorPartField::Wardrobe).to_string(),
         AppearanceField::Accent => draft.accent().label().to_string(),
     }
 }
@@ -729,6 +755,7 @@ fn handle_creation_actions(
     mut commands: Commands,
     interactions: Query<(&Interaction, &CreationAction), ChangedEnabledButton>,
     mut draft: ResMut<CharacterDraft>,
+    catalog: Res<CharacterCatalog>,
     mut flow_intents: MessageWriter<FlowIntent>,
     mut save_requests: MessageWriter<SaveRequested>,
 ) {
@@ -737,7 +764,11 @@ fn handle_creation_actions(
             continue;
         }
         match *action {
-            CreationAction::SelectChoice(choice) => draft.select_choice(choice),
+            CreationAction::SelectChoice(choice) => {
+                if let Err(error) = draft.select_choice(choice, &catalog) {
+                    error!("creator rejected incompatible preset selection: {error}");
+                }
+            }
             CreationAction::PreviousName => draft.previous_name(),
             CreationAction::NextName => draft.next_name(),
             CreationAction::Increase(kind) => {
@@ -748,14 +779,58 @@ fn handle_creation_actions(
             }
             CreationAction::PreviousAppearance(field) => match field {
                 AppearanceField::SkinTone => draft.previous_skin_tone(),
-                AppearanceField::Build => draft.previous_build(),
-                AppearanceField::Hair => draft.previous_hair(),
+                AppearanceField::Build => cycle_catalog_part(
+                    &mut draft,
+                    CreatorPartField::Body,
+                    CycleDirection::Previous,
+                    &catalog,
+                ),
+                AppearanceField::Face => cycle_catalog_part(
+                    &mut draft,
+                    CreatorPartField::Face,
+                    CycleDirection::Previous,
+                    &catalog,
+                ),
+                AppearanceField::Hair => cycle_catalog_part(
+                    &mut draft,
+                    CreatorPartField::Hair,
+                    CycleDirection::Previous,
+                    &catalog,
+                ),
+                AppearanceField::Wardrobe => cycle_catalog_part(
+                    &mut draft,
+                    CreatorPartField::Wardrobe,
+                    CycleDirection::Previous,
+                    &catalog,
+                ),
                 AppearanceField::Accent => draft.previous_accent(),
             },
             CreationAction::NextAppearance(field) => match field {
                 AppearanceField::SkinTone => draft.next_skin_tone(),
-                AppearanceField::Build => draft.next_build(),
-                AppearanceField::Hair => draft.next_hair(),
+                AppearanceField::Build => cycle_catalog_part(
+                    &mut draft,
+                    CreatorPartField::Body,
+                    CycleDirection::Next,
+                    &catalog,
+                ),
+                AppearanceField::Face => cycle_catalog_part(
+                    &mut draft,
+                    CreatorPartField::Face,
+                    CycleDirection::Next,
+                    &catalog,
+                ),
+                AppearanceField::Hair => cycle_catalog_part(
+                    &mut draft,
+                    CreatorPartField::Hair,
+                    CycleDirection::Next,
+                    &catalog,
+                ),
+                AppearanceField::Wardrobe => cycle_catalog_part(
+                    &mut draft,
+                    CreatorPartField::Wardrobe,
+                    CycleDirection::Next,
+                    &catalog,
+                ),
                 AppearanceField::Accent => draft.next_accent(),
             },
             CreationAction::Confirm => {
@@ -764,7 +839,7 @@ fn handle_creation_actions(
                         name: draft.name().to_string(),
                         attributes: draft.attributes(),
                         appearance: draft.appearance(),
-                        definition: draft.definition(),
+                        definition: draft.definition().clone(),
                     });
                     let equipment = equipment_from_items(draft.starter_items());
                     commands.insert_resource(OwnedItems(
@@ -772,15 +847,30 @@ fn handle_creation_actions(
                     ));
                     commands.insert_resource(PlayerEquipment(equipment));
                     save_requests.write(SaveRequested(ResumeDestination::Fight));
-                    draft.reset();
+                    if let Err(error) = draft.reset(&catalog) {
+                        error!("creator failed to reset after confirmation: {error}");
+                    }
                     flow_intents.write(FlowIntent::ConfirmHero);
                 }
             }
             CreationAction::Back => {
-                draft.reset();
+                if let Err(error) = draft.reset(&catalog) {
+                    error!("creator failed to reset while returning to menu: {error}");
+                }
                 flow_intents.write(FlowIntent::BackToMenu);
             }
         }
+    }
+}
+
+fn cycle_catalog_part(
+    draft: &mut CharacterDraft,
+    field: CreatorPartField,
+    direction: CycleDirection,
+    catalog: &CharacterCatalog,
+) {
+    if let Err(error) = draft.cycle_part(field, direction, catalog) {
+        error!("creator rejected incompatible catalog selection: {error}");
     }
 }
 
@@ -898,7 +988,7 @@ fn refresh_preview_rig(
         spawn_character_definition_rig(
             &mut commands,
             preview,
-            &draft.definition(),
+            draft.definition(),
             asset_server.as_deref(),
             false,
             Some(&equipment),
@@ -1050,8 +1140,8 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(
-            buttons, 33,
-            "8 more stepper buttons since #128's four new attribute rows"
+            buttons, 37,
+            "six appearance rows and eight attribute rows stay interactive"
         );
     }
 
@@ -1364,7 +1454,7 @@ mod tests {
     #[test]
     fn creation_and_arena_render_the_same_definition_identity_and_rest_pose() {
         let mut creation = test_app();
-        let definition = draft(&creation).definition();
+        let definition = draft(&creation).definition().clone();
         let creation_root = creation
             .world_mut()
             .query_filtered::<Entity, With<CreationPreview>>()
@@ -1464,6 +1554,81 @@ mod tests {
         );
     }
 
+    fn preview_source_ids(app: &mut App) -> std::collections::HashSet<crate::character::PartId> {
+        app.world_mut()
+            .query::<&CutoutPartMarker>()
+            .iter(app.world())
+            .filter_map(|marker| marker.source_id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn catalog_selectors_change_preview_source_ids() {
+        let mut app = test_app();
+        for field in [
+            AppearanceField::Build,
+            AppearanceField::Face,
+            AppearanceField::Hair,
+            AppearanceField::Wardrobe,
+        ] {
+            let before = preview_source_ids(&mut app);
+            press(&mut app, CreationAction::NextAppearance(field));
+            let after = preview_source_ids(&mut app);
+            assert_ne!(
+                after,
+                before,
+                "{} must change stable preview IDs",
+                field.label()
+            );
+        }
+    }
+
+    fn assert_preview_ids_match_appearance_bridge(app: &App) {
+        let draft = draft(app);
+        let expected_build = match draft.definition().parts.body.as_str() {
+            "human.body.zvelt.v1" => BodyBuild::Lean,
+            "human.body.vanjos.v1" => BodyBuild::Sturdy,
+            other => panic!("unexpected preview body ID {other}"),
+        };
+        let expected_hair = match draft.definition().parts.hair.as_str() {
+            "human.hair.plete.v1" => HairStyle::Long,
+            "human.hair.prins.v1" => HairStyle::Tied,
+            "human.hair.scurt.v1" => HairStyle::Short,
+            other => panic!("unexpected preview hair ID {other}"),
+        };
+        assert_eq!(draft.appearance().build, expected_build);
+        assert_eq!(draft.appearance().hair, expected_hair);
+    }
+
+    #[test]
+    fn preview_ids_and_appearance_bridge_never_drift() {
+        let mut app = test_app();
+        assert_preview_ids_match_appearance_bridge(&app);
+        press(
+            &mut app,
+            CreationAction::NextAppearance(AppearanceField::Build),
+        );
+        assert_preview_ids_match_appearance_bridge(&app);
+        press(
+            &mut app,
+            CreationAction::NextAppearance(AppearanceField::Hair),
+        );
+        assert_preview_ids_match_appearance_bridge(&app);
+        press(
+            &mut app,
+            CreationAction::SelectChoice(HeroChoice::Preset(HeroPreset::UceniculSolomonar)),
+        );
+        assert_preview_ids_match_appearance_bridge(&app);
+    }
+
+    #[test]
+    fn appearance_rows_use_the_required_romanian_order() {
+        assert_eq!(
+            AppearanceField::ALL.map(AppearanceField::label),
+            ["Piele", "Trup", "Chip", "Păr", "Port", "Accent"]
+        );
+    }
+
     #[test]
     fn preset_starter_items_attach_to_the_creation_preview_rig() {
         let mut app = test_app();
@@ -1557,9 +1722,9 @@ mod tests {
         let first_preset = find_button(&mut app, CreationAction::SelectChoice(HeroChoice::ALL[0]));
         assert_eq!(tab_focus(&mut app), Some(first_preset));
 
-        // Walk all the way around: 5 presets, 2 name arrows, 4 appearance
-        // rows x2, 8 attribute rows x2 (#128), Confirm, Back = 28 controls.
-        let total_controls = HeroChoice::ALL.len() + 2 + 4 * 2 + 8 * 2 + 2;
+        // Walk all the way around: 5 presets, 2 name arrows, 6 appearance
+        // rows x2, 8 attribute rows x2 (#128), Confirm, Back = 32 controls.
+        let total_controls = HeroChoice::ALL.len() + 2 + 6 * 2 + 8 * 2 + 2;
         for _ in 1..total_controls {
             tab_focus(&mut app);
         }
@@ -1685,7 +1850,7 @@ mod tests {
             PlayerAppearance {
                 skin_tone: SkinTone::Olive,
                 build: BodyBuild::Sturdy,
-                hair: HairStyle::Long,
+                hair: HairStyle::Tied,
                 accent: AccentColor::Forest,
             }
         );
@@ -1706,7 +1871,7 @@ mod tests {
             &mut app,
             CreationAction::SelectChoice(HeroChoice::Preset(HeroPreset::Haiducul)),
         );
-        let previewed_definition = draft(&app).definition();
+        let previewed_definition = draft(&app).definition().clone();
 
         press(&mut app, CreationAction::Confirm);
         app.update();
@@ -1748,7 +1913,14 @@ mod tests {
                 magie: 0,
             }
         );
-        assert_eq!(player.appearance, HeroPreset::Voinicul.appearance());
+        assert_eq!(
+            player.appearance,
+            PlayerAppearance {
+                build: BodyBuild::Sturdy,
+                hair: HairStyle::Short,
+                ..HeroPreset::Voinicul.appearance()
+            }
+        );
         let loadout = app.world().resource::<PlayerEquipment>();
         assert_eq!(
             loadout.0.equipped(crate::items::Slot::Weapon),

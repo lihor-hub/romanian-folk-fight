@@ -11,11 +11,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Deserialize;
+
 use super::super::aggregate::ResolvedRecord;
 use super::super::schema::{Category, Status};
 
-/// Fixed anatomical draw order, back-to-front, matching the literal
-/// authoring order of `human_parts()` in `src/cutout.rs` (verified there by
+/// Fixed anatomical draw order, back-to-front, matching both the v3 catalog
+/// attachment contract and the literal authoring order of `human_parts()` in
+/// `src/cutout.rs` (verified there by
 /// the `parts are authored in draw order` test: z_offset is non-decreasing
 /// in this exact sequence). This is a point-in-time snapshot of a *sequence*
 /// (not a numeric value), not cross-referenced against the live source by
@@ -41,6 +44,98 @@ pub const DRAW_ORDER: &[&str] = &[
     "shin_front",
     "foot_front",
 ];
+
+pub struct HumanLookSpec {
+    pub slug: &'static str,
+    pub title: &'static str,
+    pub resolved_ids: [&'static str; 6],
+}
+
+pub const HUMAN_LOOKS: &[HumanLookSpec] = &[
+    HumanLookSpec {
+        slug: "haiduc",
+        title: "Haiduc (authored production look)",
+        resolved_ids: [
+            "human.body.zvelt.v1",
+            "human.face.haiduc.v1",
+            "human.hair.plete.v1",
+            "human.torso.ie_altita.v1",
+            "human.legs.itari.v1",
+            "human.feet.opinci.v1",
+        ],
+    },
+    HumanLookSpec {
+        slug: "cioban",
+        title: "Cioban (authored production look)",
+        resolved_ids: [
+            "human.body.vanjos.v1",
+            "human.face.cioban.v1",
+            "human.hair.prins.v1",
+            "human.torso.camasa_ciobaneasca.v1",
+            "human.legs.cioareci.v1",
+            "human.feet.opinci.v1",
+        ],
+    },
+];
+
+#[derive(Deserialize)]
+struct GalleryCatalog {
+    parts: Vec<GalleryCatalogPart>,
+}
+
+#[derive(Deserialize)]
+struct GalleryCatalogPart {
+    id: String,
+    layers: Vec<GalleryCatalogLayer>,
+}
+
+#[derive(Deserialize)]
+struct GalleryCatalogLayer {
+    asset_path: String,
+}
+
+pub struct HumanLookComposition<'a> {
+    pub spec: &'static HumanLookSpec,
+    pub layers: Vec<&'a ResolvedRecord>,
+}
+
+/// Resolves the two exact authored semantic selections through the v3 catalog
+/// to their registered albedo records. Asset validation owns diagnostics; an
+/// invalid document or missing layer yields no misleading partial specimen.
+pub fn human_look_compositions<'a>(
+    records: &[&'a ResolvedRecord],
+    catalog_json: &str,
+) -> Vec<HumanLookComposition<'a>> {
+    let Ok(catalog) = serde_json::from_str::<GalleryCatalog>(catalog_json) else {
+        return Vec::new();
+    };
+    let by_part = catalog
+        .parts
+        .iter()
+        .map(|part| (part.id.as_str(), part))
+        .collect::<BTreeMap<_, _>>();
+    let by_path = records
+        .iter()
+        .map(|record| (record.full_path.to_string_lossy().into_owned(), *record))
+        .collect::<BTreeMap<_, _>>();
+
+    HUMAN_LOOKS
+        .iter()
+        .filter_map(|spec| {
+            let mut layers = Vec::with_capacity(DRAW_ORDER.len());
+            for stable_id in spec.resolved_ids {
+                let part = by_part.get(stable_id)?;
+                for layer in &part.layers {
+                    layers.push(*by_path.get(&layer.asset_path)?);
+                }
+            }
+            layers.sort_by_key(|record| {
+                draw_order_index(record.record.attachment.as_deref().unwrap_or(""))
+            });
+            (layers.len() == DRAW_ORDER.len()).then_some(HumanLookComposition { spec, layers })
+        })
+        .collect()
+}
 
 /// Index of `attachment_part` in [`DRAW_ORDER`], or one past the end if it
 /// is not a recognized anatomical part name (drawn last, defensively, rather
@@ -94,6 +189,7 @@ pub fn identity_parts<'a>(
             r.record.category == Category::FighterRuntimePart
                 && id_segment(&r.record.id, 1) == Some(identity)
                 && !is_material_channel_id(&r.record.id)
+                && r.record.id.split('.').count() == 4
         })
         .collect();
     parts.sort_by_key(|r| {
@@ -152,6 +248,7 @@ pub fn composable_gear<'a>(records: &[&'a ResolvedRecord]) -> Vec<&'a ResolvedRe
                 && r.record.attachment.is_some()
                 && r.record.pivot.is_some()
                 && r.record.display.is_some()
+                && !is_material_channel_id(&r.record.id)
         })
         .collect();
     gear.sort_by(|a, b| a.record.id.cmp(&b.record.id));
@@ -288,6 +385,89 @@ mod tests {
             assert_eq!(draw_order_index(part), i);
         }
         assert_eq!(draw_order_index("nonexistent"), DRAW_ORDER.len());
+    }
+
+    #[test]
+    fn bundled_human_gallery_exposes_every_v3_catalog_attachment_once() {
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask lives below the workspace root")
+            .to_path_buf();
+        let aggregate = crate::assets::aggregate::build(&workspace.join("assets"));
+        let records = aggregate.records.iter().collect::<Vec<_>>();
+        let human = identity_parts(&records, "human");
+        let attachments = human
+            .iter()
+            .filter_map(|record| record.record.attachment.as_deref())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(human.len(), DRAW_ORDER.len());
+        assert_eq!(attachments, DRAW_ORDER.iter().copied().collect());
+    }
+
+    #[test]
+    fn bundled_catalog_has_exact_resolvable_haiduc_and_cioban_gallery_layers() {
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask lives below the workspace root")
+            .to_path_buf();
+        let aggregate = crate::assets::aggregate::build(&workspace.join("assets"));
+        let catalog: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                workspace.join("assets/fighters/catalog/human-foundation.json"),
+            )
+            .expect("bundled human catalog is readable"),
+        )
+        .expect("bundled human catalog is JSON");
+        let parts = catalog["parts"].as_array().expect("catalog has parts");
+        let registered = aggregate
+            .records
+            .iter()
+            .map(|record| record.full_path.to_string_lossy().into_owned())
+            .collect::<BTreeSet<_>>();
+
+        for (composition_id, expected_ids) in [
+            (
+                "composition.human.haiduc",
+                [
+                    "human.body.zvelt.v1",
+                    "human.face.haiduc.v1",
+                    "human.hair.plete.v1",
+                    "human.torso.ie_altita.v1",
+                    "human.legs.itari.v1",
+                    "human.feet.opinci.v1",
+                ],
+            ),
+            (
+                "composition.human.cioban",
+                [
+                    "human.body.vanjos.v1",
+                    "human.face.cioban.v1",
+                    "human.hair.prins.v1",
+                    "human.torso.camasa_ciobaneasca.v1",
+                    "human.legs.cioareci.v1",
+                    "human.feet.opinci.v1",
+                ],
+            ),
+        ] {
+            let mut attachments = BTreeSet::new();
+            for stable_id in expected_ids {
+                let part = parts
+                    .iter()
+                    .find(|part| part["id"] == stable_id)
+                    .unwrap_or_else(|| panic!("{composition_id} is missing {stable_id}"));
+                for layer in part["layers"].as_array().expect("part has layers") {
+                    let path = layer["asset_path"].as_str().expect("layer has asset path");
+                    assert!(registered.contains(path), "unregistered layer {path}");
+                    attachments.insert(
+                        layer["attachment"]["point"]
+                            .as_str()
+                            .expect("layer has attachment"),
+                    );
+                }
+            }
+            assert_eq!(attachments, DRAW_ORDER.iter().copied().collect());
+        }
     }
 
     #[test]

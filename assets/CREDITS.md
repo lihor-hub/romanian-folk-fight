@@ -13,6 +13,9 @@ generated art and may be replaced by cleaned artist-authored parts.
 | File | Depicts | Source | License |
 | --- | --- | --- | --- |
 | `fighters/human/source/human_cutout_parts_v1.png` | Human/player pixel-art cutout body-part source sheet | OpenAI-generated for this project | Same as project assets unless superseded |
+| `fighters/human/source/romanian-paper-doll-v1/romanian-paper-doll-v1.png` | Curated contact source for the Haiduc/Cioban production library and five Romanian gear replacements | OpenAI built-in image generation; exact prompts, hashes, helper settings, and source paths in the adjacent README | Same as project assets unless superseded |
+| `fighters/human/source/romanian-paper-doll-v1/human-chroma-master.png` | Authoritative full-resolution Haiduc/Cioban chroma master | Sensibly quantized from OpenAI built-in image generation; exact original and tracked hashes in the adjacent README | Same as project assets unless superseded |
+| `fighters/human/source/romanian-paper-doll-v1/equipment-chroma-master.png` | Authoritative full-resolution Romanian equipment chroma master | Sensibly quantized from OpenAI built-in image generation; exact original and tracked hashes in the adjacent README | Same as project assets unless superseded |
 | `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Starter gear pixel-art cutout source sheet | OpenAI-generated for this project | Same as project assets unless superseded |
 | `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Strigoi enemy pixel-art cutout body-part source sheet | OpenAI-generated for this project | Same as project assets unless superseded |
 | `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Zmeu boss pixel-art cutout body-part source sheet | OpenAI-generated for this project | Same as project assets unless superseded |
@@ -24,6 +27,12 @@ sheets above so the Bevy cutout rig can show production-intent art in creator,
 shop, and arena flows without introducing a new production generator pipeline.
 
 ### Human runtime parts
+
+The Haiduc, Cioban, and shared production directories are deterministic crops
+and exact-alpha derivatives of `romanian-paper-doll-v1`. Their adjacent README
+records the complete prompt, extraction map, rejected duplicates, cultural
+references, and pan-Romanian remix scope. Every PNG under
+`fighters/human/runtime/{haiduc,cioban,shared}/` uses the license below.
 
 | File | Depicts | Source | License |
 | --- | --- | --- | --- |
@@ -42,6 +51,10 @@ shop, and arena flows without introducing a new production generator pipeline.
 | `fighters/human/runtime/torso.png` | Derived runtime human cutout part (torso) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
 | `fighters/human/runtime/upper_arm_back.png` | Derived runtime human cutout part (upper arm back) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
 | `fighters/human/runtime/upper_arm_front.png` | Derived runtime human cutout part (upper arm front) | Cropped from `fighters/human/source/human_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/shared/hair_scurt.png` | Shared short-hair albedo | Curated from `romanian-paper-doll-v1` | Same as project assets unless superseded |
+| `fighters/human/runtime/shared/hair_scurt_mask.png` | Shared short-hair mask | Deterministically derived from `hair_scurt.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/shared/hair_scurt_normal.png` | Shared short-hair normal | Deterministically derived from `hair_scurt.png` | Same as project assets unless superseded |
+| `fighters/human/runtime/shared/hair_scurt_shadow.png` | Shared short-hair shadow | Deterministically derived from `hair_scurt.png` | Same as project assets unless superseded |
 
 #### Human hybrid material channels
 
@@ -142,18 +155,38 @@ decision are preserved in
 
 | File | Depicts | Source | License |
 | --- | --- | --- | --- |
-| `fighters/gear/runtime/bata_ciobaneasca.png` | Derived runtime starter gear asset (bata ciobaneasca) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
-| `fighters/gear/runtime/caciula_de_oaie.png` | Derived runtime starter gear asset (caciula de oaie) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/bata_ciobaneasca.png` | Production bâtă ciobănească attachment | Curated from `romanian-paper-doll-v1` | Same as project assets unless superseded |
+| `fighters/gear/runtime/caciula_de_oaie.png` | Production căciulă de oaie attachment | Curated from `romanian-paper-doll-v1` | Same as project assets unless superseded |
 | `fighters/gear/runtime/camasa_de_zale.png` | Derived runtime starter gear asset (camasa de zale) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
 | `fighters/gear/runtime/cizme_de_voinic.png` | Derived runtime starter gear asset (cizme de voinic) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
 | `fighters/gear/runtime/coif_de_ostean.png` | Derived runtime starter gear asset (coif de ostean) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
-| `fighters/gear/runtime/cojoc_gros.png` | Derived runtime starter gear asset (cojoc gros) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/cojoc_gros.png` | Production cojoc gros attachment | Curated from `romanian-paper-doll-v1` | Same as project assets unless superseded |
 | `fighters/gear/runtime/ie_descantata.png` | Derived runtime starter gear asset (ie descantata) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
-| `fighters/gear/runtime/opinci_iuti.png` | Derived runtime starter gear asset (opinci iuti) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/opinci_iuti.png` | Production opinci iuți attachment | Curated from `romanian-paper-doll-v1` | Same as project assets unless superseded |
 | `fighters/gear/runtime/palos.png` | Derived runtime starter gear asset (palos) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
 | `fighters/gear/runtime/scut_de_lemn.png` | Derived runtime starter gear asset (scut de lemn) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
 | `fighters/gear/runtime/scut_ferecat.png` | Derived runtime starter gear asset (scut ferecat) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
-| `fighters/gear/runtime/topor_de_padurar.png` | Derived runtime starter gear asset (topor de padurar) | Cropped from `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/topor_de_padurar.png` | Production topor de pădurar attachment | Curated from `romanian-paper-doll-v1` | Same as project assets unless superseded |
+
+#### Romanian production gear material channels
+
+| File | Depicts | Source | License |
+| --- | --- | --- | --- |
+| `fighters/gear/runtime/bata_ciobaneasca_mask.png` | Bâtă semantic mask | Deterministically derived from `bata_ciobaneasca.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/bata_ciobaneasca_normal.png` | Bâtă shallow normal | Deterministically derived from `bata_ciobaneasca.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/bata_ciobaneasca_shadow.png` | Bâtă local-depth map | Deterministically derived from `bata_ciobaneasca.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/topor_de_padurar_mask.png` | Topor semantic mask | Deterministically derived from `topor_de_padurar.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/topor_de_padurar_normal.png` | Topor shallow normal | Deterministically derived from `topor_de_padurar.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/topor_de_padurar_shadow.png` | Topor local-depth map | Deterministically derived from `topor_de_padurar.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/cojoc_gros_mask.png` | Cojoc semantic mask | Deterministically derived from `cojoc_gros.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/cojoc_gros_normal.png` | Cojoc shallow normal | Deterministically derived from `cojoc_gros.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/cojoc_gros_shadow.png` | Cojoc local-depth map | Deterministically derived from `cojoc_gros.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/caciula_de_oaie_mask.png` | Căciulă semantic mask | Deterministically derived from `caciula_de_oaie.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/caciula_de_oaie_normal.png` | Căciulă shallow normal | Deterministically derived from `caciula_de_oaie.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/caciula_de_oaie_shadow.png` | Căciulă local-depth map | Deterministically derived from `caciula_de_oaie.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/opinci_iuti_mask.png` | Opinci semantic mask | Deterministically derived from `opinci_iuti.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/opinci_iuti_normal.png` | Opinci shallow normal | Deterministically derived from `opinci_iuti.png` | Same as project assets unless superseded |
+| `fighters/gear/runtime/opinci_iuti_shadow.png` | Opinci local-depth map | Deterministically derived from `opinci_iuti.png` | Same as project assets unless superseded |
 
 ## UI presentation source sheets (`assets/ui/source/`)
 
