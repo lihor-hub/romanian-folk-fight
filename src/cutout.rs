@@ -3,13 +3,14 @@
 //! the first production-intent pixel-art body parts and starter gear into the
 //! runtime while keeping the ECS surface compact.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::OnceLock};
 
 use bevy::prelude::*;
 
 use crate::character::{
-    AccentColor, BodyBuild, CatalogError, CharacterCatalog, CharacterDefinition, HairStyle, PartId,
-    PartRecord, PlayerAppearance, ResolvedCharacter, SkinTone,
+    AccentColor, BodyBuild, CHARACTER_DEFINITION_VERSION, CatalogError, CharacterCatalog,
+    CharacterDefinition, CulturalProfile, HairStyle, PartId, PartRecord, PlayerAppearance,
+    ResolvedCharacter, SkeletonFamily, SkinTone,
 };
 use crate::items::{Equipment, GearAttachment, GearMotion, ItemId, ItemVisual, Slot, item_visual};
 
@@ -232,10 +233,56 @@ pub fn human_template_for(appearance: PlayerAppearance) -> CutoutRigTemplate {
 pub fn resolve_human_character(
     definition: &CharacterDefinition,
 ) -> Result<ResolvedCharacter, CatalogError> {
-    CharacterCatalog::from_json(include_str!(
-        "../assets/fighters/catalog/human-foundation.json"
-    ))?
-    .resolve(definition)
+    bundled_human_catalog()?.resolve(definition)
+}
+
+fn bundled_human_catalog() -> Result<&'static CharacterCatalog, CatalogError> {
+    static CATALOG: OnceLock<Result<CharacterCatalog, CatalogError>> = OnceLock::new();
+    match CATALOG.get_or_init(|| {
+        CharacterCatalog::from_json(include_str!(
+            "../assets/fighters/catalog/human-foundation.json"
+        ))
+    }) {
+        Ok(catalog) => Ok(catalog),
+        Err(error) => Err(error.clone()),
+    }
+}
+
+/// Resolves a persisted identity for rendering, substituting only the
+/// catalog's explicit versioned known-good human when that identity is no
+/// longer resolvable. The supplied definition is borrowed and never mutated;
+/// save data remains authoritative for diagnostics and future recovery.
+pub fn resolve_human_character_or_known_good(
+    definition: &CharacterDefinition,
+) -> Result<ResolvedCharacter, CatalogError> {
+    let catalog = bundled_human_catalog()?;
+    match catalog.resolve(definition) {
+        Ok(character) => Ok(character),
+        Err(original_error) => {
+            warn!(
+                "character definition could not be rendered ({original_error}); using bundled \
+                 catalog version {} known-good human without changing the persisted identity",
+                catalog.version()
+            );
+            let fallback = CharacterDefinition {
+                version: CHARACTER_DEFINITION_VERSION,
+                seed: None,
+                skeleton: SkeletonFamily::Human,
+                culture: CulturalProfile {
+                    tags: catalog.known_good_human_cultural_tags().to_vec(),
+                },
+                parts: catalog.known_good_human().clone(),
+                appearance: PlayerAppearance::default(),
+            };
+            catalog.resolve(&fallback).map_err(|fallback_error| {
+                error!(
+                    "bundled known-good human also failed after `{original_error}`: \
+                     {fallback_error}"
+                );
+                fallback_error
+            })
+        }
+    }
 }
 
 /// Adapts stable catalog selections to the existing articulated human rig.
@@ -413,6 +460,48 @@ pub fn spawn_character_rig(
         equipment,
         accent_hue,
     );
+}
+
+/// Shared runtime entry point for scenes that own a persisted definition.
+/// Resolution errors use the catalog-owned known-good identity; a broken
+/// bundled catalog itself falls back to the pre-catalog human template so a
+/// rendering-data defect cannot panic a scene transition.
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_character_definition_rig(
+    commands: &mut Commands,
+    root: Entity,
+    definition: &CharacterDefinition,
+    asset_server: Option<&AssetServer>,
+    flip_x: bool,
+    equipment: Option<&Equipment>,
+    accent_hue: Option<Color>,
+) {
+    match resolve_human_character_or_known_good(definition) {
+        Ok(character) => spawn_character_rig(
+            commands,
+            root,
+            &character,
+            asset_server,
+            flip_x,
+            equipment,
+            accent_hue,
+        ),
+        Err(error) => {
+            error!(
+                "bundled human catalog is unavailable ({error}); using the legacy cutout \
+                 template for this frame"
+            );
+            spawn_cutout_rig_impl(
+                commands,
+                root,
+                human_template_for(definition.appearance),
+                asset_server,
+                flip_x,
+                equipment,
+                accent_hue,
+            );
+        }
+    }
 }
 
 fn spawn_cutout_rig_impl(
@@ -1404,6 +1493,23 @@ mod tests {
                 .unwrap_or_else(|| panic!("adapted template has {kind:?}"));
             assert_eq!(part.source_id.as_ref(), Some(expected_id), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn valid_definition_is_unchanged_by_the_runtime_fallback_policy() {
+        let definition = CharacterDefinition::legacy_human(PlayerAppearance {
+            skin_tone: SkinTone::Deep,
+            build: BodyBuild::Powerful,
+            hair: HairStyle::Tied,
+            accent: AccentColor::Storm,
+        });
+        let saved_definition = definition.clone();
+        let strict = resolve_human_character(&definition).expect("valid definition resolves");
+        let runtime = resolve_human_character_or_known_good(&definition)
+            .expect("valid definition resolves through runtime policy");
+
+        assert_eq!(runtime, strict);
+        assert_eq!(definition, saved_definition);
     }
 
     #[test]

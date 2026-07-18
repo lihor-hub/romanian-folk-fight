@@ -11,13 +11,15 @@ pub mod fx;
 
 use bevy::prelude::*;
 
-use crate::character::{Attributes, EnemyFighter, PlayerFighter, ResolvedCharacter, spawn_fighter};
+use crate::character::{
+    Attributes, CharacterDefinition, EnemyFighter, PlayerFighter, spawn_fighter,
+};
 use crate::combat::AiProfile;
 use crate::core::{GameState, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::cutout::{
     CutoutPartMarker, CutoutRig, CutoutRigTemplate, CutoutTemplate, GearVisualLayer, boss_template,
-    cutout_rig_owner, enemy_template, human_template, resolve_human_character, spawn_character_rig,
+    cutout_rig_owner, enemy_template, human_template, spawn_character_definition_rig,
     spawn_cutout_rig_with_accent, spawn_gear_attachment_layers,
 };
 use crate::items::{Equipment, GearMotion};
@@ -149,15 +151,13 @@ fn spawn_scene(
     let opponent = ladder.opponent();
     spawn_background(&mut commands, backgrounds, background_tier(ladder));
     spawn_scenery(&mut commands);
-    let resolved_player = resolve_human_character(&player.definition)
-        .expect("the arena player resolves against the bundled human catalog");
     let player_fighter = spawn_arena_fighter(
         &mut commands,
         player.name.clone(),
         player.attributes,
         PlayerFighter,
         PLAYER_ANCHOR,
-        ArenaRig::Character(&resolved_player),
+        ArenaRig::Character(&player.definition),
         false,
         asset_server,
         None,
@@ -230,10 +230,10 @@ fn spawn_arena_fighter<'a>(
         anchor,
     ));
     match rig {
-        ArenaRig::Character(character) => spawn_character_rig(
+        ArenaRig::Character(definition) => spawn_character_definition_rig(
             commands,
             fighter,
-            character,
+            definition,
             asset_server,
             flip_x,
             None,
@@ -252,7 +252,7 @@ fn spawn_arena_fighter<'a>(
 }
 
 enum ArenaRig<'a> {
-    Character(&'a ResolvedCharacter),
+    Character(&'a CharacterDefinition),
     Template(CutoutRigTemplate),
 }
 
@@ -912,6 +912,40 @@ mod tests {
             torso_size, expected_torso.size,
             "the persisted definition, not its legacy projection, drives the arena rig"
         );
+    }
+
+    #[test]
+    fn arena_invalid_persisted_part_id_renders_known_good_without_mutating_the_save() {
+        let mut player = player_character();
+        player.definition.parts.hair =
+            crate::character::PartId::new("human.hair.missing.v1").unwrap();
+        let persisted_definition = player.definition.clone();
+        let mut app = test_app_with(player, LadderProgress::default());
+
+        assert_eq!(
+            app.world().resource::<PlayerCharacter>().definition,
+            persisted_definition,
+            "render fallback must not rewrite the saved identity"
+        );
+        let player = app
+            .world_mut()
+            .query_filtered::<Entity, With<PlayerFighter>>()
+            .single(app.world())
+            .expect("player fighter still spawns");
+        let part_parents = cutout_part_parents(&mut app);
+        let rendered_hair_id = app
+            .world_mut()
+            .query::<(Entity, &CutoutPartMarker)>()
+            .iter(app.world())
+            .find_map(|(entity, marker)| {
+                (marker.kind == CutoutPartKind::Hair
+                    && cutout_rig_owner(entity, |part| part_parents.get(&part).copied()) == player)
+                    .then(|| marker.source_id.clone())
+                    .flatten()
+            })
+            .expect("known-good fallback renders a catalog-backed hair part");
+
+        assert_eq!(rendered_hair_id.as_str(), "human.hair.braided.v1");
     }
 
     #[test]

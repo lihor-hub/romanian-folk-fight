@@ -19,7 +19,7 @@ use crate::core::{
     letterbox_zoom, logical_node_rect, world_point_for_screen_point,
 };
 use crate::creation::PlayerCharacter;
-use crate::cutout::{CutoutRig, resolve_human_character, spawn_character_rig};
+use crate::cutout::{CutoutRig, spawn_character_definition_rig};
 use crate::flow::FlowIntent;
 use crate::items::{CATALOG, Equipment, Item, ItemId, Slot};
 use crate::menu::DisabledButton;
@@ -720,12 +720,10 @@ fn spawn_shop_preview(
                 .with_scale(Vec3::splat(SHOP_PREVIEW_SCALE)),
         ))
         .id();
-    let resolved = resolve_human_character(definition)
-        .expect("the shop player resolves against the bundled human catalog");
-    spawn_character_rig(
+    spawn_character_definition_rig(
         commands,
         preview,
-        &resolved,
+        definition,
         asset_server,
         false,
         Some(equipment),
@@ -1182,12 +1180,10 @@ fn refresh_shop_preview_rig(
             }
         }
         commands.entity(preview).remove::<CutoutRig>();
-        let resolved = resolve_human_character(&definition)
-            .expect("the shop player resolves against the bundled human catalog");
-        spawn_character_rig(
+        spawn_character_definition_rig(
             &mut commands,
             preview,
-            &resolved,
+            &definition,
             asset_server.as_deref(),
             false,
             Some(&equipment.0),
@@ -1353,6 +1349,10 @@ mod tests {
 
     /// Headless app with only the shop flow.
     fn test_app() -> App {
+        test_app_with_player(player_character())
+    }
+
+    fn test_app_with_player(player: PlayerCharacter) -> App {
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
@@ -1361,7 +1361,7 @@ mod tests {
             FlowPlugin,
             ShopPlugin,
         ));
-        app.insert_resource(player_character());
+        app.insert_resource(player);
         app.update();
         app
     }
@@ -1436,6 +1436,31 @@ mod tests {
             .query_filtered::<(), With<C>>()
             .iter(app.world())
             .count()
+    }
+
+    #[test]
+    fn shop_invalid_persisted_part_id_renders_known_good_without_mutating_the_save() {
+        let mut player = player_character();
+        player.definition.parts.hair =
+            crate::character::PartId::new("human.hair.missing.v1").unwrap();
+        let persisted_definition = player.definition.clone();
+        let mut app = test_app_with_player(player);
+
+        set_state(&mut app, GameState::Shop);
+
+        assert_eq!(
+            app.world().resource::<PlayerCharacter>().definition,
+            persisted_definition,
+            "shop fallback must not rewrite the saved identity"
+        );
+        let rendered_hair_id = app
+            .world_mut()
+            .query::<&CutoutPartMarker>()
+            .iter(app.world())
+            .find(|marker| marker.kind == CutoutPartKind::Hair)
+            .and_then(|marker| marker.source_id.clone())
+            .expect("known-good fallback renders a catalog-backed hair part");
+        assert_eq!(rendered_hair_id.as_str(), "human.hair.braided.v1");
     }
 
     /// The button entity carrying `action`.

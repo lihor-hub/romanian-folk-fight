@@ -19,7 +19,7 @@ use crate::core::{
 };
 #[cfg(test)]
 use crate::core::{ViewportInfo, screen_point_for_world_point};
-use crate::cutout::{CutoutRig, resolve_human_character, spawn_character_rig};
+use crate::cutout::{CutoutRig, spawn_character_definition_rig};
 use crate::flow::FlowIntent;
 use crate::items::Equipment;
 use crate::menu::DisabledButton;
@@ -259,12 +259,10 @@ fn spawn_creation_screen(
         ))
         .id();
     let equipment = equipment_from_items(draft.starter_items());
-    let resolved = resolve_human_character(&draft.definition())
-        .expect("the creation draft resolves against the bundled human catalog");
-    spawn_character_rig(
+    spawn_character_definition_rig(
         &mut commands,
         preview,
-        &resolved,
+        &draft.definition(),
         asset_server.as_deref(),
         false,
         Some(&equipment),
@@ -897,12 +895,10 @@ fn refresh_preview_rig(
         }
         commands.entity(preview).remove::<CutoutRig>();
         let equipment = equipment_from_items(draft.starter_items());
-        let resolved = resolve_human_character(&draft.definition())
-            .expect("the creation draft resolves against the bundled human catalog");
-        spawn_character_rig(
+        spawn_character_definition_rig(
             &mut commands,
             preview,
-            &resolved,
+            &draft.definition(),
             asset_server.as_deref(),
             false,
             Some(&equipment),
