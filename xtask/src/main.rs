@@ -10,6 +10,10 @@ mod web_smoke;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    println!(
+        "cargo xtask: workspace root: {}",
+        process::workspace_root().display()
+    );
     let args: Vec<String> = std::env::args().skip(1).collect();
     match commands::dispatch(&args) {
         Ok(()) => ExitCode::SUCCESS,

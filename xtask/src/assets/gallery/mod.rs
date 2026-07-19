@@ -667,10 +667,7 @@ mod tests {
     }
 
     fn real_assets_root() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask/Cargo.toml always has a parent workspace root")
-            .join("assets")
+        crate::process::workspace_root().join("assets")
     }
 
     #[test]

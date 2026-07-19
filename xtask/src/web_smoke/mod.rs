@@ -212,13 +212,10 @@ pub fn run_all(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeE
     Ok(())
 }
 
-/// The workspace root (`xtask/`'s parent), used by every scenario to locate
+/// The runtime-resolved workspace root used by every scenario to locate
 /// `trunk build --release`'s working directory and the `dist/` it produces.
 pub(crate) fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask/Cargo.toml always has a parent workspace root")
-        .to_path_buf()
+    crate::process::workspace_root()
 }
 
 /// Runs `trunk build --release` (through `crate::process::run_step`, so it

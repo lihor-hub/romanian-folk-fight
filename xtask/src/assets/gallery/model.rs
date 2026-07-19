@@ -413,10 +413,7 @@ mod tests {
 
     #[test]
     fn bundled_human_gallery_exposes_every_v3_catalog_attachment_once() {
-        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask lives below the workspace root")
-            .to_path_buf();
+        let workspace = crate::process::workspace_root();
         let aggregate = crate::assets::aggregate::build(&workspace.join("assets"));
         let records = aggregate.records.iter().collect::<Vec<_>>();
         let human = identity_parts(&records, "human");
@@ -431,10 +428,7 @@ mod tests {
 
     #[test]
     fn bundled_catalog_has_exact_resolvable_layers_for_all_four_looks() {
-        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask lives below the workspace root")
-            .to_path_buf();
+        let workspace = crate::process::workspace_root();
         let aggregate = crate::assets::aggregate::build(&workspace.join("assets"));
         let catalog: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(

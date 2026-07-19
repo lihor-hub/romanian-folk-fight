@@ -24,6 +24,13 @@ run bootstrap first (already required for a fresh worktree, see the repo's
 `AGENTS.md`/`rust-dev` skill), or invoke the crate directly:
 `cargo run --package xtask -- <args>`.
 
+At startup, xtask prints `cargo xtask: workspace root: <path>`. The path is
+resolved at runtime by walking up from the invocation directory to the nearest
+`Cargo.toml` with a `[workspace]` table. This remains correct even when an
+explicit or global `CARGO_TARGET_DIR` makes multiple worktrees reuse the same
+compiled xtask binary; artifact logs, asset validation, browser builds, and
+visual baselines therefore stay rooted in the invoking worktree.
+
 ## Commands
 
 ```

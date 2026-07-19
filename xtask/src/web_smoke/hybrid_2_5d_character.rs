@@ -179,10 +179,7 @@ fn build_review_release() -> Result<PathBuf, SmokeError> {
 }
 
 fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask always lives directly under the workspace root")
-        .to_path_buf()
+    crate::process::workspace_root()
 }
 
 fn start_server(dist_dir: &Path, phase: &str) -> Result<StaticServer, SmokeError> {

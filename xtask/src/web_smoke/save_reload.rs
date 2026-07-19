@@ -170,10 +170,7 @@ fn build_review_release() -> Result<PathBuf, SmokeError> {
 }
 
 fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask/Cargo.toml always has a parent workspace root")
-        .to_path_buf()
+    crate::process::workspace_root()
 }
 
 /// Only the fields this scenario needs from `save::snapshot::SaveGame`'s JSON
