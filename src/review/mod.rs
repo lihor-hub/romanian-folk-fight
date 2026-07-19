@@ -114,8 +114,10 @@ use crate::core::{
     screen_point_for_world_point,
 };
 use crate::creation::{CharacterDraft, CreationAction, HeroChoice, HeroPreset, PlayerCharacter};
-use crate::cutout::{CutoutPartKind, CutoutPartMarker, CutoutRig, cutout_rig_owner};
-use crate::items::ItemId;
+use crate::cutout::{
+    CutoutPartKind, CutoutPartMarker, CutoutRig, GearVisualLayer, cutout_rig_owner,
+};
+use crate::items::{ItemId, item_visual};
 use crate::menu::{DisabledButton, MenuAction};
 use crate::progression::result_ui::{GameOverAction, ResultAction};
 use crate::progression::victory_ui::VictoryAction;
@@ -303,9 +305,32 @@ pub struct ReviewAutoplay(pub bool);
 
 pub struct ReviewPlugin;
 
+/// Strong handles that make every equipment overlay request start at boot.
+/// The browser journey deliberately changes presets immediately after a real
+/// reload; prefetching removes lazy-load scheduling from visual acceptance.
+#[derive(Resource, Default)]
+struct PaperDollGearPrefetch {
+    _handles: Vec<Handle<Image>>,
+}
+
+fn prefetch_paper_doll_gear(
+    asset_server: Option<Res<AssetServer>>,
+    mut prefetch: ResMut<PaperDollGearPrefetch>,
+) {
+    let Some(asset_server) = asset_server else {
+        return;
+    };
+    prefetch._handles = ItemId::ALL
+        .into_iter()
+        .filter_map(item_visual)
+        .map(|visual| asset_server.load(visual.fallback_asset_path()))
+        .collect();
+}
+
 impl Plugin for ReviewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ReviewAutoplay>()
+            .init_resource::<PaperDollGearPrefetch>()
             .init_resource::<CampaignSeed>()
             // Idempotent re-registrations of what the systems below read and
             // write (the real app's CreationPlugin/CombatPlugin already
@@ -322,6 +347,7 @@ impl Plugin for ReviewPlugin {
             // registration (added by `CombatPlugin`).
             .init_resource::<InputFocus>()
             .add_message::<PlayerActionEvent>()
+            .add_systems(PreStartup, prefetch_paper_doll_gear)
             .add_systems(
                 Update,
                 (
@@ -595,6 +621,7 @@ struct PaperDollIdentityFact {
     part_count: usize,
     hybrid_part_count: usize,
     fallback_part_count: usize,
+    gear_part_count: usize,
 }
 
 fn paper_doll_identity_fact(
@@ -602,6 +629,7 @@ fn paper_doll_identity_fact(
     screen: &str,
     root_entity: &str,
     parts: &[CharacterPartSample],
+    gear_part_count: usize,
 ) -> Option<PaperDollIdentityFact> {
     if parts.len() != PAPER_DOLL_RIG_ORDER.len() {
         return None;
@@ -624,7 +652,22 @@ fn paper_doll_identity_fact(
         part_count: parts.len(),
         hybrid_part_count: parts.iter().filter(|part| part.hybrid_material).count(),
         fallback_part_count: parts.iter().filter(|part| part.pending_material).count(),
+        gear_part_count,
     })
+}
+
+fn gear_part_count_for_root(
+    root: Entity,
+    ancestry: &Query<&ChildOf, With<CutoutPartMarker>>,
+    gear_layers: &Query<&ChildOf, With<GearVisualLayer>>,
+) -> usize {
+    gear_layers
+        .iter()
+        .filter(|parent| {
+            let part = parent.parent();
+            cutout_rig_owner(part, |child| ancestry.get(child).ok().map(ChildOf::parent)) == root
+        })
+        .count()
 }
 
 /// Accumulated browser proof. Optional fields make intermediate states
@@ -717,6 +760,7 @@ fn publish_paper_doll_state(
     live_opponents: Query<&SeededOpponent, With<EnemyFighter>>,
     ancestry: Query<&ChildOf, With<CutoutPartMarker>>,
     parts: HybridCharacterPartQuery,
+    gear_layers: Query<&ChildOf, With<GearVisualLayer>>,
 ) {
     if !review.loaded {
         review.snapshot = load_paper_doll_snapshot().unwrap_or_default();
@@ -739,6 +783,7 @@ fn publish_paper_doll_state(
                 "CharacterCreation",
                 &root_entity,
                 &samples,
+                gear_part_count_for_root(root, &ancestry, &gear_layers),
             ) else {
                 return;
             };
@@ -762,9 +807,13 @@ fn publish_paper_doll_state(
             };
             let root_entity = paper_doll_root_marker(review.boot_id, format_args!("{root:?}"));
             let samples = paper_doll_samples_for_root(root, &ancestry, &parts);
-            let Some(fact) =
-                paper_doll_identity_fact(&player.definition, "Shop", &root_entity, &samples)
-            else {
+            let Some(fact) = paper_doll_identity_fact(
+                &player.definition,
+                "Shop",
+                &root_entity,
+                &samples,
+                gear_part_count_for_root(root, &ancestry, &gear_layers),
+            ) else {
                 return;
             };
             if review.shop_root.as_deref() != Some(&root_entity) {
@@ -797,6 +846,7 @@ fn publish_paper_doll_state(
                 "Fight",
                 &paper_doll_root_marker(review.boot_id, format_args!("{player_root:?}")),
                 &paper_doll_samples_for_root(player_root, &ancestry, &parts),
+                gear_part_count_for_root(player_root, &ancestry, &gear_layers),
             ) {
                 review.snapshot.combat_player = Some(fact);
             }
@@ -812,6 +862,7 @@ fn publish_paper_doll_state(
                     "Fight",
                     &paper_doll_root_marker(review.boot_id, format_args!("{enemy_root:?}")),
                     &paper_doll_samples_for_root(enemy_root, &ancestry, &parts),
+                    gear_part_count_for_root(enemy_root, &ancestry, &gear_layers),
                 )
             {
                 review.snapshot.combat_npc = Some(fact);
@@ -2050,10 +2101,10 @@ mod tests {
             snapshot.resolved_part_ids,
             vec![
                 "human.body.zvelt.v1",
-                "human.face.cioban.v1",
-                "human.hair.scurt.v1",
-                "human.torso.ie_altita.v1",
-                "human.legs.itari.v1",
+                "human.face.ucenic_solomonar.v1",
+                "human.hair.voinic_scurt.v1",
+                "human.torso.suman_de_ucenic.v1",
+                "human.legs.cioareci_de_ucenic.v1",
                 "human.feet.opinci.v1",
             ]
         );
@@ -2142,7 +2193,8 @@ mod tests {
                 pending_material: !promoted && part.material.is_some(),
             })
             .collect::<Vec<_>>();
-        paper_doll_identity_fact(definition, screen, root_entity, &samples).unwrap()
+        paper_doll_identity_fact(definition, screen, root_entity, &samples, 0)
+            .expect("the complete representative fact resolves")
     }
 
     #[test]

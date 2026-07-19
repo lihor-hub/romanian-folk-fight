@@ -1707,7 +1707,7 @@ mod tests {
     }
 
     #[test]
-    fn seeded_hair_ids_change_rendered_hair_while_locked_parts_stay_stable() {
+    fn seeded_hair_ids_change_rendered_hair_across_authored_identities() {
         use crate::roster::{ALTERNATE_UNLOCKED_HAIR_CAMPAIGN_SEED, CampaignSeed, LadderProgress};
 
         let first = LadderProgress(0)
@@ -1719,13 +1719,7 @@ mod tests {
             .expect("the first encounter is generated")
             .expect("the bundled profile resolves");
         assert_ne!(first.definition.parts.hair, alternate.definition.parts.hair);
-        assert_eq!(first.definition.parts.body, alternate.definition.parts.body);
-        assert_eq!(first.definition.parts.face, alternate.definition.parts.face);
-        assert_eq!(
-            first.definition.parts.torso,
-            alternate.definition.parts.torso
-        );
-        assert_eq!(first.definition.parts.legs, alternate.definition.parts.legs);
+        assert_ne!(first.definition.parts, alternate.definition.parts);
         assert_eq!(first.definition.parts.feet, alternate.definition.parts.feet);
 
         let rendered_hair = |definition: &CharacterDefinition| {

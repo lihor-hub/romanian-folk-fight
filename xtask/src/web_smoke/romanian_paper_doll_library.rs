@@ -11,7 +11,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crate::process::run_step;
-use crate::web_smoke::browser::{self, Checkpoint, PageStatus};
+use crate::web_smoke::browser::{self, Checkpoint, PageStatus, ResourceEntry};
 use crate::web_smoke::error::SmokeError;
 use crate::web_smoke::{artifacts, baseline, server::StaticServer};
 
@@ -28,6 +28,7 @@ const MAX_FRAMES: usize = 3600;
 const MAX_WALL_CLOCK: Duration = Duration::from_secs(180);
 const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const STABLE_FRAMES_REQUIRED: usize = 3;
+const MIN_CAPTURE_STABILITY: Duration = Duration::from_secs(10);
 
 const HAIDUC_IDS: &[&str] = &[
     "human.body.zvelt.v1",
@@ -106,6 +107,8 @@ struct Look {
     key: &'static str,
     preset: &'static str,
     ids: &'static [&'static str],
+    gear_part_count: usize,
+    gear_asset_paths: &'static [&'static str],
     baseline_time: f32,
 }
 
@@ -114,24 +117,46 @@ const LOOKS: &[Look] = &[
         key: "haiduc",
         preset: "Haiducul",
         ids: HAIDUC_IDS,
+        gear_part_count: 3,
+        gear_asset_paths: &[
+            "/assets/fighters/gear/runtime/topor_de_padurar.png",
+            "/assets/fighters/gear/runtime/opinci_iuti.png",
+        ],
         baseline_time: 10_000.0,
     },
     Look {
         key: "voinic",
         preset: "Voinicul",
         ids: VOINIC_IDS,
+        gear_part_count: 2,
+        gear_asset_paths: &[
+            "/assets/fighters/gear/runtime/bata_ciobaneasca.png",
+            "/assets/fighters/gear/runtime/scut_de_lemn.png",
+        ],
         baseline_time: 15_000.0,
     },
     Look {
         key: "cioban",
         preset: "Ciobanul",
         ids: CIOBAN_IDS,
+        gear_part_count: 3,
+        gear_asset_paths: &[
+            "/assets/fighters/gear/runtime/bata_ciobaneasca.png",
+            "/assets/fighters/gear/runtime/caciula_de_oaie.png",
+            "/assets/fighters/gear/runtime/cojoc_gros.png",
+        ],
         baseline_time: 20_000.0,
     },
     Look {
         key: "ucenic-solomonar",
         preset: "Ucenicul Solomonar",
         ids: UCENIC_SOLOMONAR_IDS,
+        gear_part_count: 3,
+        gear_asset_paths: &[
+            "/assets/fighters/gear/runtime/bata_ciobaneasca.png",
+            "/assets/fighters/gear/runtime/ie_descantata.png",
+            "/assets/fighters/gear/runtime/caciula_de_oaie.png",
+        ],
         baseline_time: 25_000.0,
     },
 ];
@@ -146,6 +171,8 @@ struct IdentityFact {
     part_count: usize,
     hybrid_part_count: usize,
     fallback_part_count: usize,
+    #[serde(default)]
+    gear_part_count: usize,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -316,10 +343,13 @@ fn run_look(
         FactSlot::Creation,
         "CharacterCreation",
         look.ids,
+        look.gear_part_count,
         None,
         &[],
     )
     .map_err(|error| smoke(viewport, "creation identity", error, &dir))?;
+    wait_for_gear_assets(checkpoint, look.gear_asset_paths)
+        .map_err(|error| smoke(viewport, "creator gear fetches", error, &dir))?;
     send_command(
         checkpoint,
         serde_json::json!({"cmd": "setTimeElapsed", "seconds": look.baseline_time}),
@@ -356,6 +386,7 @@ fn run_look(
         FactSlot::CombatPlayer,
         "Fight",
         look.ids,
+        look.gear_part_count,
         None,
         &[],
     )
@@ -365,6 +396,7 @@ fn run_look(
         FactSlot::CombatNpc,
         "Fight",
         HOT_DE_CODRU_IDS,
+        0,
         Some(HOT_DE_CODRU_SEED),
         &[],
     )
@@ -391,8 +423,16 @@ fn run_look(
     )
     .map_err(|error| smoke(viewport, "go to shop", error, &dir))?;
     wait_for_screen(checkpoint, "Shop").map_err(|error| smoke(viewport, "shop", error, &dir))?;
-    let shop = wait_for_fact(checkpoint, FactSlot::Shop, "Shop", look.ids, None, &[])
-        .map_err(|error| smoke(viewport, "shop identity", error, &dir))?;
+    let shop = wait_for_fact(
+        checkpoint,
+        FactSlot::Shop,
+        "Shop",
+        look.ids,
+        look.gear_part_count,
+        None,
+        &[],
+    )
+    .map_err(|error| smoke(viewport, "shop identity", error, &dir))?;
     require_same_identity(&creation, &shop)
         .map_err(|error| smoke(viewport, "creation to shop", error, &dir))?;
 
@@ -413,6 +453,7 @@ fn run_look(
         FactSlot::Reloaded,
         "Shop",
         look.ids,
+        look.gear_part_count,
         None,
         &[&shop.root_entity],
     )
@@ -432,6 +473,7 @@ fn run_look(
         FactSlot::CombatPlayer,
         "Fight",
         look.ids,
+        look.gear_part_count,
         None,
         &[&first_combat.root_entity],
     )
@@ -522,6 +564,7 @@ fn fact_problem_with_seed(
     fact: &IdentityFact,
     screen: &str,
     ids: &[&str],
+    gear_part_count: usize,
     seed: Option<u64>,
     rejected_roots: &[&str],
 ) -> Option<String> {
@@ -564,6 +607,12 @@ fn fact_problem_with_seed(
             fact.fallback_part_count
         ));
     }
+    if fact.gear_part_count != gear_part_count {
+        return Some(format!(
+            "{} gear layers, expected {gear_part_count}",
+            fact.gear_part_count
+        ));
+    }
     None
 }
 
@@ -571,7 +620,8 @@ fn identity_changed(expected: &IdentityFact, actual: &IdentityFact) -> Option<St
     (expected.seed != actual.seed
         || expected.resolved_part_ids != actual.resolved_part_ids
         || expected.rig_source_ids != actual.rig_source_ids
-        || expected.part_count != actual.part_count)
+        || expected.part_count != actual.part_count
+        || expected.gear_part_count != actual.gear_part_count)
         .then(|| format!("identity changed: expected={expected:?}, actual={actual:?}"))
 }
 
@@ -595,6 +645,7 @@ fn wait_for_fact(
     slot: FactSlot,
     screen: &str,
     ids: &[&str],
+    gear_part_count: usize,
     seed: Option<u64>,
     rejected_roots: &[&str],
 ) -> Result<IdentityFact, String> {
@@ -607,7 +658,9 @@ fn wait_for_fact(
         if let Some(snapshot) = read_snapshot(checkpoint)?
             && let Some(fact) = slot.get(&snapshot)
         {
-            if fact_problem_with_seed(fact, screen, ids, seed, rejected_roots).is_none() {
+            if fact_problem_with_seed(fact, screen, ids, gear_part_count, seed, rejected_roots)
+                .is_none()
+            {
                 return Ok(fact.clone());
             }
             last = Some(fact.clone());
@@ -622,6 +675,38 @@ fn wait_for_fact(
 
 fn readiness_poll_exhausted(elapsed: Duration, _observed_frames: usize) -> bool {
     elapsed > MAX_WALL_CLOCK
+}
+
+fn wait_for_gear_assets(checkpoint: &Checkpoint, paths: &[&str]) -> Result<(), String> {
+    let start = Instant::now();
+    let mut last_resources = Vec::new();
+    while start.elapsed() <= MAX_WALL_CLOCK {
+        checkpoint.wait_for_frame()?;
+        let status = checkpoint.read_status()?;
+        if gear_assets_fetched(&status.resources, paths) {
+            return Ok(());
+        }
+        last_resources = status
+            .resources
+            .into_iter()
+            .filter(|resource| paths.iter().any(|path| resource.url.ends_with(path)))
+            .collect();
+        std::thread::sleep(READINESS_POLL_INTERVAL);
+    }
+    Err(format!(
+        "gear fetches did not complete within {MAX_WALL_CLOCK:?}; expected={paths:?}, \
+         observed={last_resources:?}"
+    ))
+}
+
+fn gear_assets_fetched(resources: &[ResourceEntry], paths: &[&str]) -> bool {
+    paths.iter().all(|path| {
+        resources.iter().any(|resource| {
+            resource.url.ends_with(path)
+                && (200..300).contains(&resource.status)
+                && resource.transfer_size > 0.0
+        })
+    })
 }
 
 fn read_snapshot(checkpoint: &Checkpoint) -> Result<Option<PaperDollSnapshot>, String> {
@@ -675,18 +760,20 @@ fn capture_stable(
     checkpoint: &Checkpoint,
     viewport: &Viewport,
 ) -> Result<(PageStatus, Vec<u8>), String> {
+    let mut stable_since = Instant::now();
     let mut previous = None;
     let mut stable = 0usize;
     for _ in 0..300 {
         checkpoint.wait_for_frame()?;
         let screenshot = checkpoint.screenshot_png(viewport.width, viewport.height)?;
-        stable = if previous.as_deref() == Some(screenshot.as_slice()) {
-            stable + 1
+        if previous.as_deref() == Some(screenshot.as_slice()) {
+            stable += 1;
         } else {
-            1
-        };
+            stable = 1;
+            stable_since = Instant::now();
+        }
         previous = Some(screenshot);
-        if stable >= STABLE_FRAMES_REQUIRED {
+        if capture_stability_reached(stable_since.elapsed(), stable) {
             return Ok((
                 checkpoint.read_status()?,
                 previous.expect("the stable frame was just captured"),
@@ -694,6 +781,13 @@ fn capture_stable(
         }
     }
     Err("creator screenshot did not stabilize after pausing virtual time".to_owned())
+}
+
+fn capture_stability_reached(elapsed: Duration, stable_frames: usize) -> bool {
+    // Virtual time is paused, but texture fetch/decode and render extraction
+    // continue on real time. Requiring a real-time stability window prevents
+    // two early identical frames from winning just before a gear PNG appears.
+    elapsed >= MIN_CAPTURE_STABILITY && stable_frames >= STABLE_FRAMES_REQUIRED
 }
 
 fn check_no_errors(status: &PageStatus) -> Result<(), String> {
@@ -841,6 +935,7 @@ mod tests {
             part_count: EXPECTED_PART_COUNT,
             hybrid_part_count: 15,
             fallback_part_count: 0,
+            gear_part_count: 3,
         }
     }
 
@@ -848,12 +943,13 @@ mod tests {
     fn every_fact_requires_exact_identity_materials_and_a_fresh_scene_root() {
         let creation = fact("CharacterCreation", "10v0");
         assert!(
-            fact_problem_with_seed(&creation, "CharacterCreation", HAIDUC_IDS, None, &[]).is_none()
+            fact_problem_with_seed(&creation, "CharacterCreation", HAIDUC_IDS, 3, None, &[])
+                .is_none()
         );
 
         let reused_on_another_screen = fact("Shop", "10v0");
         assert!(
-            fact_problem_with_seed(&reused_on_another_screen, "Shop", HAIDUC_IDS, None, &[])
+            fact_problem_with_seed(&reused_on_another_screen, "Shop", HAIDUC_IDS, 3, None, &[])
                 .is_none(),
             "screen plus root is the freshness marker; Bevy may reuse an entity id"
         );
@@ -862,6 +958,7 @@ mod tests {
                 &reused_on_another_screen,
                 "Shop",
                 HAIDUC_IDS,
+                3,
                 None,
                 &["10v0"],
             )
@@ -871,7 +968,17 @@ mod tests {
 
         let mut fallback = fact("Shop", "20v0");
         fallback.fallback_part_count = 1;
-        assert!(fact_problem_with_seed(&fallback, "Shop", HAIDUC_IDS, None, &["10v0"]).is_some());
+        assert!(
+            fact_problem_with_seed(&fallback, "Shop", HAIDUC_IDS, 3, None, &["10v0"]).is_some()
+        );
+
+        let mut missing_gear = fact("CharacterCreation", "30v0");
+        missing_gear.gear_part_count = 2;
+        assert!(
+            fact_problem_with_seed(&missing_gear, "CharacterCreation", HAIDUC_IDS, 3, None, &[],)
+                .is_some(),
+            "a baseline cannot capture before every equipment layer is spawned"
+        );
     }
 
     #[test]
@@ -918,5 +1025,42 @@ mod tests {
             1,
         ));
         assert!(READINESS_POLL_INTERVAL > Duration::ZERO);
+    }
+
+    #[test]
+    fn creator_capture_requires_a_real_time_stability_window() {
+        assert!(!capture_stability_reached(
+            MIN_CAPTURE_STABILITY - Duration::from_millis(1),
+            STABLE_FRAMES_REQUIRED + 1,
+        ));
+        assert!(!capture_stability_reached(
+            MIN_CAPTURE_STABILITY,
+            STABLE_FRAMES_REQUIRED - 1,
+        ));
+        assert!(capture_stability_reached(
+            MIN_CAPTURE_STABILITY,
+            STABLE_FRAMES_REQUIRED,
+        ));
+    }
+
+    #[test]
+    fn creator_capture_requires_every_gear_fetch_to_complete() {
+        let paths = ["/assets/a.png", "/assets/b.png"];
+        let mut resources = vec![ResourceEntry {
+            url: "http://127.0.0.1/assets/a.png".to_owned(),
+            status: 200,
+            transfer_size: 42.0,
+        }];
+        assert!(!gear_assets_fetched(&resources, &paths));
+
+        resources.push(ResourceEntry {
+            url: "http://127.0.0.1/assets/b.png".to_owned(),
+            status: 200,
+            transfer_size: 0.0,
+        });
+        assert!(!gear_assets_fetched(&resources, &paths));
+
+        resources[1].transfer_size = 7.0;
+        assert!(gear_assets_fetched(&resources, &paths));
     }
 }
