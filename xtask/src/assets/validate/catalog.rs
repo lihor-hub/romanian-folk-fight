@@ -311,9 +311,7 @@ mod tests {
 
     #[test]
     fn bundled_catalog_references_registered_runtime_assets_with_matching_rig_metadata() {
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask lives below the workspace root");
+        let workspace = crate::process::workspace_root();
         let assets = workspace.join("assets");
         let aggregate = aggregate::build(&assets);
 
@@ -322,9 +320,7 @@ mod tests {
 
     #[test]
     fn catalog_check_reports_an_unregistered_asset_reference() {
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask lives below the workspace root");
+        let workspace = crate::process::workspace_root();
         let assets = workspace.join("assets");
         let aggregate = aggregate::build(&assets);
         let source = std::fs::read_to_string(assets.join("fighters/catalog/human-foundation.json"))
@@ -350,9 +346,7 @@ mod tests {
 
     #[test]
     fn catalog_check_reports_an_unregistered_layer_asset() {
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask lives below the workspace root");
+        let workspace = crate::process::workspace_root();
         let assets = workspace.join("assets");
         let aggregate = aggregate::build(&assets);
         let invalid = catalog_with_layer("fighters/human/runtime/not-registered.png", [1.0, 71.0]);
@@ -373,9 +367,7 @@ mod tests {
 
     #[test]
     fn catalog_check_reports_a_layer_pivot_mismatch() {
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask lives below the workspace root");
+        let workspace = crate::process::workspace_root();
         let assets = workspace.join("assets");
         let aggregate = aggregate::build(&assets);
         let invalid = catalog_with_layer("fighters/human/runtime/hair.png", [99.0, 99.0]);

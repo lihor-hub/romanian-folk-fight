@@ -9,9 +9,12 @@
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+
+static WORKSPACE_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
 /// Directory where xtask retains one log file per executed step, so a
 /// failure's full output survives after the terminal history scrolls away.
@@ -23,15 +26,49 @@ pub fn artifacts_dir() -> PathBuf {
     workspace_root().join("target").join("xtask-artifacts")
 }
 
-/// The workspace root, derived from `xtask`'s own manifest directory
-/// (`<root>/xtask`) rather than the current working directory, so `cargo
-/// xtask` behaves the same regardless of where it is invoked from within the
-/// workspace.
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask/Cargo.toml always has a parent workspace root")
-        .to_path_buf()
+/// The workspace root that owns the directory from which xtask was invoked.
+///
+/// Resolve this at runtime rather than embedding `CARGO_MANIFEST_DIR` in the
+/// binary. Cargo can reuse one `target/debug/xtask` across worktrees when a
+/// shared target directory is configured, so compile-time paths may name a
+/// different checkout than the caller's current working directory.
+pub(crate) fn workspace_root() -> PathBuf {
+    WORKSPACE_ROOT
+        .get_or_init(|| {
+            let current_dir = std::env::current_dir().unwrap_or_else(|error| {
+                panic!("cargo xtask: cannot read current directory: {error}")
+            });
+            discover_workspace_root(&current_dir).unwrap_or_else(|error| {
+                panic!(
+                    "cargo xtask: cannot resolve workspace root from {}: {error}",
+                    current_dir.display()
+                )
+            })
+        })
+        .clone()
+}
+
+fn discover_workspace_root(start: &Path) -> Result<PathBuf, String> {
+    for candidate in start.ancestors() {
+        let manifest_path = candidate.join("Cargo.toml");
+        if !manifest_path.is_file() {
+            continue;
+        }
+
+        let contents = fs::read_to_string(&manifest_path)
+            .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
+        let manifest = contents.parse::<toml::Table>().map_err(|error| {
+            format!(
+                "failed to parse candidate workspace manifest {}: {error}",
+                manifest_path.display()
+            )
+        })?;
+        if manifest.contains_key("workspace") {
+            return Ok(candidate.to_path_buf());
+        }
+    }
+
+    Err("no ancestor Cargo.toml contains a [workspace] table".to_string())
 }
 
 fn artifact_path(label: &str) -> PathBuf {

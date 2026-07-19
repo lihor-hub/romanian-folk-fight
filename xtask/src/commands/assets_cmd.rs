@@ -17,7 +17,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::assets::CheckResult;
@@ -475,10 +475,7 @@ fn slugify(label: &str) -> String {
 }
 
 fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask/Cargo.toml always has a parent workspace root")
-        .to_path_buf()
+    crate::process::workspace_root()
 }
 
 #[cfg(test)]
