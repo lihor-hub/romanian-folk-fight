@@ -109,13 +109,11 @@ const SCREEN_MAX_WALL_CLOCK: Duration = Duration::from_secs(120);
 const COMMAND_CONSUMED_MAX_FRAMES: usize = 300;
 const SETTLE_FRAMES: usize = 10;
 
-/// Exact `headless_chrome` transport signature observed in every #312/#330
-/// failure. A surrounding operation label may differ (`wait_for_frame`,
-/// `eval`, screenshot, ...), but this library-owned cause proves the CDP
-/// transport itself is gone. Product assertions and generic timeout/closed
-/// text deliberately do not match.
-const CDP_CONNECTION_DEATH_SIGNATURE: &str =
-    "Unable to make method calls because underlying connection is closed";
+/// Byte-exact harness error observed in every #312/#330 failure. Matching the
+/// complete `wait_for_frame` wrapper as well as the `headless_chrome` cause
+/// prevents a product/console assertion that merely quotes the library phrase
+/// from being mistaken for proof that the CDP transport died.
+const OBSERVED_CDP_CONNECTION_DEATH: &str = "waiting for an animation frame failed: Unable to make method calls because underlying connection is closed";
 /// A dead CDP connection cannot be recovered in place. The `save-reload`
 /// scenario may therefore start one fresh Chrome/profile and replay its whole
 /// deterministic journey once; every other error remains fail-fast.
@@ -124,7 +122,7 @@ const ATTEMPT_CHECKPOINTS: [&str; CDP_CONNECTION_DEATH_RETRY_BUDGET + 1] =
     ["journey", "journey-retry"];
 
 fn is_cdp_connection_death(error: &str) -> bool {
-    error.contains(CDP_CONNECTION_DEATH_SIGNATURE)
+    error == OBSERVED_CDP_CONNECTION_DEATH
 }
 
 fn run_with_cdp_retry<T, F>(mut run_attempt: F) -> Result<T, String>
@@ -582,6 +580,7 @@ mod tests {
             "Unable to make method calls because connection is closed",
             "Unable to make method calls because underlying connection is open",
             "unable to make method calls because underlying connection is closed",
+            "after reload: console.error observed: [\"Unable to make method calls because underlying connection is closed\"]",
         ] {
             assert!(
                 !is_cdp_connection_death(error),
@@ -611,14 +610,14 @@ mod tests {
         let mut attempts = Vec::new();
         let error = run_with_cdp_retry::<(), _>(|attempt| {
             attempts.push(attempt);
-            Err(format!("attempt {attempt}: {OBSERVED_CDP_DEATH}"))
+            Err(OBSERVED_CDP_DEATH.to_string())
         })
         .expect_err("a second CDP death must fail the scenario");
 
         assert_eq!(attempts, vec![0, 1]);
         assert!(error.contains("retry budget exhausted"));
-        assert!(error.contains("attempt 0"));
-        assert!(error.contains("attempt 1"));
+        assert!(error.contains(&format!("first attempt: {OBSERVED_CDP_DEATH}")));
+        assert!(error.contains(&format!("final attempt: {OBSERVED_CDP_DEATH}")));
     }
 
     #[test]

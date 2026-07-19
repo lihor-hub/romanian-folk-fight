@@ -126,7 +126,7 @@ Expected: PASS; `journey/chrome_debug.log` exists, and the full reload resumes a
 - Consumes: issue #312, the branch diff, and fresh verification output.
 - Produces: an auditable report and a queued PR closing #312.
 
-- [ ] **Step 1: Run independent standards and spec reviews**
+- [x] **Step 1: Run independent standards and spec reviews**
 
 Review `git diff origin/main...HEAD` against `AGENTS.md`, issue #312, and the exclusive touch-set. Fix confirmed findings once.
 
