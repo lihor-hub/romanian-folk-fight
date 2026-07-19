@@ -130,11 +130,11 @@ Expected: PASS; `journey/chrome_debug.log` exists, and the full reload resumes a
 
 Review `git diff origin/main...HEAD` against `AGENTS.md`, issue #312, and the exclusive touch-set. Fix confirmed findings once.
 
-- [ ] **Step 2: Write the required report**
+- [x] **Step 2: Write the required report**
 
 Record the three-attempt evidence, root cause, classifier/retry semantics, diagnostic artifacts, tests/browser result, review findings, commits, PR state, deviations, and #330 rerun instructions.
 
-- [ ] **Step 3: Rebase and run the full gate**
+- [x] **Step 3: Rebase and run the full gate**
 
 Run: `git fetch origin && git rebase origin/main`
 

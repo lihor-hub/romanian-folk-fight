@@ -91,7 +91,9 @@ and removal of only `--disable-breakpad` from launcher defaults.
 - The successful local attempt produced `journey/chrome_debug.log` and
   `journey/chrome-crashes/settings.dat`; `journey-retry` was absent, proving a
   first-attempt pass does not run the retry.
-- `cargo xtask pre-push`: PENDING FINAL REBASE.
+- `cargo xtask pre-push`: all gates passed after the final rebase (fmt, default
+  and review Clippy, default and review workspace tests, native debug, native
+  release, and wasm build-matrix checks; 502.91 seconds).
 
 ## Independent review
 
@@ -106,8 +108,8 @@ or unrelated scope change was found.
 
 ## Commits and PR state
 
-- `66b467a fix: harden save-reload CDP lifecycle (#312)`
-- Final review/report commit: PENDING.
+- `4eda72e fix: harden save-reload CDP lifecycle (#312)`
+- `9d87d2b test: pin exact CDP death boundary (#312)`
 - Pull request and squash auto-merge: PENDING.
 
 ## Deviations
@@ -118,7 +120,12 @@ were run separately and the combined module suite was verified with
 `cargo test -p xtask web_smoke::`. The desktop environment also exported
 `NO_COLOR=1`, while Trunk 0.21.14 requires the environment-backed Boolean to be
 `true` or `false`; the browser journey was therefore run with
-`NO_COLOR=true`. Neither deviation changes production or CI behavior.
+`NO_COLOR=true`. The first full gate attempt also stopped during dependency
+compilation with LLVM's `No space left on device`, after formatting and both
+Clippy modes passed. The obsolete generated `target/` cache in PR #330's merged,
+clean worktree was removed with `cargo clean`, reclaiming 20.1 GiB; source and
+evidence were untouched. The complete gate then passed. None of these
+environmental deviations changes production or CI behavior.
 
 ## PR #330 unblock
 
