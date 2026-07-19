@@ -58,6 +58,10 @@ use headless_chrome::{Browser, LaunchOptionsBuilder, Tab};
 /// `xtask`, never the game binary).
 const INSTRUMENTATION_SCRIPT: &str = r#"
 window.__smoke = { console: [], errors: [] };
+// The modular paper-doll review loads hundreds of independent textures.
+// Chrome's default 250-entry Resource Timing buffer evicts early requests
+// before readiness checks can prove that their responses completed.
+performance.setResourceTimingBufferSize(5000);
 (function () {
   var push = function (level, args) {
     try {

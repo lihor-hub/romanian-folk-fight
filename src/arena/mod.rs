@@ -1046,7 +1046,7 @@ mod tests {
     }
 
     #[test]
-    fn seeded_human_encounter_repeats_and_an_alternate_seed_changes_only_unlocked_choices() {
+    fn seeded_human_encounter_repeats_and_an_alternate_seed_changes_authored_choices() {
         fn generated(app: &mut App) -> SeededOpponent {
             app.world_mut()
                 .query_filtered::<&SeededOpponent, With<EnemyFighter>>()
@@ -1072,13 +1072,7 @@ mod tests {
             first.definition.parts.hair, alternate.definition.parts.hair,
             "the pinned alternate review seed exercises the unlocked hair choice"
         );
-        assert_eq!(first.definition.parts.body, alternate.definition.parts.body);
-        assert_eq!(first.definition.parts.face, alternate.definition.parts.face);
-        assert_eq!(
-            first.definition.parts.torso,
-            alternate.definition.parts.torso
-        );
-        assert_eq!(first.definition.parts.legs, alternate.definition.parts.legs);
+        assert_ne!(first.definition.parts, alternate.definition.parts);
         assert_eq!(first.definition.parts.feet, alternate.definition.parts.feet);
         assert_eq!(
             first.definition.parts.waist,

@@ -76,6 +76,30 @@ pub const HUMAN_LOOKS: &[HumanLookSpec] = &[
             "human.feet.opinci.v1",
         ],
     },
+    HumanLookSpec {
+        slug: "voinic",
+        title: "Voinic (authored production look)",
+        resolved_ids: [
+            "human.body.voinic.v1",
+            "human.face.voinic.v1",
+            "human.hair.voinic_scurt.v1",
+            "human.torso.camasa_voiniceasca.v1",
+            "human.legs.cioareci_voinicesti.v1",
+            "human.feet.opinci.v1",
+        ],
+    },
+    HumanLookSpec {
+        slug: "ucenic-solomonar",
+        title: "Ucenic Solomonar (authored production look)",
+        resolved_ids: [
+            "human.body.ucenic_solomonar.v1",
+            "human.face.ucenic_solomonar.v1",
+            "human.hair.ucenic_ciuf.v1",
+            "human.torso.suman_de_ucenic.v1",
+            "human.legs.cioareci_de_ucenic.v1",
+            "human.feet.opinci.v1",
+        ],
+    },
 ];
 
 #[derive(Deserialize)]
@@ -99,7 +123,7 @@ pub struct HumanLookComposition<'a> {
     pub layers: Vec<&'a ResolvedRecord>,
 }
 
-/// Resolves the two exact authored semantic selections through the v3 catalog
+/// Resolves the four exact authored semantic selections through the v3 catalog
 /// to their registered albedo records. Asset validation owns diagnostics; an
 /// invalid document or missing layer yields no misleading partial specimen.
 pub fn human_look_compositions<'a>(
@@ -406,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn bundled_catalog_has_exact_resolvable_haiduc_and_cioban_gallery_layers() {
+    fn bundled_catalog_has_exact_resolvable_layers_for_all_four_looks() {
         let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("xtask lives below the workspace root")
@@ -446,6 +470,28 @@ mod tests {
                     "human.hair.prins.v1",
                     "human.torso.camasa_ciobaneasca.v1",
                     "human.legs.cioareci.v1",
+                    "human.feet.opinci.v1",
+                ],
+            ),
+            (
+                "composition.human.voinic",
+                [
+                    "human.body.voinic.v1",
+                    "human.face.voinic.v1",
+                    "human.hair.voinic_scurt.v1",
+                    "human.torso.camasa_voiniceasca.v1",
+                    "human.legs.cioareci_voinicesti.v1",
+                    "human.feet.opinci.v1",
+                ],
+            ),
+            (
+                "composition.human.ucenic-solomonar",
+                [
+                    "human.body.ucenic_solomonar.v1",
+                    "human.face.ucenic_solomonar.v1",
+                    "human.hair.ucenic_ciuf.v1",
+                    "human.torso.suman_de_ucenic.v1",
+                    "human.legs.cioareci_de_ucenic.v1",
                     "human.feet.opinci.v1",
                 ],
             ),

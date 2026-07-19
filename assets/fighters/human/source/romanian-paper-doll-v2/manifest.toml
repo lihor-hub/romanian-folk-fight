@@ -1,0 +1,26 @@
+# Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs.
+version = 1
+
+[[ignore]]
+path = "README.md"
+reason = "Production provenance, cultural-reference, extraction, rights, and authoring contract for the Voinic and Ucenic Solomonar masters."
+
+[[record]]
+id = "fighters.human.source.romanian-paper-doll-v2-voinic-master"
+path = "voinic-chroma-master.png"
+kind = "image"
+category = "fighter-source-sheet"
+status = "source"
+provenance = "sensibly-quantized-openai-built-in-image-generation-master"
+license = "Same as project assets unless superseded"
+dimensions = [1145, 1373]
+
+[[record]]
+id = "fighters.human.source.romanian-paper-doll-v2-ucenic-solomonar-master"
+path = "ucenic-solomonar-chroma-master.png"
+kind = "image"
+category = "fighter-source-sheet"
+status = "source"
+provenance = "sensibly-quantized-openai-built-in-image-generation-master"
+license = "Same as project assets unless superseded"
+dimensions = [1401, 1123]

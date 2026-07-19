@@ -585,52 +585,27 @@ fn attachment_compatible_with_region(region: BodyRegion, point: &str) -> bool {
 }
 
 fn runtime_asset_attachment(path: &str) -> Option<&'static str> {
-    Some(match path {
-        "fighters/human/runtime/hair.png"
-        | "fighters/human/runtime/haiduc/hair.png"
-        | "fighters/human/runtime/cioban/hair.png"
-        | "fighters/human/runtime/shared/hair_scurt.png" => "hair",
-        "fighters/human/runtime/head.png"
-        | "fighters/human/runtime/haiduc/head.png"
-        | "fighters/human/runtime/cioban/head.png" => "head",
-        "fighters/human/runtime/torso.png"
-        | "fighters/human/runtime/haiduc/torso.png"
-        | "fighters/human/runtime/cioban/torso.png" => "torso",
-        "fighters/human/runtime/upper_arm_back.png"
-        | "fighters/human/runtime/haiduc/upper_arm_back.png"
-        | "fighters/human/runtime/cioban/upper_arm_back.png" => "upper_arm_back",
-        "fighters/human/runtime/forearm_back.png"
-        | "fighters/human/runtime/haiduc/forearm_back.png"
-        | "fighters/human/runtime/cioban/forearm_back.png" => "forearm_back",
-        "fighters/human/runtime/hand_back.png"
-        | "fighters/human/runtime/haiduc/hand_back.png"
-        | "fighters/human/runtime/cioban/hand_back.png" => "hand_back",
-        "fighters/human/runtime/thigh_back.png"
-        | "fighters/human/runtime/haiduc/thigh_back.png"
-        | "fighters/human/runtime/cioban/thigh_back.png" => "thigh_back",
-        "fighters/human/runtime/shin_back.png"
-        | "fighters/human/runtime/haiduc/shin_back.png"
-        | "fighters/human/runtime/cioban/shin_back.png" => "shin_back",
-        "fighters/human/runtime/foot_back.png" | "fighters/human/runtime/shared/foot_back.png" => {
-            "foot_back"
-        }
-        "fighters/human/runtime/upper_arm_front.png"
-        | "fighters/human/runtime/haiduc/upper_arm_front.png"
-        | "fighters/human/runtime/cioban/upper_arm_front.png" => "upper_arm_front",
-        "fighters/human/runtime/forearm_front.png"
-        | "fighters/human/runtime/haiduc/forearm_front.png"
-        | "fighters/human/runtime/cioban/forearm_front.png" => "forearm_front",
-        "fighters/human/runtime/hand_front.png"
-        | "fighters/human/runtime/haiduc/hand_front.png"
-        | "fighters/human/runtime/cioban/hand_front.png" => "hand_front",
-        "fighters/human/runtime/thigh_front.png"
-        | "fighters/human/runtime/haiduc/thigh_front.png"
-        | "fighters/human/runtime/cioban/thigh_front.png" => "thigh_front",
-        "fighters/human/runtime/shin_front.png"
-        | "fighters/human/runtime/haiduc/shin_front.png"
-        | "fighters/human/runtime/cioban/shin_front.png" => "shin_front",
-        "fighters/human/runtime/foot_front.png"
-        | "fighters/human/runtime/shared/foot_front.png" => "foot_front",
+    let stem = path
+        .strip_prefix("fighters/human/runtime/")?
+        .rsplit('/')
+        .next()?
+        .strip_suffix(".png")?;
+    Some(match stem {
+        "hair" | "hair_scurt" => "hair",
+        "head" => "head",
+        "torso" => "torso",
+        "upper_arm_back" => "upper_arm_back",
+        "forearm_back" => "forearm_back",
+        "hand_back" => "hand_back",
+        "thigh_back" => "thigh_back",
+        "shin_back" => "shin_back",
+        "foot_back" => "foot_back",
+        "upper_arm_front" => "upper_arm_front",
+        "forearm_front" => "forearm_front",
+        "hand_front" => "hand_front",
+        "thigh_front" => "thigh_front",
+        "shin_front" => "shin_front",
+        "foot_front" => "foot_front",
         _ => return None,
     })
 }
@@ -952,6 +927,24 @@ mod tests {
         "human.feet.opinci.v1",
     ];
 
+    const VOINIC_LOOK: [&str; 6] = [
+        "human.body.voinic.v1",
+        "human.face.voinic.v1",
+        "human.hair.voinic_scurt.v1",
+        "human.torso.camasa_voiniceasca.v1",
+        "human.legs.cioareci_voinicesti.v1",
+        "human.feet.opinci.v1",
+    ];
+
+    const UCENIC_SOLOMONAR_LOOK: [&str; 6] = [
+        "human.body.ucenic_solomonar.v1",
+        "human.face.ucenic_solomonar.v1",
+        "human.hair.ucenic_ciuf.v1",
+        "human.torso.suman_de_ucenic.v1",
+        "human.legs.cioareci_de_ucenic.v1",
+        "human.feet.opinci.v1",
+    ];
+
     fn id(value: &str) -> PartId {
         PartId::new(value).expect("test ID is valid")
     }
@@ -1008,13 +1001,18 @@ mod tests {
     }
 
     #[test]
-    fn bundled_catalog_resolves_complete_haiduc_and_cioban_looks() {
+    fn bundled_catalog_resolves_all_four_complete_romanian_looks() {
         let catalog = fixture();
         catalog
             .validate()
             .expect("bundled production catalog validates");
 
-        for (role, selected_ids) in [("haiduc", HAIDUC_LOOK), ("cioban", CIOBAN_LOOK)] {
+        for (role, selected_ids) in [
+            ("haiduc", HAIDUC_LOOK),
+            ("voinic", VOINIC_LOOK),
+            ("cioban", CIOBAN_LOOK),
+            ("ucenic_solomonar", UCENIC_SOLOMONAR_LOOK),
+        ] {
             for stable_id in selected_ids {
                 let record = catalog
                     .part(&id(stable_id))

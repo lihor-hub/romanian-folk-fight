@@ -1588,12 +1588,16 @@ mod tests {
         let expected_build = match draft.definition().parts.body.as_str() {
             "human.body.zvelt.v1" => BodyBuild::Lean,
             "human.body.vanjos.v1" => BodyBuild::Sturdy,
+            "human.body.voinic.v1" => BodyBuild::Powerful,
+            "human.body.ucenic_solomonar.v1" => BodyBuild::Balanced,
             other => panic!("unexpected preview body ID {other}"),
         };
         let expected_hair = match draft.definition().parts.hair.as_str() {
             "human.hair.plete.v1" => HairStyle::Long,
             "human.hair.prins.v1" => HairStyle::Tied,
             "human.hair.scurt.v1" => HairStyle::Short,
+            "human.hair.voinic_scurt.v1" => HairStyle::Short,
+            "human.hair.ucenic_ciuf.v1" => HairStyle::Braided,
             other => panic!("unexpected preview hair ID {other}"),
         };
         assert_eq!(draft.appearance().build, expected_build);
@@ -1913,14 +1917,7 @@ mod tests {
                 magie: 0,
             }
         );
-        assert_eq!(
-            player.appearance,
-            PlayerAppearance {
-                build: BodyBuild::Sturdy,
-                hair: HairStyle::Short,
-                ..HeroPreset::Voinicul.appearance()
-            }
-        );
+        assert_eq!(player.appearance, HeroPreset::Voinicul.appearance());
         let loadout = app.world().resource::<PlayerEquipment>();
         assert_eq!(
             loadout.0.equipped(crate::items::Slot::Weapon),

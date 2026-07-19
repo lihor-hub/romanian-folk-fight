@@ -52,16 +52,25 @@ pub enum CreatorPartField {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WardrobeChoice {
     Haiduc,
+    Voinic,
     Cioban,
+    UcenicSolomonar,
 }
 
 impl WardrobeChoice {
-    pub const ALL: [Self; 2] = [Self::Haiduc, Self::Cioban];
+    pub const ALL: [Self; 4] = [
+        Self::Haiduc,
+        Self::Voinic,
+        Self::Cioban,
+        Self::UcenicSolomonar,
+    ];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Haiduc => "Haiduc",
+            Self::Voinic => "Voinic",
             Self::Cioban => "Cioban",
+            Self::UcenicSolomonar => "Ucenic Solomonar",
         }
     }
 
@@ -82,6 +91,16 @@ impl WardrobeChoice {
                 "human.legs.cioareci.v1",
                 "human.feet.opinci.v1",
             ),
+            Self::Voinic => (
+                "human.torso.camasa_voiniceasca.v1",
+                "human.legs.cioareci_voinicesti.v1",
+                "human.feet.opinci.v1",
+            ),
+            Self::UcenicSolomonar => (
+                "human.torso.suman_de_ucenic.v1",
+                "human.legs.cioareci_de_ucenic.v1",
+                "human.feet.opinci.v1",
+            ),
         };
         let torso = catalog_id(catalog, BodyRegion::Torso, torso)?;
         let legs = catalog_id(catalog, BodyRegion::Legs, legs)?;
@@ -99,7 +118,7 @@ struct CreatorPartOption {
     label: &'static str,
 }
 
-const BODY_OPTIONS: [CreatorPartOption; 2] = [
+const BODY_OPTIONS: [CreatorPartOption; 4] = [
     CreatorPartOption {
         id: "human.body.zvelt.v1",
         label: "Zvelt",
@@ -108,8 +127,16 @@ const BODY_OPTIONS: [CreatorPartOption; 2] = [
         id: "human.body.vanjos.v1",
         label: "Vânjos",
     },
+    CreatorPartOption {
+        id: "human.body.voinic.v1",
+        label: "Voinic",
+    },
+    CreatorPartOption {
+        id: "human.body.ucenic_solomonar.v1",
+        label: "Ucenic",
+    },
 ];
-const FACE_OPTIONS: [CreatorPartOption; 2] = [
+const FACE_OPTIONS: [CreatorPartOption; 4] = [
     CreatorPartOption {
         id: "human.face.haiduc.v1",
         label: "Haiduc",
@@ -118,8 +145,16 @@ const FACE_OPTIONS: [CreatorPartOption; 2] = [
         id: "human.face.cioban.v1",
         label: "Cioban",
     },
+    CreatorPartOption {
+        id: "human.face.voinic.v1",
+        label: "Voinic",
+    },
+    CreatorPartOption {
+        id: "human.face.ucenic_solomonar.v1",
+        label: "Ucenic",
+    },
 ];
-const HAIR_OPTIONS: [CreatorPartOption; 3] = [
+const HAIR_OPTIONS: [CreatorPartOption; 5] = [
     CreatorPartOption {
         id: "human.hair.plete.v1",
         label: "Plete",
@@ -131,6 +166,14 @@ const HAIR_OPTIONS: [CreatorPartOption; 3] = [
     CreatorPartOption {
         id: "human.hair.scurt.v1",
         label: "Scurt",
+    },
+    CreatorPartOption {
+        id: "human.hair.voinic_scurt.v1",
+        label: "Voinicesc",
+    },
+    CreatorPartOption {
+        id: "human.hair.ucenic_ciuf.v1",
+        label: "Ciuf",
     },
 ];
 
@@ -605,9 +648,9 @@ fn definition_for_preset(
             "human.hair.plete.v1",
         ),
         HeroPreset::Voinicul => (
-            "human.body.vanjos.v1",
-            "human.face.haiduc.v1",
-            "human.hair.scurt.v1",
+            "human.body.voinic.v1",
+            "human.face.voinic.v1",
+            "human.hair.voinic_scurt.v1",
         ),
         HeroPreset::Ciobanul => (
             "human.body.vanjos.v1",
@@ -615,9 +658,9 @@ fn definition_for_preset(
             "human.hair.prins.v1",
         ),
         HeroPreset::UceniculSolomonar => (
-            "human.body.zvelt.v1",
-            "human.face.cioban.v1",
-            "human.hair.plete.v1",
+            "human.body.ucenic_solomonar.v1",
+            "human.face.ucenic_solomonar.v1",
+            "human.hair.ucenic_ciuf.v1",
         ),
     };
     definition.parts.body = catalog_id(catalog, BodyRegion::Body, body)?;
@@ -633,20 +676,26 @@ fn synchronize_appearance_projection(definition: &mut CharacterDefinition) {
     definition.appearance.build = match definition.parts.body.as_str() {
         "human.body.zvelt.v1" => BodyBuild::Lean,
         "human.body.vanjos.v1" => BodyBuild::Sturdy,
+        "human.body.voinic.v1" => BodyBuild::Powerful,
+        "human.body.ucenic_solomonar.v1" => BodyBuild::Balanced,
         _ => definition.appearance.build,
     };
     definition.appearance.hair = match definition.parts.hair.as_str() {
         "human.hair.plete.v1" => HairStyle::Long,
         "human.hair.prins.v1" => HairStyle::Tied,
         "human.hair.scurt.v1" => HairStyle::Short,
+        "human.hair.voinic_scurt.v1" => HairStyle::Short,
+        "human.hair.ucenic_ciuf.v1" => HairStyle::Braided,
         _ => definition.appearance.hair,
     };
 }
 
 const fn wardrobe_for_preset(preset: HeroPreset) -> WardrobeChoice {
     match preset {
-        HeroPreset::Haiducul | HeroPreset::Voinicul => WardrobeChoice::Haiduc,
-        HeroPreset::Ciobanul | HeroPreset::UceniculSolomonar => WardrobeChoice::Cioban,
+        HeroPreset::Haiducul => WardrobeChoice::Haiduc,
+        HeroPreset::Voinicul => WardrobeChoice::Voinic,
+        HeroPreset::Ciobanul => WardrobeChoice::Cioban,
+        HeroPreset::UceniculSolomonar => WardrobeChoice::UcenicSolomonar,
     }
 }
 
@@ -742,12 +791,16 @@ mod tests {
         let expected_build = match draft.definition().parts.body.as_str() {
             "human.body.zvelt.v1" => BodyBuild::Lean,
             "human.body.vanjos.v1" => BodyBuild::Sturdy,
+            "human.body.voinic.v1" => BodyBuild::Powerful,
+            "human.body.ucenic_solomonar.v1" => BodyBuild::Balanced,
             other => panic!("unexpected creator body ID {other}"),
         };
         let expected_hair = match draft.definition().parts.hair.as_str() {
             "human.hair.plete.v1" => HairStyle::Long,
             "human.hair.prins.v1" => HairStyle::Tied,
             "human.hair.scurt.v1" => HairStyle::Short,
+            "human.hair.voinic_scurt.v1" => HairStyle::Short,
+            "human.hair.ucenic_ciuf.v1" => HairStyle::Braided,
             other => panic!("unexpected creator hair ID {other}"),
         };
         assert_eq!(draft.appearance().build, expected_build);
@@ -846,6 +899,78 @@ mod tests {
             "human.hair.plete.v1"
         );
         assert!(catalog.resolve(draft.definition()).is_ok());
+    }
+
+    #[test]
+    fn every_preset_resolves_to_its_distinct_production_part_ids() {
+        let catalog = catalog();
+        let expected = [
+            (
+                HeroPreset::Haiducul,
+                [
+                    "human.body.zvelt.v1",
+                    "human.face.haiduc.v1",
+                    "human.hair.plete.v1",
+                    "human.torso.ie_altita.v1",
+                    "human.legs.itari.v1",
+                    "human.feet.opinci.v1",
+                ],
+            ),
+            (
+                HeroPreset::Voinicul,
+                [
+                    "human.body.voinic.v1",
+                    "human.face.voinic.v1",
+                    "human.hair.voinic_scurt.v1",
+                    "human.torso.camasa_voiniceasca.v1",
+                    "human.legs.cioareci_voinicesti.v1",
+                    "human.feet.opinci.v1",
+                ],
+            ),
+            (
+                HeroPreset::Ciobanul,
+                [
+                    "human.body.vanjos.v1",
+                    "human.face.cioban.v1",
+                    "human.hair.prins.v1",
+                    "human.torso.camasa_ciobaneasca.v1",
+                    "human.legs.cioareci.v1",
+                    "human.feet.opinci.v1",
+                ],
+            ),
+            (
+                HeroPreset::UceniculSolomonar,
+                [
+                    "human.body.ucenic_solomonar.v1",
+                    "human.face.ucenic_solomonar.v1",
+                    "human.hair.ucenic_ciuf.v1",
+                    "human.torso.suman_de_ucenic.v1",
+                    "human.legs.cioareci_de_ucenic.v1",
+                    "human.feet.opinci.v1",
+                ],
+            ),
+        ];
+        let mut draft = CharacterDraft::default_with_catalog(&catalog).unwrap();
+        let mut identities = std::collections::HashSet::new();
+
+        for (preset, ids) in expected {
+            draft
+                .select_choice(HeroChoice::Preset(preset), &catalog)
+                .unwrap();
+            let parts = &draft.definition().parts;
+            let actual = [
+                parts.body.as_str(),
+                parts.face.as_str(),
+                parts.hair.as_str(),
+                parts.torso.as_str(),
+                parts.legs.as_str(),
+                parts.feet.as_str(),
+            ];
+            assert_eq!(actual, ids, "{} keeps its authored identity", preset.name());
+            assert!(identities.insert(actual.map(ToOwned::to_owned)));
+            assert_eq!(draft.appearance(), preset.appearance());
+            assert!(catalog.resolve(draft.definition()).is_ok());
+        }
     }
 
     #[test]
