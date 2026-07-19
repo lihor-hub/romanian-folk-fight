@@ -545,11 +545,17 @@ fn spawn_cutout_rig_impl(
     equipment: Option<&Equipment>,
     accent_hue: Option<Color>,
 ) {
-    commands.entity(root).insert(CutoutRig {
-        template: template.template,
-        flip_x,
-    });
-    commands.entity(root).insert(CutoutPose::Idle);
+    // Sprites require inherited visibility. The rig root owns the first
+    // sprite children, so it must participate in that hierarchy too; retain
+    // an explicit caller-provided visibility state when one already exists.
+    commands
+        .entity(root)
+        .insert(CutoutRig {
+            template: template.template,
+            flip_x,
+        })
+        .insert(CutoutPose::Idle)
+        .insert_if_new(Visibility::default());
 
     // Root-level spawn order follows the template's authored (draw) order,
     // skipping chained parts (forearms, hands, shins, feet): those are
@@ -1952,6 +1958,71 @@ mod tests {
         let mut expected = visual.attachment.parts.to_vec();
         expected.sort_by_key(|kind| *kind as usize);
         assert_eq!(attached_regions, expected);
+    }
+
+    #[test]
+    fn equipped_rig_root_provides_inherited_visibility_for_part_and_gear_children() {
+        let mut equipment = Equipment::default();
+        for item in [
+            ItemId::Palos,
+            ItemId::ScutDeLemn,
+            ItemId::IeDescantata,
+            ItemId::CaciulaDeOaie,
+            ItemId::OpinciIuti,
+        ] {
+            equipment.equip(item);
+        }
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        world.commands().queue(move |world: &mut World| {
+            let mut commands = world.commands();
+            spawn_cutout_rig_with_gear(
+                &mut commands,
+                root,
+                human_template(),
+                None,
+                false,
+                &equipment,
+            );
+        });
+        world.flush();
+
+        assert!(
+            world.get::<Visibility>(root).is_some(),
+            "the rig root must participate in child visibility inheritance"
+        );
+        assert!(
+            world.get::<InheritedVisibility>(root).is_some(),
+            "the rig root must provide the component Bevy validates across sprite child edges"
+        );
+
+        let mut parts = world.query::<(&CutoutPartMarker, &ChildOf)>();
+        assert!(
+            parts.iter(&world).next().is_some(),
+            "the rig should exercise body-part parenting"
+        );
+        for (_, child_of) in parts.iter(&world) {
+            assert!(
+                world
+                    .get::<InheritedVisibility>(child_of.parent())
+                    .is_some(),
+                "every body part parent must participate in inherited visibility"
+            );
+        }
+
+        let mut layers = world.query::<(&GearVisualLayer, &ChildOf)>();
+        assert!(
+            layers.iter(&world).next().is_some(),
+            "the fully equipped rig should exercise gear attachment parenting"
+        );
+        for (_, child_of) in layers.iter(&world) {
+            assert!(
+                world
+                    .get::<InheritedVisibility>(child_of.parent())
+                    .is_some(),
+                "every gear layer parent must participate in inherited visibility"
+            );
+        }
     }
 
     #[test]
