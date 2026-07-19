@@ -109,6 +109,58 @@ const SCREEN_MAX_WALL_CLOCK: Duration = Duration::from_secs(120);
 const COMMAND_CONSUMED_MAX_FRAMES: usize = 300;
 const SETTLE_FRAMES: usize = 10;
 
+/// Exact `headless_chrome` transport signature observed in every #312/#330
+/// failure. A surrounding operation label may differ (`wait_for_frame`,
+/// `eval`, screenshot, ...), but this library-owned cause proves the CDP
+/// transport itself is gone. Product assertions and generic timeout/closed
+/// text deliberately do not match.
+const CDP_CONNECTION_DEATH_SIGNATURE: &str =
+    "Unable to make method calls because underlying connection is closed";
+/// A dead CDP connection cannot be recovered in place. The `save-reload`
+/// scenario may therefore start one fresh Chrome/profile and replay its whole
+/// deterministic journey once; every other error remains fail-fast.
+const CDP_CONNECTION_DEATH_RETRY_BUDGET: usize = 1;
+const ATTEMPT_CHECKPOINTS: [&str; CDP_CONNECTION_DEATH_RETRY_BUDGET + 1] =
+    ["journey", "journey-retry"];
+
+fn is_cdp_connection_death(error: &str) -> bool {
+    error.contains(CDP_CONNECTION_DEATH_SIGNATURE)
+}
+
+fn run_with_cdp_retry<T, F>(mut run_attempt: F) -> Result<T, String>
+where
+    F: FnMut(usize) -> Result<T, String>,
+{
+    let mut first_connection_death = None;
+
+    for attempt in 0..=CDP_CONNECTION_DEATH_RETRY_BUDGET {
+        match run_attempt(attempt) {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if is_cdp_connection_death(&error)
+                    && attempt < CDP_CONNECTION_DEATH_RETRY_BUDGET =>
+            {
+                eprintln!(
+                    "{SCENARIO}: Chrome/CDP connection died; retrying the complete journey once \
+                     with a fresh browser/profile: {error}"
+                );
+                first_connection_death = Some(error);
+            }
+            Err(error) if is_cdp_connection_death(&error) => {
+                let first = first_connection_death.as_deref().unwrap_or(&error);
+                return Err(format!(
+                    "Chrome/CDP connection death retry budget exhausted after \
+                     {CDP_CONNECTION_DEATH_RETRY_BUDGET} retry; first attempt: {first}; final \
+                     attempt: {error}"
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    unreachable!("the bounded attempt loop always returns")
+}
+
 pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
     if update_baselines {
         println!(
@@ -186,170 +238,212 @@ struct SavedRunSnapshot {
 }
 
 fn run_checks(server: &StaticServer) -> Result<(), String> {
-    let dir = artifacts::checkpoint_dir(SCENARIO, "journey")
+    for checkpoint in ATTEMPT_CHECKPOINTS {
+        let dir = artifacts::scenario_dir(SCENARIO).join(checkpoint);
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "failed to clear stale attempt artifacts {}: {error}",
+                    dir.display()
+                ));
+            }
+        }
+    }
+
+    run_with_cdp_retry(|attempt| {
+        let checkpoint = ATTEMPT_CHECKPOINTS[attempt];
+        println!(
+            "{SCENARIO}: browser attempt {}/{} -- artifacts: {}",
+            attempt + 1,
+            ATTEMPT_CHECKPOINTS.len(),
+            artifacts::scenario_dir(SCENARIO).join(checkpoint).display()
+        );
+        run_check_attempt(server, checkpoint)
+    })
+}
+
+fn run_check_attempt(server: &StaticServer, checkpoint_name: &str) -> Result<(), String> {
+    let dir = artifacts::checkpoint_dir(SCENARIO, checkpoint_name)
         .map_err(|e| format!("artifacts dir: {e}"))?;
     let profile_dir = dir.join("chrome-profile");
-    let _ = std::fs::remove_dir_all(&profile_dir);
 
-    let checkpoint = browser::launch(VIEWPORT_WIDTH, VIEWPORT_HEIGHT, 1.0, &profile_dir)?;
-    let url = format!("{}/", server.base_url());
-    checkpoint.navigate(&url)?;
+    let checkpoint =
+        browser::launch_with_diagnostics(VIEWPORT_WIDTH, VIEWPORT_HEIGHT, 1.0, &profile_dir)?;
+    let outcome = (|| {
+        let url = format!("{}/", server.base_url());
+        checkpoint.navigate(&url)?;
 
-    // menu -> creation -> fight: seed the duel, start a new game, pick the
-    // preset, confirm the hero (autosaves the hero-confirmation checkpoint,
-    // resume_destination "fight").
-    let (status, _shot) = wait_for_screen(&checkpoint, "MainMenu", true)?;
-    check_no_console_or_page_errors(&status, "initial load")?;
+        // menu -> creation -> fight: seed the duel, start a new game, pick the
+        // preset, confirm the hero (autosaves the hero-confirmation checkpoint,
+        // resume_destination "fight").
+        let (status, _shot) = wait_for_screen(&checkpoint, "MainMenu", true)?;
+        check_no_console_or_page_errors(&status, "initial load")?;
 
-    send_command(
-        &checkpoint,
-        serde_json::json!({"cmd": "seedCombat", "seed": SAVE_RELOAD_SEED}),
-    )?;
-    send_command(
-        &checkpoint,
-        serde_json::json!({"cmd": "pressButton", "button": "NewGame"}),
-    )?;
-    wait_for_screen(&checkpoint, "CharacterCreation", false)?;
-    send_command(
-        &checkpoint,
-        serde_json::json!({"cmd": "selectPreset", "preset": SAVE_RELOAD_PRESET}),
-    )?;
-    send_command(
-        &checkpoint,
-        serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
-    )?;
-    wait_for_screen(&checkpoint, "Fight", false)?;
+        send_command(
+            &checkpoint,
+            serde_json::json!({"cmd": "seedCombat", "seed": SAVE_RELOAD_SEED}),
+        )?;
+        send_command(
+            &checkpoint,
+            serde_json::json!({"cmd": "pressButton", "button": "NewGame"}),
+        )?;
+        wait_for_screen(&checkpoint, "CharacterCreation", false)?;
+        send_command(
+            &checkpoint,
+            serde_json::json!({"cmd": "selectPreset", "preset": SAVE_RELOAD_PRESET}),
+        )?;
+        send_command(
+            &checkpoint,
+            serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
+        )?;
+        wait_for_screen(&checkpoint, "Fight", false)?;
 
-    let hero_confirm_save = read_saved_run(&checkpoint)?
-        .ok_or("no run snapshot after hero confirmation -- the checkpoint never autosaved")?;
-    if hero_confirm_save.resume_destination != "fight" {
-        return Err(format!(
-            "hero confirmation must resume into the arena, saw {:?}",
-            hero_confirm_save.resume_destination
-        ));
-    }
+        let hero_confirm_save = read_saved_run(&checkpoint)?
+            .ok_or("no run snapshot after hero confirmation -- the checkpoint never autosaved")?;
+        if hero_confirm_save.resume_destination != "fight" {
+            return Err(format!(
+                "hero confirmation must resume into the arena, saw {:?}",
+                hero_confirm_save.resume_destination
+            ));
+        }
 
-    // fight -> fight-result: autoplay resolves the pinned, winnable duel.
-    send_command(
-        &checkpoint,
-        serde_json::json!({"cmd": "setAutoplay", "enabled": true}),
-    )?;
-    wait_for_screen(&checkpoint, "FightResult", false)?;
+        // fight -> fight-result: autoplay resolves the pinned, winnable duel.
+        send_command(
+            &checkpoint,
+            serde_json::json!({"cmd": "setAutoplay", "enabled": true}),
+        )?;
+        wait_for_screen(&checkpoint, "FightResult", false)?;
 
-    let result_save = read_saved_run(&checkpoint)?
-        .ok_or("no run snapshot on the result screen -- the reward checkpoint never autosaved")?;
-    if result_save.wallet != STARTING_GALBENI + FIRST_FIGHT_REWARD {
-        return Err(format!(
-            "result-screen wallet was {}, expected {} (starting {STARTING_GALBENI} + reward \
+        let result_save = read_saved_run(&checkpoint)?.ok_or(
+            "no run snapshot on the result screen -- the reward checkpoint never autosaved",
+        )?;
+        if result_save.wallet != STARTING_GALBENI + FIRST_FIGHT_REWARD {
+            return Err(format!(
+                "result-screen wallet was {}, expected {} (starting {STARTING_GALBENI} + reward \
              {FIRST_FIGHT_REWARD})",
-            result_save.wallet,
-            STARTING_GALBENI + FIRST_FIGHT_REWARD
-        ));
-    }
-    if result_save.resume_destination != "fight" {
-        return Err(format!(
-            "the result/reward checkpoint must resume into the arena (matching Lupta \
+                result_save.wallet,
+                STARTING_GALBENI + FIRST_FIGHT_REWARD
+            ));
+        }
+        if result_save.resume_destination != "fight" {
+            return Err(format!(
+                "the result/reward checkpoint must resume into the arena (matching Lupta \
              următoare), saw {:?}",
-            result_save.resume_destination
-        ));
-    }
+                result_save.resume_destination
+            ));
+        }
 
-    // result -> shop: the shop-entry checkpoint autosaves immediately,
-    // switching the resume destination to the shop even before any purchase.
-    send_command(
-        &checkpoint,
-        serde_json::json!({"cmd": "pressButton", "button": "GoToShop"}),
-    )?;
-    wait_for_screen(&checkpoint, "Shop", false)?;
+        // result -> shop: the shop-entry checkpoint autosaves immediately,
+        // switching the resume destination to the shop even before any purchase.
+        send_command(
+            &checkpoint,
+            serde_json::json!({"cmd": "pressButton", "button": "GoToShop"}),
+        )?;
+        wait_for_screen(&checkpoint, "Shop", false)?;
 
-    let shop_entry_save = read_saved_run(&checkpoint)?
-        .ok_or("no run snapshot on shop entry -- the shop-entry checkpoint never autosaved")?;
-    if shop_entry_save.resume_destination != "shop" {
-        return Err(format!(
-            "arriving in the shop must resume back into the shop, saw {:?}",
-            shop_entry_save.resume_destination
-        ));
-    }
-    if shop_entry_save.wallet != STARTING_GALBENI + FIRST_FIGHT_REWARD {
-        return Err(format!(
-            "shop-entry wallet changed unexpectedly to {} before any purchase",
-            shop_entry_save.wallet
-        ));
-    }
+        let shop_entry_save = read_saved_run(&checkpoint)?
+            .ok_or("no run snapshot on shop entry -- the shop-entry checkpoint never autosaved")?;
+        if shop_entry_save.resume_destination != "shop" {
+            return Err(format!(
+                "arriving in the shop must resume back into the shop, saw {:?}",
+                shop_entry_save.resume_destination
+            ));
+        }
+        if shop_entry_save.wallet != STARTING_GALBENI + FIRST_FIGHT_REWARD {
+            return Err(format!(
+                "shop-entry wallet changed unexpectedly to {} before any purchase",
+                shop_entry_save.wallet
+            ));
+        }
 
-    // A shop change (#217's "shop changes" checkpoint): buy one affordable,
-    // not-yet-owned item, proving the persisted snapshot reflects purchases
-    // too, not just arrival.
-    send_command(
-        &checkpoint,
-        serde_json::json!({"cmd": "pressButton", "button": format!("ShopItem:{SHOP_PURCHASE_ITEM}")}),
-    )?;
-    let expected_wallet_after_purchase =
-        STARTING_GALBENI + FIRST_FIGHT_REWARD - SHOP_PURCHASE_PRICE;
-    let before_reload = wait_for_wallet(&checkpoint, expected_wallet_after_purchase)?;
-    if !before_reload
-        .owned_items
-        .iter()
-        .any(|i| i == SHOP_PURCHASE_ITEM)
-    {
-        return Err(format!(
-            "the purchased item {SHOP_PURCHASE_ITEM:?} is not in owned_items: {:?}",
-            before_reload.owned_items
-        ));
-    }
-    if !before_reload
-        .equipped
-        .iter()
-        .any(|i| i == SHOP_PURCHASE_ITEM)
-    {
-        return Err(format!(
-            "the purchased item {SHOP_PURCHASE_ITEM:?} was not auto-equipped: {:?}",
-            before_reload.equipped
-        ));
-    }
-    if before_reload.resume_destination != "shop" {
-        return Err(format!(
-            "a shop purchase must keep resuming into the shop, saw {:?}",
-            before_reload.resume_destination
-        ));
-    }
-    if before_reload.ladder_progress != 1 {
-        return Err(format!(
-            "ladder_progress should be 1 after the first win, saw {}",
-            before_reload.ladder_progress
-        ));
-    }
+        // A shop change (#217's "shop changes" checkpoint): buy one affordable,
+        // not-yet-owned item, proving the persisted snapshot reflects purchases
+        // too, not just arrival.
+        send_command(
+            &checkpoint,
+            serde_json::json!({"cmd": "pressButton", "button": format!("ShopItem:{SHOP_PURCHASE_ITEM}")}),
+        )?;
+        let expected_wallet_after_purchase =
+            STARTING_GALBENI + FIRST_FIGHT_REWARD - SHOP_PURCHASE_PRICE;
+        let before_reload = wait_for_wallet(&checkpoint, expected_wallet_after_purchase)?;
+        if !before_reload
+            .owned_items
+            .iter()
+            .any(|i| i == SHOP_PURCHASE_ITEM)
+        {
+            return Err(format!(
+                "the purchased item {SHOP_PURCHASE_ITEM:?} is not in owned_items: {:?}",
+                before_reload.owned_items
+            ));
+        }
+        if !before_reload
+            .equipped
+            .iter()
+            .any(|i| i == SHOP_PURCHASE_ITEM)
+        {
+            return Err(format!(
+                "the purchased item {SHOP_PURCHASE_ITEM:?} was not auto-equipped: {:?}",
+                before_reload.equipped
+            ));
+        }
+        if before_reload.resume_destination != "shop" {
+            return Err(format!(
+                "a shop purchase must keep resuming into the shop, saw {:?}",
+                before_reload.resume_destination
+            ));
+        }
+        if before_reload.ladder_progress != 1 {
+            return Err(format!(
+                "ladder_progress should be 1 after the first win, saw {}",
+                before_reload.ladder_progress
+            ));
+        }
 
-    let shop_shot = checkpoint.screenshot_png(VIEWPORT_WIDTH, VIEWPORT_HEIGHT)?;
-    let _ = artifacts::write_artifact(&dir, "1-shop-before-reload.png", &shop_shot);
+        let shop_shot = checkpoint.screenshot_png(VIEWPORT_WIDTH, VIEWPORT_HEIGHT)?;
+        let _ = artifacts::write_artifact(&dir, "1-shop-before-reload.png", &shop_shot);
 
-    // The real reload: a full wasm re-boot, not an in-memory reset.
-    checkpoint.reload()?;
-    let (status_after_reload, shot_after_reload) = wait_for_screen(&checkpoint, "MainMenu", true)?;
-    check_no_console_or_page_errors(&status_after_reload, "after reload")?;
-    let _ = artifacts::write_artifact(&dir, "2-main-menu-after-reload.png", &shot_after_reload);
+        // The real reload: a full wasm re-boot, not an in-memory reset.
+        checkpoint.reload()?;
+        let (status_after_reload, shot_after_reload) =
+            wait_for_screen(&checkpoint, "MainMenu", true)?;
+        check_no_console_or_page_errors(&status_after_reload, "after reload")?;
+        let _ = artifacts::write_artifact(&dir, "2-main-menu-after-reload.png", &shot_after_reload);
 
-    // Continuă restores the resources and resumes straight into the shop --
-    // exactly one flow intent, chosen from the reloaded snapshot's own
-    // resume_destination.
-    send_command(
-        &checkpoint,
-        serde_json::json!({"cmd": "pressButton", "button": "Continue"}),
-    )?;
-    let (status_final, shot_final) = wait_for_screen(&checkpoint, "Shop", false)?;
-    check_no_console_or_page_errors(&status_final, "after Continuă")?;
-    let _ = artifacts::write_artifact(&dir, "3-shop-after-continue.png", &shot_final);
+        // Continuă restores the resources and resumes straight into the shop --
+        // exactly one flow intent, chosen from the reloaded snapshot's own
+        // resume_destination.
+        send_command(
+            &checkpoint,
+            serde_json::json!({"cmd": "pressButton", "button": "Continue"}),
+        )?;
+        let (status_final, shot_final) = wait_for_screen(&checkpoint, "Shop", false)?;
+        check_no_console_or_page_errors(&status_final, "after Continuă")?;
+        let _ = artifacts::write_artifact(&dir, "3-shop-after-continue.png", &shot_final);
 
-    let after_reload_save = read_saved_run(&checkpoint)?
-        .ok_or("no run snapshot survives the reload -- Continuă has nothing to restore")?;
-    if after_reload_save != before_reload {
-        return Err(format!(
-            "the run snapshot changed across the reload: before {before_reload:?}, after \
+        let after_reload_save = read_saved_run(&checkpoint)?
+            .ok_or("no run snapshot survives the reload -- Continuă has nothing to restore")?;
+        if after_reload_save != before_reload {
+            return Err(format!(
+                "the run snapshot changed across the reload: before {before_reload:?}, after \
              {after_reload_save:?}"
-        ));
+            ));
+        }
+
+        Ok(())
+    })();
+
+    if let Err(error) = &outcome
+        && let Err(diagnostic_error) = checkpoint.write_process_diagnostics(error)
+    {
+        eprintln!(
+            "{SCENARIO}: failed to retain Chrome process evidence without replacing the original \
+             failure: {diagnostic_error}"
+        );
     }
 
-    Ok(())
+    outcome
 }
 
 fn send_command(checkpoint: &Checkpoint, payload: serde_json::Value) -> Result<(), String> {
@@ -467,4 +561,93 @@ fn check_no_console_or_page_errors(status: &PageStatus, phase: &str) -> Result<(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OBSERVED_CDP_DEATH: &str = "waiting for an animation frame failed: Unable to make method calls because underlying connection is closed";
+
+    #[test]
+    fn observed_headless_chrome_connection_death_is_retryable() {
+        assert!(is_cdp_connection_death(OBSERVED_CDP_DEATH));
+    }
+
+    #[test]
+    fn assertions_and_near_match_transport_errors_are_not_retryable() {
+        for error in [
+            "the run snapshot changed across the reload",
+            "page reload failed: websocket connection closed",
+            "Unable to make method calls because connection is closed",
+            "Unable to make method calls because underlying connection is open",
+            "unable to make method calls because underlying connection is closed",
+        ] {
+            assert!(
+                !is_cdp_connection_death(error),
+                "near-match error must remain fail-fast: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn one_cdp_death_gets_exactly_one_fresh_attempt() {
+        let mut attempts = Vec::new();
+        let result = run_with_cdp_retry(|attempt| {
+            attempts.push(attempt);
+            if attempt == 0 {
+                Err(OBSERVED_CDP_DEATH.to_string())
+            } else {
+                Ok("passed")
+            }
+        });
+
+        assert_eq!(result.as_deref(), Ok("passed"));
+        assert_eq!(attempts, vec![0, 1]);
+    }
+
+    #[test]
+    fn repeated_cdp_death_exhausts_the_single_retry_budget() {
+        let mut attempts = Vec::new();
+        let error = run_with_cdp_retry::<(), _>(|attempt| {
+            attempts.push(attempt);
+            Err(format!("attempt {attempt}: {OBSERVED_CDP_DEATH}"))
+        })
+        .expect_err("a second CDP death must fail the scenario");
+
+        assert_eq!(attempts, vec![0, 1]);
+        assert!(error.contains("retry budget exhausted"));
+        assert!(error.contains("attempt 0"));
+        assert!(error.contains("attempt 1"));
+    }
+
+    #[test]
+    fn an_assertion_failure_is_never_retried() {
+        let mut attempts = Vec::new();
+        let error = run_with_cdp_retry::<(), _>(|attempt| {
+            attempts.push(attempt);
+            Err("the run snapshot changed across the reload".to_string())
+        })
+        .expect_err("the product assertion must fail immediately");
+
+        assert_eq!(attempts, vec![0]);
+        assert_eq!(error, "the run snapshot changed across the reload");
+    }
+
+    #[test]
+    fn an_assertion_after_the_transport_retry_does_not_get_a_third_attempt() {
+        let mut attempts = Vec::new();
+        let error = run_with_cdp_retry::<(), _>(|attempt| {
+            attempts.push(attempt);
+            if attempt == 0 {
+                Err(OBSERVED_CDP_DEATH.to_string())
+            } else {
+                Err("stored wallet never reached 75".to_string())
+            }
+        })
+        .expect_err("the retry's product assertion must fail immediately");
+
+        assert_eq!(attempts, vec![0, 1]);
+        assert_eq!(error, "stored wallet never reached 75");
+    }
 }
