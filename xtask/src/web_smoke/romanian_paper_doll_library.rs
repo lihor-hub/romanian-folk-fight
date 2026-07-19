@@ -1,6 +1,6 @@
 //! The `romanian-paper-doll-library` browser scenario (#323).
 //!
-//! One desktop and one phone session each drive Haiduc and Cioban through
+//! One desktop and one phone session each drive all four Romanian presets through
 //! creation, live combat, shop, a real page reload plus Continuă, and a fresh
 //! combat. Four creator screenshots are the visual review surface; exact
 //! reload-persistent ECS facts prove identity in the non-captured scenes and
@@ -45,20 +45,40 @@ const CIOBAN_IDS: &[&str] = &[
     "human.legs.cioareci.v1",
     "human.feet.opinci.v1",
 ];
+const VOINIC_IDS: &[&str] = &[
+    "human.body.voinic.v1",
+    "human.face.voinic.v1",
+    "human.hair.voinic_scurt.v1",
+    "human.torso.camasa_voiniceasca.v1",
+    "human.legs.cioareci_voinicesti.v1",
+    "human.feet.opinci.v1",
+];
+const UCENIC_SOLOMONAR_IDS: &[&str] = &[
+    "human.body.ucenic_solomonar.v1",
+    "human.face.ucenic_solomonar.v1",
+    "human.hair.ucenic_ciuf.v1",
+    "human.torso.suman_de_ucenic.v1",
+    "human.legs.cioareci_de_ucenic.v1",
+    "human.feet.opinci.v1",
+];
 const HOT_DE_CODRU_IDS: &[&str] = &[
     "human.body.zvelt.v1",
     "human.face.cioban.v1",
-    "human.hair.plete.v1",
+    "human.hair.voinic_scurt.v1",
     "human.torso.camasa_ciobaneasca.v1",
     "human.legs.cioareci.v1",
     "human.feet.opinci.v1",
 ];
 
-const VISUAL_CHECKPOINTS: [&str; 4] = [
+const VISUAL_CHECKPOINTS: [&str; 8] = [
     "desktop-haiduc",
+    "desktop-voinic",
     "desktop-cioban",
+    "desktop-ucenic-solomonar",
     "phone-haiduc",
+    "phone-voinic",
     "phone-cioban",
+    "phone-ucenic-solomonar",
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -97,10 +117,22 @@ const LOOKS: &[Look] = &[
         baseline_time: 10_000.0,
     },
     Look {
+        key: "voinic",
+        preset: "Voinicul",
+        ids: VOINIC_IDS,
+        baseline_time: 15_000.0,
+    },
+    Look {
         key: "cioban",
         preset: "Ciobanul",
         ids: CIOBAN_IDS,
         baseline_time: 20_000.0,
+    },
+    Look {
+        key: "ucenic-solomonar",
+        preset: "Ucenicul Solomonar",
+        ids: UCENIC_SOLOMONAR_IDS,
+        baseline_time: 25_000.0,
     },
 ];
 
@@ -182,7 +214,7 @@ pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError
         );
     } else {
         println!(
-            "\n{SCENARIO}: desktop+phone Haiduc/Cioban visuals and every cross-scene identity fact passed."
+            "\n{SCENARIO}: desktop+phone visuals for all four Romanian presets and every cross-scene identity fact passed."
         );
     }
     Ok(())
@@ -859,14 +891,18 @@ mod tests {
     }
 
     #[test]
-    fn scenario_owns_four_creator_visual_checkpoints() {
+    fn scenario_owns_eight_creator_visual_checkpoints() {
         assert_eq!(
             VISUAL_CHECKPOINTS,
             [
                 "desktop-haiduc",
+                "desktop-voinic",
                 "desktop-cioban",
+                "desktop-ucenic-solomonar",
                 "phone-haiduc",
+                "phone-voinic",
                 "phone-cioban",
+                "phone-ucenic-solomonar",
             ]
         );
     }

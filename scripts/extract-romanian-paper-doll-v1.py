@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproduce the curated Romanian paper-doll v1 runtime art.
+"""Reproduce the curated Romanian paper-doll runtime art.
 
 The two OpenAI built-in image-generation outputs are chroma-key production
 masters, not attachment-ready geometry.  This script verifies their exact
@@ -28,15 +28,22 @@ from PIL import Image, ImageChops, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DIR = ROOT / "assets/fighters/human/source/romanian-paper-doll-v1"
+SOURCE_DIR_V2 = ROOT / "assets/fighters/human/source/romanian-paper-doll-v2"
 DEFAULT_HUMAN = SOURCE_DIR / "human-chroma-master.png"
 DEFAULT_EQUIPMENT = SOURCE_DIR / "equipment-chroma-master.png"
+DEFAULT_VOINIC = SOURCE_DIR_V2 / "voinic-chroma-master.png"
+DEFAULT_UCENIC_SOLOMONAR = SOURCE_DIR_V2 / "ucenic-solomonar-chroma-master.png"
 SOURCE_SHA256 = {
     "human": "8e2ecfcabb1d7e6dc3187b1418abae0fd701c428365b40b2100d63863514d1f7",
     "equipment": "009efe3fdea822943fde9e87950fd6a1d154dc199714bb562d75c7f8873e1467",
+    "voinic": "99ec064c87bcf30df1dcdd815a01c63abd30edbe43c69c52a52108d31e2f41de",
+    "ucenic_solomonar": "14bdbf15ba08a7d85f127d36a92d432c9a58087ea67e7acc4efb7683c6c5ddf7",
 }
 SOURCE_IDS = {
     "human": "fighters.human.source.romanian-paper-doll-v1-human-master",
     "equipment": "fighters.human.source.romanian-paper-doll-v1-equipment-master",
+    "voinic": "fighters.human.source.romanian-paper-doll-v2-voinic-master",
+    "ucenic_solomonar": "fighters.human.source.romanian-paper-doll-v2-ucenic-solomonar-master",
 }
 MASK_WEIGHT = 200
 RIG = {
@@ -105,6 +112,34 @@ PARTS = (
     Part("human", "cioban/shin_back", (1235, 535, 1319, 714), (28, 76), ("cloth", "embroidery", "leather")),
     Part("human", "cioban/thigh_front", (1092, 411, 1201, 568), (34, 84), ("cloth", "embroidery")),
     Part("human", "cioban/shin_front", (1349, 535, 1439, 714), (28, 76), ("cloth", "embroidery", "leather")),
+    # Voinic: athletic cream sleeves, short swept hair, navy cioareci.
+    Part("voinic", "voinic/upper_arm_back", (668, 143, 784, 351), (30, 88), ("cloth", "embroidery")),
+    Part("voinic", "voinic/forearm_back", (665, 407, 785, 649), (26, 76), ("cloth", "embroidery")),
+    Part("voinic", "voinic/hand_back", (682, 702, 781, 816), (26, 26), ("skin",)),
+    Part("voinic", "voinic/upper_arm_front", (899, 145, 1011, 351), (30, 88), ("cloth", "embroidery")),
+    Part("voinic", "voinic/forearm_front", (900, 407, 1012, 649), (26, 76), ("cloth", "embroidery")),
+    Part("voinic", "voinic/hand_front", (906, 703, 1003, 815), (26, 26), ("skin",)),
+    Part("voinic", "voinic/head", (110, 56, 292, 280), (76, 84), ("skin",), "voinic_face"),
+    Part("voinic", "voinic/hair", (380, 91, 536, 225), (64, 40), ("hair",), "hair"),
+    Part("voinic", "voinic/torso", (184, 325, 506, 794), (88, 148), ("cloth", "embroidery", "leather")),
+    Part("voinic", "voinic/thigh_back", (149, 851, 311, 1105), (34, 84), ("cloth", "leather")),
+    Part("voinic", "voinic/shin_back", (665, 879, 786, 1284), (28, 76), ("cloth", "leather")),
+    Part("voinic", "voinic/thigh_front", (400, 852, 551, 1106), (34, 84), ("cloth", "leather")),
+    Part("voinic", "voinic/shin_front", (887, 882, 1009, 1284), (28, 76), ("cloth", "leather")),
+    # Ucenic Solomonar: charcoal suman, youthful face, raven forelock, pale cioareci.
+    Part("ucenic_solomonar", "ucenic_solomonar/upper_arm_back", (1009, 52, 1146, 258), (30, 88), ("cloth", "embroidery")),
+    Part("ucenic_solomonar", "ucenic_solomonar/forearm_back", (73, 501, 195, 808), (26, 76), ("cloth", "embroidery")),
+    Part("ucenic_solomonar", "ucenic_solomonar/hand_back", (497, 619, 605, 786), (26, 26), ("skin",)),
+    Part("ucenic_solomonar", "ucenic_solomonar/upper_arm_front", (1190, 52, 1331, 258), (30, 88), ("cloth", "embroidery")),
+    Part("ucenic_solomonar", "ucenic_solomonar/forearm_front", (293, 511, 419, 809), (26, 76), ("cloth", "embroidery")),
+    Part("ucenic_solomonar", "ucenic_solomonar/hand_front", (687, 623, 782, 792), (26, 26), ("skin",)),
+    Part("ucenic_solomonar", "ucenic_solomonar/head", (74, 43, 281, 310), (76, 84), ("skin",), "ucenic_face"),
+    Part("ucenic_solomonar", "ucenic_solomonar/hair", (373, 76, 603, 314), (64, 40), ("hair",), "hair"),
+    Part("ucenic_solomonar", "ucenic_solomonar/torso", (675, 44, 931, 504), (88, 148), ("cloth", "embroidery", "leather")),
+    Part("ucenic_solomonar", "ucenic_solomonar/thigh_back", (908, 506, 1060, 776), (34, 84), ("cloth",)),
+    Part("ucenic_solomonar", "ucenic_solomonar/shin_back", (922, 808, 1051, 1066), (28, 76), ("cloth", "leather")),
+    Part("ucenic_solomonar", "ucenic_solomonar/thigh_front", (1155, 510, 1305, 779), (34, 84), ("cloth",)),
+    Part("ucenic_solomonar", "ucenic_solomonar/shin_front", (1174, 808, 1309, 1066), (28, 76), ("cloth", "leather")),
     # Exactly five equipment components, preserving the established rig display geometry.
     Part("equipment", "gear/bata_ciobaneasca", (83, 98, 219, 829), (36, 272), ("leather",)),
     Part("equipment", "gear/topor_de_padurar", (326, 221, 519, 738), (84, 164), ("leather",)),
@@ -256,7 +291,14 @@ def luma(red: int, green: int, blue: int) -> float:
     return 0.2126 * red + 0.7152 * green + 0.0722 * blue
 
 
-def classify(red: int, green: int, blue: int, alpha: int, regions: tuple[str, ...]) -> str | None:
+def classify(
+    red: int,
+    green: int,
+    blue: int,
+    alpha: int,
+    regions: tuple[str, ...],
+    allow_dark_cloth: bool = False,
+) -> str | None:
     if alpha < 128 or luma(red, green, blue) < 34:
         return None
     high, low = max(red, green, blue), min(red, green, blue)
@@ -271,7 +313,11 @@ def classify(red: int, green: int, blue: int, alpha: int, regions: tuple[str, ..
         if "cloth" in regions and red > 105 and green > 78 and blue > 45 and saturation < 0.48:
             return "cloth"
         return None
-    cloth = red > 95 and green > 67 and blue > 38 and saturation < 0.48
+    cloth = (
+        luma(red, green, blue) > 38 and saturation < 0.48
+        if allow_dark_cloth
+        else red > 95 and green > 67 and blue > 38 and saturation < 0.48
+    )
     if cloth:
         return "cloth"
     if "embroidery" in regions and red > 78 and blue < 75 and saturation > 0.38:
@@ -281,13 +327,17 @@ def classify(red: int, green: int, blue: int, alpha: int, regions: tuple[str, ..
     return None
 
 
-def build_mask(albedo: Image.Image, regions: tuple[str, ...]) -> Image.Image:
+def build_mask(
+    albedo: Image.Image,
+    regions: tuple[str, ...],
+    allow_dark_cloth: bool = False,
+) -> Image.Image:
     output = Image.new("RGBA", albedo.size)
     source, target = albedo.load(), output.load()
     for y in range(albedo.height):
         for x in range(albedo.width):
             red, green, blue, alpha = source[x, y]
-            semantic = classify(red, green, blue, alpha, regions)
+            semantic = classify(red, green, blue, alpha, regions, allow_dark_cloth)
             channels = [0, 0, 0]
             if semantic in regions:
                 channels[regions.index(semantic)] = MASK_WEIGHT
@@ -360,6 +410,7 @@ def human_manifest(role: str) -> bytes:
         "version = 1",
         "",
     ]
+    role_id = role.replace("_", "-")
     for part in (candidate for candidate in PARTS if candidate.output.startswith(f"{role}/")):
         stem = part.output.split("/", 1)[1]
         attachment, pivot, display = RIG[stem]
@@ -368,7 +419,7 @@ def human_manifest(role: str) -> bytes:
             lines.extend(
                 [
                     "[[record]]",
-                    f'id = "fighters.human.runtime.{role}.{stem.replace("_", "-")}{id_suffix}"',
+                    f'id = "fighters.human.runtime.{role_id}.{stem.replace("_", "-")}{id_suffix}"',
                     f'path = "{stem}{suffix}.png"',
                     'kind = "image"',
                     'category = "fighter-runtime-part"',
@@ -401,7 +452,12 @@ def main() -> int:
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
 
-    source_paths = {"human": DEFAULT_HUMAN, "equipment": DEFAULT_EQUIPMENT}
+    source_paths = {
+        "human": DEFAULT_HUMAN,
+        "equipment": DEFAULT_EQUIPMENT,
+        "voinic": DEFAULT_VOINIC,
+        "ucenic_solomonar": DEFAULT_UCENIC_SOLOMONAR,
+    }
     for name, path in source_paths.items():
         actual = sha256(path)
         if actual != SOURCE_SHA256[name]:
@@ -416,7 +472,11 @@ def main() -> int:
         albedo = accepted_albedo(sources[part.source], part)
         generated = {
             "": albedo,
-            "_mask": build_mask(albedo, part.regions),
+            "_mask": build_mask(
+                albedo,
+                part.regions,
+                allow_dark_cloth=part.source in {"voinic", "ucenic_solomonar"},
+            ),
             "_normal": build_normal(albedo),
             "_shadow": build_shadow(albedo),
         }
@@ -441,7 +501,7 @@ def main() -> int:
         tracked_source.parent.mkdir(parents=True, exist_ok=True)
         tracked_source.write_bytes(expected_source)
 
-    for role in ("shared", "haiduc", "cioban"):
+    for role in ("shared", "haiduc", "cioban", "voinic", "ucenic_solomonar"):
         manifest = ROOT / f"assets/fighters/human/runtime/{role}/manifest.toml"
         expected_manifest = human_manifest(role)
         if args.check:
@@ -455,7 +515,7 @@ def main() -> int:
             print(f"stale or missing: {path}")
         return 1
     if args.check:
-        print(f"ok ({len(PARTS)} albedos, {len(PARTS) * 3} exact-alpha companions, 1 source sheet, 3 manifests)")
+        print(f"ok ({len(PARTS)} albedos, {len(PARTS) * 3} exact-alpha companions, 1 source sheet, 5 manifests)")
     return 0
 
 

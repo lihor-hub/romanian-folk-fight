@@ -703,7 +703,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_produces_both_authored_human_look_compositions() {
+    fn generate_produces_all_four_authored_human_look_compositions() {
         let assets_root = real_assets_root();
         let out = TempOut::new("romanian-human-looks");
         generate(&assets_root, &out.root).unwrap();
@@ -728,6 +728,28 @@ mod tests {
                     "human.hair.prins.v1",
                     "human.torso.camasa_ciobaneasca.v1",
                     "human.legs.cioareci.v1",
+                    "human.feet.opinci.v1",
+                ],
+            ),
+            (
+                "voinic",
+                [
+                    "human.body.voinic.v1",
+                    "human.face.voinic.v1",
+                    "human.hair.voinic_scurt.v1",
+                    "human.torso.camasa_voiniceasca.v1",
+                    "human.legs.cioareci_voinicesti.v1",
+                    "human.feet.opinci.v1",
+                ],
+            ),
+            (
+                "ucenic-solomonar",
+                [
+                    "human.body.ucenic_solomonar.v1",
+                    "human.face.ucenic_solomonar.v1",
+                    "human.hair.ucenic_ciuf.v1",
+                    "human.torso.suman_de_ucenic.v1",
+                    "human.legs.cioareci_de_ucenic.v1",
                     "human.feet.opinci.v1",
                 ],
             ),

@@ -92,11 +92,12 @@ preserved in
 guides palette, material identity, and lighting only. It is not runtime art and
 is never used to redraw the accepted albedo silhouettes.
 
-### Romanian paper-doll v1 library
+### Romanian paper-doll library
 
-The first two production-intent human looks are the right-facing **Haiduc**
-and **Cioban** sets under `assets/fighters/human/runtime/{haiduc,cioban}/`,
-with shared opinci and short hair under `runtime/shared/`. They keep the
+The four production-intent human looks are the right-facing **Haiduc**,
+**Voinic**, **Cioban**, and **Ucenic Solomonar** sets under
+`assets/fighters/human/runtime/{haiduc,voinic,cioban,ucenic_solomonar}/`, with
+shared opinci and legacy short hair under `runtime/shared/`. They keep the
 established human rig pivots and display boxes and author two raster pixels per
 displayed pixel with nearest sampling. Charcoal outlines, motif clusters, and
 the shallow upper-left light must remain consistent across every attachment;
@@ -106,6 +107,12 @@ The Haiduc combines a lean body, loose dark hair, a cream ie with restrained
 red/black altiță-inspired geometry, white ițari, and wrapped leather opinci.
 The Cioban combines a sturdier body, tied hair, a cream shepherd shirt with
 black/brown edging, dark wool cioareci, and the same opinci grammar. The
+Voinic combines an athletic silhouette, short swept hair, a cream cămașă
+voinicească with restrained red/black geometry and broad leather brâu, and dark
+navy wool cioareci. The Ucenic Solomonar combines a younger face and raven
+forelock with a charcoal short wool suman, cream linen, restrained white/deep
+red trim, oxblood brâu, and pale wool cioareci; it deliberately avoids generic
+wizard hats, runes, robes, or armour. The
 replacement bâtă, topor, cojoc, căciulă, and opinci equipment follows the same
 wood, wool, sheepskin, and leather material language. These are a deliberate
 pan-Romanian folkloric remix for the game, not an assertion that one precise
@@ -117,6 +124,10 @@ chroma-key settings, accepted crop map, and rejected duplicates are preserved
 in `assets/fighters/human/source/romanian-paper-doll-v1/README.md`. The cited
 Romanian National Heritage Institute/cIMeC records guide cultural grammar only;
 no museum image is copied into the generated pixels.
+
+The matching Voinic and Ucenic Solomonar prompt summaries, built-in tool output
+paths, SHA-256 values, accepted crop coordinates, and rights record are in
+`assets/fighters/human/source/romanian-paper-doll-v2/README.md`.
 
 `scripts/extract-romanian-paper-doll-v1.py` is the deterministic technical
 curation boundary. Every accepted albedo has mask/normal/shadow companions with

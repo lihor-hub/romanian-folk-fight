@@ -16,6 +16,8 @@ generated art and may be replaced by cleaned artist-authored parts.
 | `fighters/human/source/romanian-paper-doll-v1/romanian-paper-doll-v1.png` | Curated contact source for the Haiduc/Cioban production library and five Romanian gear replacements | OpenAI built-in image generation; exact prompts, hashes, helper settings, and source paths in the adjacent README | Same as project assets unless superseded |
 | `fighters/human/source/romanian-paper-doll-v1/human-chroma-master.png` | Authoritative full-resolution Haiduc/Cioban chroma master | Sensibly quantized from OpenAI built-in image generation; exact original and tracked hashes in the adjacent README | Same as project assets unless superseded |
 | `fighters/human/source/romanian-paper-doll-v1/equipment-chroma-master.png` | Authoritative full-resolution Romanian equipment chroma master | Sensibly quantized from OpenAI built-in image generation; exact original and tracked hashes in the adjacent README | Same as project assets unless superseded |
+| `fighters/human/source/romanian-paper-doll-v2/voinic-chroma-master.png` | Authoritative full-resolution Voinic modular contact master | OpenAI built-in image generation; exact prompt summary, original path, tracked hash, extraction contract, and cultural vocabulary in the adjacent README | Same as project assets unless superseded |
+| `fighters/human/source/romanian-paper-doll-v2/ucenic-solomonar-chroma-master.png` | Authoritative full-resolution Ucenic Solomonar modular contact master | OpenAI built-in image generation; exact prompt summary, original path, tracked hash, extraction contract, and cultural vocabulary in the adjacent README | Same as project assets unless superseded |
 | `fighters/gear/source/starter_gear_cutout_parts_v1.png` | Starter gear pixel-art cutout source sheet | OpenAI-generated for this project | Same as project assets unless superseded |
 | `fighters/strigoi/source/strigoi_cutout_parts_v1.png` | Strigoi enemy pixel-art cutout body-part source sheet | OpenAI-generated for this project | Same as project assets unless superseded |
 | `fighters/zmeu/source/zmeu_cutout_parts_v1.png` | Zmeu boss pixel-art cutout body-part source sheet | OpenAI-generated for this project | Same as project assets unless superseded |
@@ -28,11 +30,12 @@ shop, and arena flows without introducing a new production generator pipeline.
 
 ### Human runtime parts
 
-The Haiduc, Cioban, and shared production directories are deterministic crops
-and exact-alpha derivatives of `romanian-paper-doll-v1`. Their adjacent README
-records the complete prompt, extraction map, rejected duplicates, cultural
-references, and pan-Romanian remix scope. Every PNG under
-`fighters/human/runtime/{haiduc,cioban,shared}/` uses the license below.
+The Haiduc, Cioban, Voinic, Ucenic Solomonar, and shared production directories
+are deterministic crops and exact-alpha derivatives of the versioned Romanian
+paper-doll masters. Their adjacent READMEs record prompt and source provenance,
+extraction maps, cultural vocabulary, and the pan-Romanian remix scope. Every
+PNG under `fighters/human/runtime/{haiduc,cioban,voinic,ucenic_solomonar,shared}/`
+uses the license below.
 
 | File | Depicts | Source | License |
 | --- | --- | --- | --- |

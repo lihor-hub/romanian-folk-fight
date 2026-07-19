@@ -508,18 +508,29 @@ fn hot_de_codru_profile() -> Result<GenerationProfile, GenerationError> {
     let slots = vec![
         weighted_slot(
             BodyRegion::Body,
-            &["human.body.zvelt.v1", "human.body.vanjos.v1"],
+            &[
+                "human.body.zvelt.v1",
+                "human.body.voinic.v1",
+                "human.body.vanjos.v1",
+                "human.body.ucenic_solomonar.v1",
+            ],
         )?,
         weighted_slot(
             BodyRegion::Face,
-            &["human.face.haiduc.v1", "human.face.cioban.v1"],
+            &[
+                "human.face.haiduc.v1",
+                "human.face.voinic.v1",
+                "human.face.cioban.v1",
+                "human.face.ucenic_solomonar.v1",
+            ],
         )?,
         weighted_slot(
             BodyRegion::Hair,
             &[
                 "human.hair.plete.v1",
                 "human.hair.prins.v1",
-                "human.hair.scurt.v1",
+                "human.hair.voinic_scurt.v1",
+                "human.hair.ucenic_ciuf.v1",
             ],
         )?,
     ];
@@ -541,6 +552,18 @@ fn hot_de_codru_profile() -> Result<GenerationProfile, GenerationError> {
         WeightedWardrobe::new(
             authored_part("human.torso.camasa_ciobaneasca.v1")?,
             authored_part("human.legs.cioareci.v1")?,
+            authored_part("human.feet.opinci.v1")?,
+            1,
+        ),
+        WeightedWardrobe::new(
+            authored_part("human.torso.camasa_voiniceasca.v1")?,
+            authored_part("human.legs.cioareci_voinicesti.v1")?,
+            authored_part("human.feet.opinci.v1")?,
+            1,
+        ),
+        WeightedWardrobe::new(
+            authored_part("human.torso.suman_de_ucenic.v1")?,
+            authored_part("human.legs.cioareci_de_ucenic.v1")?,
             authored_part("human.feet.opinci.v1")?,
             1,
         ),
@@ -654,56 +677,75 @@ mod tests {
 
         assert_eq!(
             candidate_ids(BodyRegion::Body),
-            ["human.body.vanjos.v1", "human.body.zvelt.v1"]
-                .into_iter()
-                .collect()
+            [
+                "human.body.ucenic_solomonar.v1",
+                "human.body.vanjos.v1",
+                "human.body.voinic.v1",
+                "human.body.zvelt.v1",
+            ]
+            .into_iter()
+            .collect()
         );
         assert_eq!(
             candidate_ids(BodyRegion::Face),
-            ["human.face.cioban.v1", "human.face.haiduc.v1"]
-                .into_iter()
-                .collect()
+            [
+                "human.face.cioban.v1",
+                "human.face.haiduc.v1",
+                "human.face.ucenic_solomonar.v1",
+                "human.face.voinic.v1",
+            ]
+            .into_iter()
+            .collect()
         );
         assert_eq!(
             candidate_ids(BodyRegion::Hair),
             [
                 "human.hair.plete.v1",
                 "human.hair.prins.v1",
-                "human.hair.scurt.v1",
+                "human.hair.ucenic_ciuf.v1",
+                "human.hair.voinic_scurt.v1",
             ]
             .into_iter()
             .collect()
         );
-        assert_eq!(profile.wardrobes.len(), 2);
+        assert_eq!(profile.wardrobes.len(), 4);
     }
 
     #[test]
-    fn campaign_golden_seeds_pin_both_correlated_wardrobes() {
-        let haiduc = LadderProgress(0)
-            .seeded_opponent(CampaignSeed(0))
-            .unwrap()
-            .unwrap();
-        let cioban = LadderProgress(0)
-            .seeded_opponent(CampaignSeed(2))
-            .unwrap()
-            .unwrap();
+    fn campaign_seeds_reach_all_four_correlated_wardrobes() {
+        let wardrobes = (0..256)
+            .map(|seed| {
+                let generated = LadderProgress(0)
+                    .seeded_opponent(CampaignSeed(seed))
+                    .unwrap()
+                    .unwrap();
+                (
+                    generated.definition.parts.torso.as_str().to_owned(),
+                    generated.definition.parts.legs.as_str().to_owned(),
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>();
 
         assert_eq!(
-            (
-                haiduc.definition.parts.torso.as_str(),
-                haiduc.definition.parts.legs.as_str()
-            ),
-            ("human.torso.ie_altita.v1", "human.legs.itari.v1")
-        );
-        assert_eq!(
-            (
-                cioban.definition.parts.torso.as_str(),
-                cioban.definition.parts.legs.as_str()
-            ),
-            (
-                "human.torso.camasa_ciobaneasca.v1",
-                "human.legs.cioareci.v1"
-            )
+            wardrobes,
+            [
+                ("human.torso.ie_altita.v1", "human.legs.itari.v1"),
+                (
+                    "human.torso.camasa_voiniceasca.v1",
+                    "human.legs.cioareci_voinicesti.v1",
+                ),
+                (
+                    "human.torso.camasa_ciobaneasca.v1",
+                    "human.legs.cioareci.v1",
+                ),
+                (
+                    "human.torso.suman_de_ucenic.v1",
+                    "human.legs.cioareci_de_ucenic.v1",
+                ),
+            ]
+            .into_iter()
+            .map(|(torso, legs)| (torso.to_owned(), legs.to_owned()))
+            .collect()
         );
     }
 
