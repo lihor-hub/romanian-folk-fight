@@ -27,7 +27,7 @@ use crate::progression::Wallet;
 use crate::save::{ResumeDestination, SaveRequested};
 use crate::theme::{
     ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD,
-    MIN_TOUCH_TARGET, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
+    MIN_TOUCH_TARGET, TEXT_DISABLED, WALNUT,
 };
 use crate::ui_widgets::focus::{
     FocusNavigationPlugin, FocusNavigationSet, Focusable, TabGroup, TabIndex,
@@ -403,7 +403,6 @@ fn player_definition(player: Option<&PlayerCharacter>) -> CharacterDefinition {
 #[derive(SystemParam)]
 struct ShopScreenAssets<'w> {
     ui_font: Res<'w, UiFont>,
-    panel_texture: Res<'w, PanelTexture>,
     icons: Res<'w, ShopIcons>,
     asset_server: Option<Res<'w, AssetServer>>,
 }
@@ -420,7 +419,6 @@ fn spawn_shop_screen(
     assets: ShopScreenAssets,
 ) {
     let ui_font = &*assets.ui_font;
-    let panel_texture = &*assets.panel_texture;
     let icons = &*assets.icons;
     let definition = player_definition(player.as_deref());
     let attributes = player_attributes(player.as_deref());
@@ -570,7 +568,6 @@ fn spawn_shop_screen(
                             &owned,
                             &equipment,
                             ui_font,
-                            panel_texture,
                             icons,
                             viewport.is_mobile,
                         );
@@ -581,7 +578,6 @@ fn spawn_shop_screen(
                             &owned,
                             &equipment,
                             ui_font,
-                            panel_texture,
                             icons,
                             viewport.is_mobile,
                         );
@@ -612,7 +608,6 @@ fn spawn_shop_catalog_column(
     owned: &OwnedItems,
     equipment: &PlayerEquipment,
     ui_font: &UiFont,
-    panel_texture: &PanelTexture,
     icons: &ShopIcons,
     is_mobile: bool,
 ) {
@@ -643,7 +638,7 @@ fn spawn_shop_catalog_column(
             );
             for item in CATALOG.iter().filter(|item| item.slot == slot) {
                 let state = ItemButtonState::of(item.id, wallet, owned, equipment);
-                spawn_item_row(catalog, item, state, ui_font, panel_texture, is_mobile);
+                spawn_item_row(catalog, item, state, ui_font, is_mobile);
             }
         }
     });
@@ -937,26 +932,33 @@ fn stat_chip(label: String, shop_label: ShopLabel, ui_font: &UiFont) -> impl Bun
 /// viewport (#307). The fix keeps every cell fixed *except* the name cell,
 /// which flexes to absorb the leftover width on phones (see [`name_cell`]),
 /// and pins the button's `flex_shrink` to 0 so the primary tap target keeps
-/// its full width. Desktop keeps the original fixed-width name cell every
-/// accepted desktop baseline renders from.
+/// its full width. The rows deliberately use compact walnut chrome instead
+/// of the standard 9-slice panel: a 44px tap target cannot also clear that
+/// panel's 24px top and bottom inset without growing to 92px (#249/#234).
 fn spawn_item_row(
     parent: &mut ChildSpawnerCommands,
     item: &Item,
     state: ItemButtonState,
     ui_font: &UiFont,
-    panel_texture: &PanelTexture,
     is_mobile: bool,
 ) {
     parent
-        .spawn(panel_bundle(
-            panel_texture,
+        .spawn((
             Node {
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(SHOP_ITEM_ROW_GAP),
                 padding: UiRect::axes(Val::Px(SHOP_ITEM_ROW_PADDING_X), Val::Px(4.0)),
                 margin: UiRect::vertical(Val::Px(2.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                min_height: Val::Px(MIN_TOUCH_TARGET + 8.0),
+                // The catalog owns scrolling. Its children must retain
+                // enough vertical space for their content rather than
+                // shrinking the chrome through their labels (#249).
+                flex_shrink: 0.0,
                 ..default()
             },
+            BackgroundColor(WALNUT),
+            BorderColor::all(GOLD),
         ))
         .with_children(|row| {
             row.spawn((
@@ -1887,6 +1889,43 @@ mod tests {
             .get::<Node>(button)
             .cloned()
             .expect("buy button has a Node")
+    }
+
+    /// The compact chrome node surrounding an item's cells.
+    fn item_row_entity(app: &mut App, id: ItemId) -> Entity {
+        let name = id.item().name;
+        let name_cell = app
+            .world_mut()
+            .query::<(Entity, &Text)>()
+            .iter(app.world())
+            .find(|(_, text)| text.0 == name)
+            .map(|(entity, _)| entity)
+            .unwrap_or_else(|| panic!("catalog name cell for {name} exists"));
+        app.world()
+            .get::<ChildOf>(name_cell)
+            .expect("name cell belongs to an item row")
+            .parent()
+    }
+
+    /// #249 red-first: catalog rows need compact chrome rather than the
+    /// standard 24px 9-slice panel. The standard panel's content inset plus
+    /// a 44px tap target needs 92px, but the fixed-height scrolling catalog
+    /// shrank those rows until its embroidery crossed their text. A plain
+    /// outlined row keeps the target compact while leaving the #120 panel
+    /// inset contract intact for actual 9-slice panels.
+    #[test]
+    fn catalog_rows_use_compact_chrome_that_cannot_shrink_into_text() {
+        let mut app = test_app_with_window(1280.0, 800.0);
+        let row = item_row_entity(&mut app, ItemId::BataCiobaneasca);
+        let node = app.world().get::<Node>(row).expect("item row has a Node");
+
+        assert_eq!(node.padding, UiRect::axes(Val::Px(8.0), Val::Px(4.0)));
+        assert_eq!(node.min_height, Val::Px(MIN_TOUCH_TARGET + 8.0));
+        assert_eq!(node.flex_shrink, 0.0);
+        assert!(
+            app.world().get::<ImageNode>(row).is_none(),
+            "a compact row must not carry the 24px 9-slice embroidery that overlaps its text (#249)"
+        );
     }
 
     /// #307 red-first (pure math): the gold-journey phone viewport is 390 CSS
