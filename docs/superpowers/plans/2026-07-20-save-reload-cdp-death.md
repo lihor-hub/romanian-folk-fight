@@ -142,10 +142,10 @@ Then run: `cargo xtask pre-push`
 
 Expected: exit 0 with fmt, clippy, tests, and build matrix green.
 
-- [ ] **Step 4: Commit, push, and queue**
+- [x] **Step 4: Commit, push, and queue**
 
 Push `codex/fix-save-reload-cdp-312`, create a PR whose body contains `Closes #312` and ends with `🤖 Generated with Antigravity`, then run `gh pr merge --squash --auto`.
 
-- [ ] **Step 5: Report the unblock**
+- [x] **Step 5: Report the unblock**
 
 State whether #330 can be rebased/rerun after #312 lands without cherry-picking and do not modify #330.

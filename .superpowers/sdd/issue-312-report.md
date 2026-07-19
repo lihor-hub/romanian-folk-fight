@@ -110,7 +110,10 @@ or unrelated scope change was found.
 
 - `4eda72e fix: harden save-reload CDP lifecycle (#312)`
 - `9d87d2b test: pin exact CDP death boundary (#312)`
-- Pull request and squash auto-merge: PENDING.
+- `a6fbbce docs: record issue 312 verification`
+- PR #331 is open and ready; squash auto-merge was enabled at
+  `2026-07-19T23:47:46Z`, with required checks in progress. Its body contains
+  `Closes #312` and ends with the required Antigravity trailer.
 
 ## Deviations
 
