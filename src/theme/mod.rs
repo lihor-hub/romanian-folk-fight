@@ -43,7 +43,7 @@ pub const BUTTON_DISABLED: Color = Color::srgb(0.25, 0.17, 0.13);
 pub const TEXT_DISABLED: Color = Color::srgb(0.76, 0.66, 0.61);
 
 /// HP bar fill.
-pub const HP_FILL: Color = Color::srgb(0.78, 0.16, 0.14);
+pub const HP_FILL: Color = Color::srgb(0.84, 0.16, 0.14);
 /// Stamina / XP bar fill.
 pub const STAMINA_FILL: Color = Color::srgb(0.88, 0.74, 0.22);
 /// Carved-wood bar track behind any fill.

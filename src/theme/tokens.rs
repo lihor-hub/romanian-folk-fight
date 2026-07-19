@@ -15,9 +15,9 @@
 //!
 //! ## Two palettes
 //!
-//! [`normal_token_pairs`] uses the *existing* [`crate::theme`] color
-//! constants verbatim — normal-mode rendering is unchanged by this issue,
-//! even where a pair (documented below) doesn't clear its own threshold.
+//! [`normal_token_pairs`] uses the [`crate::theme`] color constants verbatim.
+//! Its HP bar token clears the same WCAG non-text threshold as the
+//! high-contrast palette.
 //! [`high_contrast_token_pairs`] defines a second, stronger set of colors
 //! for the same named pairs; [`accessibility_contrast`] asserts every
 //! high-contrast pair clears its threshold and is never weaker than its
@@ -131,7 +131,7 @@ impl TokenPair {
     }
 }
 
-// --- Normal palette (existing constants, unchanged rendering) -------------
+// --- Normal palette (theme constants) -------------------------------------
 
 const NORMAL_TEXT_PRIMARY: Color = CREAM;
 const NORMAL_BUTTON_TEXT: Color = CREAM;
@@ -293,7 +293,7 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// The normal-mode palette (existing colors, unchanged rendering).
+    /// The normal-mode palette, sourced from the theme constants.
     pub const fn normal() -> Self {
         Self {
             text_primary: NORMAL_TEXT_PRIMARY,
@@ -366,9 +366,10 @@ pub fn sync_active_palette(
 mod tests {
     use super::*;
 
-    /// Red-first (#214): every documented token pair, in both palettes,
-    /// clears its WCAG threshold in high-contrast mode, and is never weaker
-    /// than the normal palette's same pair. Also doubles as a
+    /// Red-first (#214, #258): every documented token pair clears its WCAG
+    /// threshold in high-contrast mode; the HP bar clears it in normal mode
+    /// too; and high contrast is never weaker than the normal palette's same
+    /// pair. Also doubles as a
     /// machine-readable contrast report (run with `--nocapture` to see the
     /// table).
     #[test]
@@ -417,6 +418,15 @@ mod tests {
                     h.kind.threshold()
                 ));
             }
+            if n.name == HP_BAR_ON_TRACK && !n.passes() {
+                failures.push(format!(
+                    "{}: normal ratio {:.2} is below its {:?} threshold {:.1}",
+                    n.name,
+                    n_ratio,
+                    n.kind,
+                    n.kind.threshold()
+                ));
+            }
             if h_ratio + 1e-4 < n_ratio {
                 failures.push(format!(
                     "{}: high-contrast ratio {:.2} is weaker than the normal palette's {:.2}",
@@ -434,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn normal_palette_matches_the_existing_theme_constants_unchanged() {
+    fn normal_palette_matches_the_theme_constants() {
         let palette = Palette::normal();
         assert_eq!(palette.text_primary, CREAM);
         assert_eq!(palette.hp_fill, HP_FILL);
