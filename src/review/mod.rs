@@ -2101,10 +2101,10 @@ mod tests {
             snapshot.resolved_part_ids,
             vec![
                 "human.body.zvelt.v1",
-                "human.face.ucenic_solomonar.v1",
-                "human.hair.voinic_scurt.v1",
-                "human.torso.suman_de_ucenic.v1",
-                "human.legs.cioareci_de_ucenic.v1",
+                "human.face.haiduc.v1",
+                "human.hair.plete.v1",
+                "human.torso.ie_altita.v1",
+                "human.legs.itari.v1",
                 "human.feet.opinci.v1",
             ]
         );

@@ -489,7 +489,9 @@ impl LadderProgress {
 
 fn hot_de_codru(campaign_seed: CampaignSeed) -> Result<SeededOpponent, GenerationError> {
     let seed = derive_encounter_seed(campaign_seed.0, HOT_DE_CODRU_ENCOUNTER_ID);
-    let profile = hot_de_codru_profile()?;
+    let identity =
+        &HOT_DE_CODRU_IDENTITIES[(campaign_seed.0 % HOT_DE_CODRU_IDENTITIES.len() as u64) as usize];
+    let profile = hot_de_codru_profile(identity)?;
     let definition = generate_character(
         seed,
         &profile,
@@ -503,36 +505,59 @@ fn hot_de_codru(campaign_seed: CampaignSeed) -> Result<SeededOpponent, Generatio
     })
 }
 
-fn hot_de_codru_profile() -> Result<GenerationProfile, GenerationError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AuthoredHumanIdentity {
+    body: &'static str,
+    face: &'static str,
+    hair: &'static str,
+    torso: &'static str,
+    legs: &'static str,
+    feet: &'static str,
+}
+
+const HOT_DE_CODRU_IDENTITIES: [AuthoredHumanIdentity; 4] = [
+    AuthoredHumanIdentity {
+        body: "human.body.zvelt.v1",
+        face: "human.face.haiduc.v1",
+        hair: "human.hair.plete.v1",
+        torso: "human.torso.ie_altita.v1",
+        legs: "human.legs.itari.v1",
+        feet: "human.feet.opinci.v1",
+    },
+    AuthoredHumanIdentity {
+        body: "human.body.voinic.v1",
+        face: "human.face.voinic.v1",
+        hair: "human.hair.voinic_scurt.v1",
+        torso: "human.torso.camasa_voiniceasca.v1",
+        legs: "human.legs.cioareci_voinicesti.v1",
+        feet: "human.feet.opinci.v1",
+    },
+    AuthoredHumanIdentity {
+        body: "human.body.vanjos.v1",
+        face: "human.face.cioban.v1",
+        hair: "human.hair.prins.v1",
+        torso: "human.torso.camasa_ciobaneasca.v1",
+        legs: "human.legs.cioareci.v1",
+        feet: "human.feet.opinci.v1",
+    },
+    AuthoredHumanIdentity {
+        body: "human.body.ucenic_solomonar.v1",
+        face: "human.face.ucenic_solomonar.v1",
+        hair: "human.hair.ucenic_ciuf.v1",
+        torso: "human.torso.suman_de_ucenic.v1",
+        legs: "human.legs.cioareci_de_ucenic.v1",
+        feet: "human.feet.opinci.v1",
+    },
+];
+
+fn hot_de_codru_profile(
+    identity: &AuthoredHumanIdentity,
+) -> Result<GenerationProfile, GenerationError> {
     let appearance = PlayerAppearance::default();
     let slots = vec![
-        weighted_slot(
-            BodyRegion::Body,
-            &[
-                "human.body.zvelt.v1",
-                "human.body.voinic.v1",
-                "human.body.vanjos.v1",
-                "human.body.ucenic_solomonar.v1",
-            ],
-        )?,
-        weighted_slot(
-            BodyRegion::Face,
-            &[
-                "human.face.haiduc.v1",
-                "human.face.voinic.v1",
-                "human.face.cioban.v1",
-                "human.face.ucenic_solomonar.v1",
-            ],
-        )?,
-        weighted_slot(
-            BodyRegion::Hair,
-            &[
-                "human.hair.plete.v1",
-                "human.hair.prins.v1",
-                "human.hair.voinic_scurt.v1",
-                "human.hair.ucenic_ciuf.v1",
-            ],
-        )?,
+        weighted_slot(BodyRegion::Body, &[identity.body])?,
+        weighted_slot(BodyRegion::Face, &[identity.face])?,
+        weighted_slot(BodyRegion::Hair, &[identity.hair])?,
     ];
     let mut profile = GenerationProfile::new(
         SkeletonFamily::Human,
@@ -542,32 +567,12 @@ fn hot_de_codru_profile() -> Result<GenerationProfile, GenerationError> {
         appearance,
         slots,
     );
-    profile.wardrobes = vec![
-        WeightedWardrobe::new(
-            authored_part("human.torso.ie_altita.v1")?,
-            authored_part("human.legs.itari.v1")?,
-            authored_part("human.feet.opinci.v1")?,
-            1,
-        ),
-        WeightedWardrobe::new(
-            authored_part("human.torso.camasa_ciobaneasca.v1")?,
-            authored_part("human.legs.cioareci.v1")?,
-            authored_part("human.feet.opinci.v1")?,
-            1,
-        ),
-        WeightedWardrobe::new(
-            authored_part("human.torso.camasa_voiniceasca.v1")?,
-            authored_part("human.legs.cioareci_voinicesti.v1")?,
-            authored_part("human.feet.opinci.v1")?,
-            1,
-        ),
-        WeightedWardrobe::new(
-            authored_part("human.torso.suman_de_ucenic.v1")?,
-            authored_part("human.legs.cioareci_de_ucenic.v1")?,
-            authored_part("human.feet.opinci.v1")?,
-            1,
-        ),
-    ];
+    profile.wardrobes = vec![WeightedWardrobe::new(
+        authored_part(identity.torso)?,
+        authored_part(identity.legs)?,
+        authored_part(identity.feet)?,
+        1,
+    )];
     Ok(profile)
 }
 
@@ -661,90 +666,96 @@ mod tests {
     }
 
     #[test]
-    fn hot_de_codru_profile_uses_the_complete_authored_identity_pools() {
-        let profile = hot_de_codru_profile().unwrap();
-        let candidate_ids = |region| {
-            profile
-                .slots
-                .iter()
-                .find(|slot| slot.region == region)
-                .expect("required slot exists")
-                .candidates
-                .iter()
-                .map(|candidate| candidate.id.as_str())
-                .collect::<std::collections::BTreeSet<_>>()
-        };
+    fn hot_de_codru_profiles_lock_each_complete_authored_identity() {
+        for identity in HOT_DE_CODRU_IDENTITIES {
+            let profile = hot_de_codru_profile(&identity).unwrap();
+            let only_candidate = |region| {
+                let candidates = &profile
+                    .slots
+                    .iter()
+                    .find(|slot| slot.region == region)
+                    .expect("required slot exists")
+                    .candidates;
+                assert_eq!(candidates.len(), 1);
+                candidates[0].id.as_str()
+            };
 
-        assert_eq!(
-            candidate_ids(BodyRegion::Body),
-            [
-                "human.body.ucenic_solomonar.v1",
-                "human.body.vanjos.v1",
-                "human.body.voinic.v1",
-                "human.body.zvelt.v1",
-            ]
-            .into_iter()
-            .collect()
-        );
-        assert_eq!(
-            candidate_ids(BodyRegion::Face),
-            [
-                "human.face.cioban.v1",
-                "human.face.haiduc.v1",
-                "human.face.ucenic_solomonar.v1",
-                "human.face.voinic.v1",
-            ]
-            .into_iter()
-            .collect()
-        );
-        assert_eq!(
-            candidate_ids(BodyRegion::Hair),
-            [
-                "human.hair.plete.v1",
-                "human.hair.prins.v1",
-                "human.hair.ucenic_ciuf.v1",
-                "human.hair.voinic_scurt.v1",
-            ]
-            .into_iter()
-            .collect()
-        );
-        assert_eq!(profile.wardrobes.len(), 4);
+            assert_eq!(only_candidate(BodyRegion::Body), identity.body);
+            assert_eq!(only_candidate(BodyRegion::Face), identity.face);
+            assert_eq!(only_candidate(BodyRegion::Hair), identity.hair);
+            assert_eq!(profile.wardrobes.len(), 1);
+            assert_eq!(profile.wardrobes[0].torso.as_str(), identity.torso);
+            assert_eq!(profile.wardrobes[0].legs.as_str(), identity.legs);
+            assert_eq!(profile.wardrobes[0].feet.as_str(), identity.feet);
+        }
     }
 
     #[test]
-    fn campaign_seeds_reach_all_four_correlated_wardrobes() {
-        let wardrobes = (0..256)
+    fn campaign_seeds_reach_all_four_complete_authored_identities() {
+        let identities = (0..256)
             .map(|seed| {
                 let generated = LadderProgress(0)
                     .seeded_opponent(CampaignSeed(seed))
                     .unwrap()
                     .unwrap();
                 (
+                    generated.definition.parts.body.as_str().to_owned(),
+                    generated.definition.parts.face.as_str().to_owned(),
+                    generated.definition.parts.hair.as_str().to_owned(),
                     generated.definition.parts.torso.as_str().to_owned(),
                     generated.definition.parts.legs.as_str().to_owned(),
+                    generated.definition.parts.feet.as_str().to_owned(),
                 )
             })
             .collect::<std::collections::BTreeSet<_>>();
 
         assert_eq!(
-            wardrobes,
+            identities,
             [
-                ("human.torso.ie_altita.v1", "human.legs.itari.v1"),
                 (
+                    "human.body.zvelt.v1",
+                    "human.face.haiduc.v1",
+                    "human.hair.plete.v1",
+                    "human.torso.ie_altita.v1",
+                    "human.legs.itari.v1",
+                    "human.feet.opinci.v1",
+                ),
+                (
+                    "human.body.voinic.v1",
+                    "human.face.voinic.v1",
+                    "human.hair.voinic_scurt.v1",
                     "human.torso.camasa_voiniceasca.v1",
                     "human.legs.cioareci_voinicesti.v1",
+                    "human.feet.opinci.v1",
                 ),
                 (
+                    "human.body.vanjos.v1",
+                    "human.face.cioban.v1",
+                    "human.hair.prins.v1",
                     "human.torso.camasa_ciobaneasca.v1",
                     "human.legs.cioareci.v1",
+                    "human.feet.opinci.v1",
                 ),
                 (
+                    "human.body.ucenic_solomonar.v1",
+                    "human.face.ucenic_solomonar.v1",
+                    "human.hair.ucenic_ciuf.v1",
                     "human.torso.suman_de_ucenic.v1",
                     "human.legs.cioareci_de_ucenic.v1",
+                    "human.feet.opinci.v1",
                 ),
             ]
             .into_iter()
-            .map(|(torso, legs)| (torso.to_owned(), legs.to_owned()))
+            .map(|(body, face, hair, torso, legs, feet)| {
+                (
+                    body.to_owned(),
+                    face.to_owned(),
+                    hair.to_owned(),
+                    torso.to_owned(),
+                    legs.to_owned(),
+                    feet.to_owned(),
+                )
+            })
             .collect()
         );
     }

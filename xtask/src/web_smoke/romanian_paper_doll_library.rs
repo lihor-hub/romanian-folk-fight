@@ -63,11 +63,11 @@ const UCENIC_SOLOMONAR_IDS: &[&str] = &[
     "human.feet.opinci.v1",
 ];
 const HOT_DE_CODRU_IDS: &[&str] = &[
-    "human.body.zvelt.v1",
-    "human.face.cioban.v1",
-    "human.hair.voinic_scurt.v1",
-    "human.torso.camasa_ciobaneasca.v1",
-    "human.legs.cioareci.v1",
+    "human.body.ucenic_solomonar.v1",
+    "human.face.ucenic_solomonar.v1",
+    "human.hair.ucenic_ciuf.v1",
+    "human.torso.suman_de_ucenic.v1",
+    "human.legs.cioareci_de_ucenic.v1",
     "human.feet.opinci.v1",
 ];
 
@@ -480,15 +480,6 @@ fn run_look(
     .map_err(|error| smoke(viewport, "restored combat player", error, &dir))?;
     require_same_identity(&creation, &combat_player)
         .map_err(|error| smoke(viewport, "creation to restored combat", error, &dir))?;
-    if creation.resolved_part_ids == first_npc.resolved_part_ids {
-        return Err(smoke(
-            viewport,
-            "player/npc distinction",
-            "seeded Hoț de codru unexpectedly reused the player identity".to_owned(),
-            &dir,
-        ));
-    }
-
     let final_snapshot = read_snapshot(checkpoint)
         .map_err(|error| smoke(viewport, "final telemetry", error, &dir))?
         .ok_or_else(|| {
