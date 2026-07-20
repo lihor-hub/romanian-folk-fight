@@ -29,19 +29,23 @@ overlap but would cause the oversized compact-row regression documented by
   shop::tests::catalog_rows_use_compact_chrome_that_cannot_shrink_into_text`
   — pass (1 test).
 - Shop module: `cargo test --lib shop::tests` — pass (38 tests).
-- Full Rust suite: `cargo test` — pass (696 library tests, 0 failures).
+- Full Rust suite before the dependency rebase: `cargo test` — pass (696
+  library tests, 0 failures).
 - Formatting: `cargo fmt --all -- --check` — pass.
 - Lint: `cargo clippy --all-targets -- -D warnings` — pass.
-- Full gate and browser proof: pending the required base rebase after #312
-  and #330 land.
+- Post-rebase full gate: pending.
 
 ## Viewport evidence / browser
 
-- Desktop evidence: 1440x900 normal desktop shop checkpoint, pending the
-  required rebase after queued PRs #329 and #330 land.
-- Phone evidence: 390x844 shop checkpoint through the same gold-journey
-  scenario, pending the same rebase. The phone row button constraints are
-  unchanged; no claim about #248 is made until the browser evidence exists.
+- `env -u NO_COLOR XTASK_WEB_SMOKE_GOLD_JOURNEY_FULL_MATRIX=1 cargo xtask
+  web-smoke --scenario gold-journey --update-baselines` — pass, 30/30
+  checkpoints across desktop and phone at DPR 1, 2, and 3.
+- Visually inspected and retained only the six shop baselines. Item names,
+  stats, prices, and buttons remain clear of row borders at every DPR.
+- The 1280x800 desktop and 390x844 phone evidence confirms #234's compact-row
+  acceptance criteria, so #234 is resolved by this change as well.
+- #248 is not claimed: this journey proves the captured phone shop state but
+  does not exercise every state in #248's acceptance criteria.
 
 ## Review
 
@@ -53,7 +57,7 @@ left untouched because #249 explicitly excludes shared theme changes.
 
 ## Commits and PR
 
-Commit: `0c929f5 fix: keep shop row content clear of embroidered border`.
+Commit: `d663eb2 fix: keep shop row content clear of embroidered border`.
 
 PR: pending; it will close #249 and include the required Antigravity trailer,
 then enter the squash merge queue.
@@ -62,6 +66,7 @@ then enter the squash merge queue.
 
 - No global theme, assets, renderer, combat/progression rules, result layout,
   or xtask harness changes are included.
-- The compact-row change is intended to resolve #234 too, contingent on the
-  1280x800 and 390x844 visual proof. #248 remains open unless the focused
-  phone browser proof demonstrates all of its acceptance criteria.
+- The first browser launcher invocation stopped before building because the
+  inherited `NO_COLOR=1` is not a boolean accepted by Trunk 0.21.14. The
+  command above removed that variable and completed the same scenario.
+- #248 remains open; no acceptance claim is made for it.
