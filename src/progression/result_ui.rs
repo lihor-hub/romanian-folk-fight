@@ -23,9 +23,12 @@ use crate::ui_widgets::{
 
 use super::{FightOutcome, Level, LevelUpDraft, Wallet, reset_run, top_up_pool, xp_to_next};
 
-/// Width of the XP progress bar.
-const XP_BAR_WIDTH: f32 = 300.0;
-
+/// Width of the result panel's content box.
+const RESULT_PANEL_CONTENT_WIDTH: f32 = 300.0;
+/// Padding between the result-panel content and its embroidered border.
+const RESULT_PANEL_PADDING: f32 = 28.0;
+/// Width of the XP progress bar after reserving both visible border insets.
+const XP_BAR_WIDTH: f32 = RESULT_PANEL_CONTENT_WIDTH - 2.0 * RESULT_PANEL_PADDING;
 /// Width of the level-up allocation grid: two attribute cells plus the 8px
 /// wrap gap (#128), forcing the eight cells into four two-cell rows.
 const ALLOCATION_GRID_WIDTH: f32 = 2.0 * ATTRIBUTE_CELL_WIDTH + 8.0;
@@ -125,10 +128,20 @@ pub(super) fn spawn_result_screen(
                     panel_bundle(
                         &panel_texture,
                         Node {
+                            // #250: size the panel as a content box, not as
+                            // the XP bar itself. The 300px content box holds
+                            // the 244px track plus both 28px visible insets.
+                            // The screen shell supplies horizontal scrolling
+                            // when a viewport is narrower than that contract.
+                            box_sizing: BoxSizing::ContentBox,
+                            width: Val::Px(RESULT_PANEL_CONTENT_WIDTH),
+                            // Preserve room for the XP bar plus both content
+                            // insets; the screen shell scrolls when needed.
+                            flex_shrink: 0.0,
                             flex_direction: FlexDirection::Column,
                             align_items: AlignItems::Center,
                             row_gap: Val::Px(16.0),
-                            padding: UiRect::all(Val::Px(28.0)),
+                            padding: UiRect::all(Val::Px(RESULT_PANEL_PADDING)),
                             ..default()
                         },
                     ),
@@ -161,11 +174,29 @@ pub(super) fn spawn_result_screen(
                     if let Some(draft) = &draft {
                         spawn_allocation_panel(parent, draft, &ui_font);
                     }
-                    parent.spawn((wide_button("La prăvălie", &ui_font), ResultAction::GoToShop));
-                    parent.spawn((
-                        wide_button("Lupta următoare", &ui_font),
-                        ResultAction::NextFight,
-                    ));
+                    parent
+                        .spawn(Node {
+                            flex_direction: FlexDirection::Column,
+                            align_items: AlignItems::Center,
+                            row_gap: Val::Px(16.0),
+                            // Bevy's intrinsic panel height does not include
+                            // the panel's own bottom padding. Make that inset
+                            // explicit in the action group's outer size so
+                            // the final button stays above the embroidery.
+                            margin: UiRect::bottom(Val::Px(RESULT_PANEL_PADDING)),
+                            flex_shrink: 0.0,
+                            ..default()
+                        })
+                        .with_children(|actions| {
+                            actions.spawn((
+                                wide_button("La prăvălie", &ui_font),
+                                ResultAction::GoToShop,
+                            ));
+                            actions.spawn((
+                                wide_button("Lupta următoare", &ui_font),
+                                ResultAction::NextFight,
+                            ));
+                        });
                 });
         });
     if let Some(draft) = draft {
@@ -672,6 +703,49 @@ mod tests {
             app.world().get_resource::<LevelUpDraft>().is_none(),
             "no draft without points to spend"
         );
+    }
+
+    /// #250: the responsive result panel must reserve its border inset around
+    /// the XP bar, and its fixed-height action buttons must not make the
+    /// panel shrink inside the scrollable screen shell.
+    #[test]
+    fn result_panel_keeps_xp_and_actions_inside_its_content_box() {
+        let mut app = test_app();
+        app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
+        set_state(&mut app, GameState::FightResult);
+
+        let panel = app
+            .world_mut()
+            .query_filtered::<&Node, With<TabGroup>>()
+            .single(app.world())
+            .expect("result panel exists");
+        assert_eq!(panel.box_sizing, BoxSizing::ContentBox);
+        assert_eq!(panel.width, Val::Px(RESULT_PANEL_CONTENT_WIDTH));
+        assert_eq!(panel.max_width, Val::Auto);
+        assert_eq!(panel.flex_shrink, 0.0);
+
+        let xp = app
+            .world_mut()
+            .query::<&Node>()
+            .iter(app.world())
+            .find(|node| node.height == Val::Px(XP_BAR_HEIGHT))
+            .expect("XP bar exists");
+        assert_eq!(xp.width, Val::Px(XP_BAR_WIDTH));
+        assert_eq!(xp.max_width, Val::Auto);
+
+        let action_parent = app
+            .world_mut()
+            .query_filtered::<&ChildOf, With<ResultAction>>()
+            .iter(app.world())
+            .map(ChildOf::parent)
+            .next()
+            .expect("result actions exist");
+        let actions = app
+            .world()
+            .get::<Node>(action_parent)
+            .expect("result action group has a layout node");
+        assert_eq!(actions.margin.bottom, Val::Px(RESULT_PANEL_PADDING));
+        assert_eq!(actions.flex_shrink, 0.0);
     }
 
     #[test]
