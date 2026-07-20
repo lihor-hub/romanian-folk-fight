@@ -9,8 +9,10 @@
   and did not yet contain this report.
 - Rebased from `c6c0292` onto `origin/main` at `e686830` before editing or
   accepting visual baselines.
-- #304, #312, and #250 were already present on the synchronized base. #333's
-  shop work and every shop baseline remain untouched.
+- #304, #312, and #250 were already present on the synchronized base. After
+  implementation and review, rebased again onto `origin/main` at `5082885`
+  after #333 merged. #333's shop work and every shop baseline remain
+  untouched.
 
 ## Scope and diagnosis
 
@@ -60,7 +62,10 @@ After the final freeze-before-entry ordering:
 Both actual/diff pairs were visually inspected before acceptance. Baselines
 were accepted through the repository command with a temporary desktop-only
 viewport selection; that selection was restored immediately. Git confirms
-that the only baseline changes are the two owned desktop PNGs.
+that the only baseline changes are the two owned desktop PNGs. After rebasing
+over #333, both owned desktop cells were run strict and serialized once more;
+each remained an exact accepted-baseline match, and the temporary viewport
+selection was again restored.
 
 ## TDD and verification
 
@@ -84,6 +89,9 @@ that the only baseline changes are the two owned desktop PNGs.
   passed in 876.37 seconds.
 - After fixing the independent review finding, the complete same command
   passed again from warm caches in 22.66 seconds.
+- After the final rebase onto `5082885`, the complete same command passed on
+  the final implementation tree in 114.29 seconds. The repository-enforced
+  pre-push hook also passed when publishing the branch.
 
 `NO_COLOR=true` was supplied because the host exports `NO_COLOR=1`, while the
 installed Trunk accepts only the boolean spellings `true` and `false`.
@@ -95,8 +103,9 @@ installed Trunk accepts only the boolean spellings `true` and `false`.
   `generated_opponent`, so equality was not complete. Fixed by preserving all
   additional telemetry fields via `serde(flatten)` and adding a RED/GREEN
   regression where only that field changes; the helper suite now passes 6/6.
-- Commits: the implementation will be the scoped
-  `test: freeze desktop fight visual phases (#316)` commit; the final range is
-  reported as `origin/main..HEAD` in the handoff.
-- PR: pending; target is a ready PR that closes #316, ends with the
-  Antigravity trailer, and enters the squash merge queue.
+- Implementation commit: `18cf687 test: freeze desktop fight visual phases
+  (#316)`, based on `5082885`.
+- Ready PR: [#334](https://github.com/lihor-hub/romanian-folk-fight/pull/334),
+  which closes #316 and ends with the Antigravity trailer. CI started after
+  publication; squash auto-merge will be queued after this final report
+  update is published.
