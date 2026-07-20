@@ -40,8 +40,9 @@
 //! checkpoint is a genuinely cold first load, not just the first checkpoint
 //! of the scenario.
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -168,6 +169,56 @@ pub struct Checkpoint {
     #[allow(dead_code)] // kept alive so its `Drop` tears the process down with the tab
     browser: Browser,
     tab: Arc<Tab>,
+    diagnostics: Option<ChromeDiagnosticPaths>,
+}
+
+/// File-backed Chrome diagnostics enabled only for scenarios that opt into
+/// [`launch_with_diagnostics`]. Keeping these beside (not inside) the profile
+/// makes them obvious in the uploaded scenario bundle and avoids relying on
+/// Chrome's platform-specific default log/crash locations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ChromeDiagnosticPaths {
+    log_file: PathBuf,
+    crash_dump_dir: PathBuf,
+    process_log: PathBuf,
+}
+
+impl ChromeDiagnosticPaths {
+    fn for_profile(profile_dir: &Path) -> Self {
+        let attempt_dir = profile_dir
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        Self {
+            log_file: attempt_dir.join("chrome_debug.log"),
+            crash_dump_dir: attempt_dir.join("chrome-crashes"),
+            process_log: attempt_dir.join("chrome-process.log"),
+        }
+    }
+}
+
+/// Chrome's own supported environment variables for explicit diagnostic
+/// destinations. `CHROME_LOG_FILE` is consumed when `--enable-logging` is
+/// present; `BREAKPAD_DUMP_LOCATION` overrides the Crashpad/Breakpad dump
+/// directory without enabling uploads.
+fn chrome_process_envs(paths: &ChromeDiagnosticPaths) -> HashMap<String, String> {
+    HashMap::from([
+        (
+            "CHROME_LOG_FILE".to_string(),
+            paths.log_file.to_string_lossy().into_owned(),
+        ),
+        (
+            "BREAKPAD_DUMP_LOCATION".to_string(),
+            paths.crash_dump_dir.to_string_lossy().into_owned(),
+        ),
+    ])
+}
+
+/// `headless_chrome` 1.0.22 disables crash reporting in its default argument
+/// set. Diagnostic launches must filter that one default so Chrome can write
+/// a local dump when it crashes; uploads remain disabled by Chrome on bots.
+fn chrome_ignored_default_args() -> Vec<&'static OsStr> {
+    vec![OsStr::new("--disable-breakpad")]
 }
 
 /// Finds a Chrome/Chromium binary that actually runs.
@@ -286,6 +337,29 @@ fn chrome_launch_args(dpr: f64) -> Vec<String> {
 /// compositor scale and the CDP-reported `scale_factor` in agreement again,
 /// exactly as they always are on a real, unemulated browser.
 pub fn launch(width: u32, height: u32, dpr: f64, profile_dir: &Path) -> Result<Checkpoint, String> {
+    launch_inner(width, height, dpr, profile_dir, false)
+}
+
+/// Launches the same deterministic browser as [`launch`], plus file-backed
+/// Chrome logging, local crash dumps, and a process-state snapshot destination
+/// for a lifecycle-sensitive scenario. This is opt-in so #312's evidence
+/// capture does not inflate every unrelated browser-smoke artifact.
+pub fn launch_with_diagnostics(
+    width: u32,
+    height: u32,
+    dpr: f64,
+    profile_dir: &Path,
+) -> Result<Checkpoint, String> {
+    launch_inner(width, height, dpr, profile_dir, true)
+}
+
+fn launch_inner(
+    width: u32,
+    height: u32,
+    dpr: f64,
+    profile_dir: &Path,
+    enable_diagnostics: bool,
+) -> Result<Checkpoint, String> {
     std::fs::create_dir_all(profile_dir).map_err(|e| {
         format!(
             "failed to create Chrome profile dir {}: {e}",
@@ -297,7 +371,18 @@ pub fn launch(width: u32, height: u32, dpr: f64, profile_dir: &Path) -> Result<C
     let args_owned = chrome_launch_args(dpr);
     let args: Vec<&OsStr> = args_owned.iter().map(OsStr::new).collect();
 
-    let launch_options = LaunchOptionsBuilder::default()
+    let diagnostics = enable_diagnostics.then(|| ChromeDiagnosticPaths::for_profile(profile_dir));
+    if let Some(paths) = &diagnostics {
+        std::fs::create_dir_all(&paths.crash_dump_dir).map_err(|e| {
+            format!(
+                "failed to create Chrome crash-dump dir {}: {e}",
+                paths.crash_dump_dir.display()
+            )
+        })?;
+    }
+
+    let mut launch_builder = LaunchOptionsBuilder::default();
+    launch_builder
         .headless(true)
         .sandbox(false) // required in CI/sandboxed dev containers lacking user namespaces (see PR description)
         // `headless_chrome` adds `--disable-gpu` unless told otherwise, which
@@ -312,7 +397,19 @@ pub fn launch(width: u32, height: u32, dpr: f64, profile_dir: &Path) -> Result<C
         .user_data_dir(Some(profile_dir.to_path_buf()))
         .window_size(Some((width, height)))
         .idle_browser_timeout(Duration::from_secs(120)) // a cold wasm compile+first-fetch can be slow
-        .args(args)
+        .args(args);
+    if let Some(paths) = &diagnostics {
+        launch_builder
+            .enable_logging(true)
+            .process_envs(Some(chrome_process_envs(paths)))
+            .ignore_default_args(chrome_ignored_default_args());
+        println!(
+            "    browser diagnostics: log {}, crash dumps {}",
+            paths.log_file.display(),
+            paths.crash_dump_dir.display()
+        );
+    }
+    let launch_options = launch_builder
         .build()
         .map_err(|e| format!("failed to build Chrome launch options: {e}"))?;
 
@@ -357,7 +454,11 @@ pub fn launch(width: u32, height: u32, dpr: f64, profile_dir: &Path) -> Result<C
 
     apply_cpu_throttle(&tab)?;
 
-    Ok(Checkpoint { browser, tab })
+    Ok(Checkpoint {
+        browser,
+        tab,
+        diagnostics,
+    })
 }
 
 /// Env var read by [`apply_cpu_throttle`]. Unset/unparseable/`<= 1` disables
@@ -406,7 +507,69 @@ fn apply_cpu_throttle(tab: &Tab) -> Result<(), String> {
     Ok(())
 }
 
+fn chrome_process_snapshot(pid: Option<u32>, observed_error: &str) -> String {
+    let mut report = format!("observed error: {observed_error}\n");
+    let Some(pid) = pid else {
+        report.push_str("chrome pid: unavailable\n");
+        return report;
+    };
+    report.push_str(&format!("chrome pid: {pid}\n"));
+
+    for name in ["status", "stat"] {
+        let path = PathBuf::from(format!("/proc/{pid}/{name}"));
+        report.push_str(&format!("\n--- {} ---\n", path.display()));
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => report.push_str(&contents),
+            Err(error) => report.push_str(&format!("unavailable: {error}\n")),
+        }
+    }
+
+    report.push_str("\n--- ps snapshot ---\n");
+    let pid_arg = pid.to_string();
+    match std::process::Command::new("ps")
+        .args([
+            "-p",
+            &pid_arg,
+            "-o",
+            "pid=,ppid=,stat=,etime=,rss=,vsz=,command=",
+        ])
+        .output()
+    {
+        Ok(output) => {
+            report.push_str(&String::from_utf8_lossy(&output.stdout));
+            if !output.stderr.is_empty() {
+                report.push_str("stderr: ");
+                report.push_str(&String::from_utf8_lossy(&output.stderr));
+            }
+            report.push_str(&format!("ps exit: {}\n", output.status));
+        }
+        Err(error) => report.push_str(&format!("failed to run ps: {error}\n")),
+    }
+
+    report
+}
+
 impl Checkpoint {
+    /// Writes the Chrome PID plus the best process state the host exposes
+    /// *before* this checkpoint drops and `headless_chrome` reaps/kills the
+    /// child. On Linux, `/proc/<pid>/stat` retains the wait/exit fields even
+    /// for a dead-but-unreaped child; the portable `ps` snapshot still gives
+    /// macOS/other POSIX hosts a live/zombie state when available.
+    pub fn write_process_diagnostics(&self, observed_error: &str) -> Result<PathBuf, String> {
+        let paths = self.diagnostics.as_ref().ok_or_else(|| {
+            "Chrome process diagnostics were not enabled for this checkpoint".to_string()
+        })?;
+        let report = chrome_process_snapshot(self.browser.get_process_id(), observed_error);
+        std::fs::write(&paths.process_log, report).map_err(|e| {
+            format!(
+                "failed to write Chrome process diagnostics {}: {e}",
+                paths.process_log.display()
+            )
+        })?;
+        println!("    artifact: {}", paths.process_log.display());
+        Ok(paths.process_log.clone())
+    }
+
     /// Registers a `localStorage.setItem(key, value)` call to run before any
     /// of the page's own scripts on the *next* navigation (via the same
     /// `Page.AddScriptToEvaluateOnNewDocument` mechanism [`launch`] already
@@ -608,5 +771,55 @@ mod tests {
             assert!(args.contains(&"--enable-unsafe-swiftshader".to_string()));
             assert!(args.contains(&"--hide-scrollbars".to_string()));
         }
+    }
+
+    #[test]
+    fn chrome_diagnostics_live_beside_the_attempt_profile() {
+        let profile = Path::new(
+            "/workspace/target/xtask-artifacts/web-smoke/save-reload/journey/chrome-profile",
+        );
+        let paths = ChromeDiagnosticPaths::for_profile(profile);
+
+        assert_eq!(
+            paths.log_file,
+            Path::new(
+                "/workspace/target/xtask-artifacts/web-smoke/save-reload/journey/chrome_debug.log"
+            )
+        );
+        assert_eq!(
+            paths.crash_dump_dir,
+            Path::new(
+                "/workspace/target/xtask-artifacts/web-smoke/save-reload/journey/chrome-crashes"
+            )
+        );
+        assert_eq!(
+            paths.process_log,
+            Path::new(
+                "/workspace/target/xtask-artifacts/web-smoke/save-reload/journey/chrome-process.log"
+            )
+        );
+    }
+
+    #[test]
+    fn chrome_environment_routes_logs_and_crash_dumps_to_attempt_artifacts() {
+        let paths = ChromeDiagnosticPaths::for_profile(Path::new("/artifacts/chrome-profile"));
+        let envs = chrome_process_envs(&paths);
+
+        assert_eq!(
+            envs.get("CHROME_LOG_FILE").map(String::as_str),
+            Some("/artifacts/chrome_debug.log")
+        );
+        assert_eq!(
+            envs.get("BREAKPAD_DUMP_LOCATION").map(String::as_str),
+            Some("/artifacts/chrome-crashes")
+        );
+    }
+
+    #[test]
+    fn chrome_launch_reenables_crash_reporting_disabled_by_the_driver_default() {
+        assert_eq!(
+            chrome_ignored_default_args(),
+            vec![OsStr::new("--disable-breakpad")]
+        );
     }
 }
