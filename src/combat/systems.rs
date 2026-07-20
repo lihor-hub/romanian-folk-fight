@@ -134,6 +134,8 @@ impl Plugin for CombatPlugin {
             .add_plugins(FocusNavigationPlugin)
             .init_resource::<ExtraDescriptors>()
             .init_resource::<action_palette::PhonePaletteState>()
+            .init_resource::<action_palette::ActionPictograms>()
+            .add_systems(Startup, action_palette::load_action_pictograms)
             .add_message::<PlayerActionEvent>()
             .add_message::<CombatLogEvent>()
             .add_systems(OnEnter(GameState::Fight), (setup_combat, hud::spawn_hud))
@@ -163,6 +165,7 @@ impl Plugin for CombatPlugin {
                     hud::collect_log_lines,
                     action_palette::update_button_backgrounds,
                     action_palette::update_action_buttons,
+                    action_palette::pulse_distance_chip_on_reach_hover,
                     hud::apply_responsive_hud_layout,
                     action_palette::handle_category_buttons.after(FocusNavigationSet),
                     action_palette::rebuild_action_bar_on_breakpoint_change,

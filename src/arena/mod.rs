@@ -66,7 +66,9 @@ const GROUND_CHIP_Z: f32 = -8.0;
 const GROUND_CHIP_FONT_SIZE: f32 = 15.0;
 /// Alpha of the ground chip's [`TEXT_DISABLED`] tone: low-contrast on the
 /// brown ground, an etched marker rather than a bright label.
-const GROUND_CHIP_ALPHA: f32 = 0.45;
+// `pub(crate)`: `combat::action_palette`'s reach-hover pulse restores the
+// chip to exactly this resting alpha (see `pulse_distance_chip_on_reach_hover`).
+pub(crate) const GROUND_CHIP_ALPHA: f32 = 0.45;
 
 /// The always-present presentation resources [`spawn_scene`] draws from,
 /// bundled so the two spawn systems stay within clippy's argument budget.

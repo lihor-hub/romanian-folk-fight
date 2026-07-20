@@ -1,0 +1,102 @@
+# Manifest sidecar schema v1 -- see xtask/src/assets/schema.rs.
+#
+# Combat action pictograms (combat redesign §3): one 32x32 glyph per action
+# descriptor id (`ActionDescriptor::pictogram_id`), loaded by
+# `combat::action_palette` from `ui/pictograms/<id>.png`.
+version = 1
+
+[[record]]
+id = "ui.pictogram-quick-strike"
+path = "quick-strike.png"
+kind = "image"
+category = "ui-icon"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-pictograms.py"
+license = "CC0 1.0"
+dimensions = [32, 32]
+sampler = "linear"
+
+[[record]]
+id = "ui.pictogram-normal-strike"
+path = "normal-strike.png"
+kind = "image"
+category = "ui-icon"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-pictograms.py"
+license = "CC0 1.0"
+dimensions = [32, 32]
+sampler = "linear"
+
+[[record]]
+id = "ui.pictogram-heavy-strike"
+path = "heavy-strike.png"
+kind = "image"
+category = "ui-icon"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-pictograms.py"
+license = "CC0 1.0"
+dimensions = [32, 32]
+sampler = "linear"
+
+[[record]]
+id = "ui.pictogram-block"
+path = "block.png"
+kind = "image"
+category = "ui-icon"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-pictograms.py"
+license = "CC0 1.0"
+dimensions = [32, 32]
+sampler = "linear"
+
+[[record]]
+id = "ui.pictogram-rest"
+path = "rest.png"
+kind = "image"
+category = "ui-icon"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-pictograms.py"
+license = "CC0 1.0"
+dimensions = [32, 32]
+sampler = "linear"
+
+[[record]]
+id = "ui.pictogram-step-forward"
+path = "step-forward.png"
+kind = "image"
+category = "ui-icon"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-pictograms.py"
+license = "CC0 1.0"
+dimensions = [32, 32]
+sampler = "linear"
+
+[[record]]
+id = "ui.pictogram-step-back"
+path = "step-back.png"
+kind = "image"
+category = "ui-icon"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-pictograms.py"
+license = "CC0 1.0"
+dimensions = [32, 32]
+sampler = "linear"
+
+[[record]]
+id = "ui.pictogram-leap-forward"
+path = "leap-forward.png"
+kind = "image"
+category = "ui-icon"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-pictograms.py"
+license = "CC0 1.0"
+dimensions = [32, 32]
+sampler = "linear"

@@ -186,6 +186,7 @@ pub fn log_line(actor: &str, opponent: &str, event: CombatEvent) -> String {
 /// child (nameplates, the action bar) lands inside the same rect the arena
 /// art occupies rather than bleeding onto the letterbox bars.
 /// [`apply_letterbox_to_hud_root`] keeps it in sync across window resizes.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_hud(
     mut commands: Commands,
     ui_font: Res<UiFont>,
@@ -193,6 +194,7 @@ pub(super) fn spawn_hud(
     viewport: Res<ViewportInfo>,
     letterbox: Res<LetterboxRect>,
     extra_descriptors: Res<ExtraDescriptors>,
+    action_pictograms: Res<action_palette::ActionPictograms>,
     palette: Res<Palette>,
 ) {
     commands.insert_resource(CombatLog::default());
@@ -230,6 +232,7 @@ pub(super) fn spawn_hud(
                 &panel_texture,
                 is_mobile,
                 &extra_descriptors,
+                &action_pictograms,
                 &viewport,
                 &letterbox,
             );
@@ -1072,23 +1075,24 @@ mod tests {
     /// under `action`'s button — the same `ActionCostOrReason` node
     /// `action_palette::tests::find_cost_or_reason_text` reads.
     fn action_sublabel_text(app: &mut App, action: CombatAction) -> String {
-        let entity = find_action_button(app, action);
-        let children = app
-            .world()
-            .get::<Children>(entity)
-            .expect("button has children")
-            .to_vec();
-        for child in children {
-            if app.world().get::<ActionCostOrReason>(child).is_some() {
-                return app
-                    .world()
-                    .get::<Text>(child)
-                    .expect("cost/reason node has Text")
-                    .0
-                    .clone();
+        // Depth-first: the desktop banner row nests its texts in a column
+        // beside the pictogram tile.
+        fn search(app: &App, entity: Entity) -> Option<String> {
+            if app.world().get::<ActionCostOrReason>(entity).is_some() {
+                return Some(
+                    app.world()
+                        .get::<Text>(entity)
+                        .expect("cost/reason node has Text")
+                        .0
+                        .clone(),
+                );
             }
+            let children = app.world().get::<Children>(entity)?.to_vec();
+            children.into_iter().find_map(|child| search(app, child))
         }
-        panic!("no ActionCostOrReason child found for {action:?}");
+        let entity = find_action_button(app, action);
+        search(app, entity)
+            .unwrap_or_else(|| panic!("no ActionCostOrReason child found for {action:?}"))
     }
 
     /// #124's acceptance test: `Lovitură iute` and `Lovitură grea` each show a

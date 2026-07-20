@@ -257,6 +257,26 @@ by `scripts/generate-shop-icons.py` for this project (issue #73), following
 | `ui/icon_head.png` | Head armor slot icon | self-generated | CC0 1.0 |
 | `ui/icon_feet.png` | Feet armor slot icon | self-generated | CC0 1.0 |
 
+## Combat action pictograms (`assets/ui/pictograms/`)
+
+The combat action pictograms below are **self-generated placeholder art**
+produced by `scripts/generate-pictograms.py` for this project (combat
+redesign §3, `docs/combat-redesign-proposal.md`), following
+`docs/art-direction.md`. One 32x32 glyph per combat action descriptor id.
+They are dedicated to the public domain (**CC0 1.0**,
+<https://creativecommons.org/publicdomain/zero/1.0/>).
+
+| File | Depicts | Source | License |
+| --- | --- | --- | --- |
+| `ui/pictograms/quick-strike.png` | Quick strike: two motion slashes | self-generated | CC0 1.0 |
+| `ui/pictograms/normal-strike.png` | Normal strike: straight punch | self-generated | CC0 1.0 |
+| `ui/pictograms/heavy-strike.png` | Heavy strike: downward club arc | self-generated | CC0 1.0 |
+| `ui/pictograms/block.png` | Block: pointed shield | self-generated | CC0 1.0 |
+| `ui/pictograms/rest.png` | Rest: steaming bowl | self-generated | CC0 1.0 |
+| `ui/pictograms/step-forward.png` | Step forward: footprint and arrow | self-generated | CC0 1.0 |
+| `ui/pictograms/step-back.png` | Step back: mirrored footprint and arrow | self-generated | CC0 1.0 |
+| `ui/pictograms/leap-forward.png` | Leap forward: double chevron | self-generated | CC0 1.0 |
+
 ## Equipment overlays (`assets/gear/`)
 
 All equipment overlay sprites below are **self-generated placeholder art**

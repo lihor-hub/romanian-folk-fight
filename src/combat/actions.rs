@@ -45,11 +45,12 @@ use super::systems::{CombatSide, CombatTurn};
 pub type ActionId = &'static str;
 
 /// The small, closed vocabulary of action categories every descriptor
-/// belongs to. Desktop (#189, this module) does not group by category — it
-/// is a flat strip — but phone category disclosure (a later #143 child) and
-/// future registrations (#199/#213: ranged attacks join `Strikes`; taunt/
-/// shove, spells, and consumables join `Special`) both need this field to
-/// already exist on every descriptor.
+/// belongs to. Both palettes group by it: desktop's command banner (combat
+/// redesign §3) renders one labeled group per category in its own decision
+/// order, phone's disclosure strip (#199) one category button per non-empty
+/// category in [`CATEGORY_ORDER`]. Future registrations (#199/#213: ranged
+/// attacks join `Strikes`; taunt/shove, spells, and consumables join
+/// `Special`) land in their declared group automatically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActionCategory {
     /// Damage actions: quick/heavy strike today, ranged attacks later.
@@ -155,9 +156,12 @@ impl ActionDescriptor {
     }
 }
 
-/// The eight current combat actions, in the order the desktop palette
-/// renders them (the pre-#189 HUD's button order, with the combat
-/// redesign's NormalStrike slotted between the quick and heavy strikes).
+/// The eight current combat actions, in the order the palettes render them
+/// (combat redesign §3, `docs/combat-redesign-proposal.md`): the strikes
+/// lightest-first, then movement in the proposal's StepForward /
+/// LeapForward / StepBack order (both advances before the retreat), then
+/// block and rest. Within each [`ActionCategory`], grouping consumers keep
+/// this relative order.
 pub const ALL_ACTIONS: [CombatAction; 8] = [
     CombatAction::QuickStrike,
     CombatAction::NormalStrike,
@@ -165,8 +169,8 @@ pub const ALL_ACTIONS: [CombatAction; 8] = [
     CombatAction::Block,
     CombatAction::Rest,
     CombatAction::StepForward,
-    CombatAction::StepBack,
     CombatAction::LeapForward,
+    CombatAction::StepBack,
 ];
 
 /// Everything [`generate_action_descriptors`] needs to derive every
