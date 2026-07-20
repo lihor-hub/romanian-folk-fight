@@ -74,9 +74,14 @@ fresh rendered proof on the final base, not another production layout change.
 
 ## Commits and PR state
 
-- `355e6ac test: cover phone shop containment (#248)` (rebased implementation
-  commit; report/browser-state follow-up pending publication).
-- Ready PR and merge-queue state: pending publication.
+- `355e6ac test: cover phone shop containment (#248)` adds the focused
+  regression on the final base.
+- `1350981 docs: record phone shop verification (#248)` records rendered,
+  gate, and independent-review evidence.
+- Ready PR [#335](https://github.com/lihor-hub/romanian-folk-fight/pull/335)
+  closes #248 and carries the required Antigravity trailer. Squash auto-merge
+  was enabled at 2026-07-20 09:23 UTC; required checks are running before the
+  repository merge queue can admit it.
 
 ## Deviations and next notes
 
