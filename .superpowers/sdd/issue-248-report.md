@@ -39,12 +39,28 @@ fresh rendered proof on the final base, not another production layout change.
 - `cargo test --lib shop::tests::` — 39 passed, 0 failed.
 - Early full gate: `NO_COLOR=true cargo xtask pre-push` passed formatting,
   default/review Clippy, default/review tests, and native/release/WASM build
-  matrix (939.29s from a cold worktree cache). A final post-rebase run remains
-  pending.
+  matrix (939.29s from a cold worktree cache).
+- Final post-#334-rebase `NO_COLOR=true cargo xtask pre-push` passed the same
+  complete gate on the final implementation tree in 67.53s.
 
 ## Viewport and browser proof
 
-Pending PR #334 merge/rebase and serialized browser capture.
+- Waited for PR #334 to merge as `3a5e858`, fetched it, and rebased before
+  capture. #334's two non-shop baselines and desktop fight-freeze paths remain
+  untouched.
+- `NO_COLOR=true XTASK_WEB_SMOKE_GOLD_JOURNEY_FULL_MATRIX=1 cargo xtask
+  web-smoke --scenario gold-journey` passed all 30 checkpoints (1209.04s):
+  desktop and 390x844 phone at DPR 1, 2, and 3.
+- All six shop cells matched their accepted baselines exactly, including
+  `phone-shop`, `phone-dpr2-shop`, and `phone-dpr3-shop`. No baseline was
+  rewritten or reaccepted because there was no intentional visual delta.
+- Visually inspected the post-#334 desktop and 390x844 phone captures. Desktop
+  retains the catalog-left/preview-right layout. On phone, `Echipat` and full
+  `Cumpără` targets remain inside the gold row outline, and no Back action is
+  painted across the preview frame; the root scroll owns access to the action
+  below the complete preview-plus-catalog body.
+- The scenario reported non-fatal animation-phase differences on unrelated
+  creation/fight cells. They were neither used as #248 evidence nor accepted.
 
 ## Independent review
 
@@ -58,12 +74,14 @@ Pending PR #334 merge/rebase and serialized browser capture.
 
 ## Commits and PR state
 
-Pending final verification and publication.
+- `355e6ac test: cover phone shop containment (#248)` (rebased implementation
+  commit; report/browser-state follow-up pending publication).
+- Ready PR and merge-queue state: pending publication.
 
 ## Deviations and next notes
 
 - No runtime layout, catalog content, character renderer, combat/progression
   logic, shared theme contract, unrelated screen, or xtask path is changed.
-- PR #334 owns only the desktop fight freeze harness and two non-shop
-  baselines. This branch will rebase after it merges and will not touch its
+- PR #334 owned only the desktop fight freeze harness and two non-shop
+  baselines. This branch rebased after it merged and does not touch those
   paths.
