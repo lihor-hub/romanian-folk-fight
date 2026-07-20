@@ -4,7 +4,7 @@
 //! of the HUD hard-coding a seven-button list.
 //!
 //! [`generate_action_descriptors`] is the *one* generator the issue requires:
-//! it walks [`ALL_ACTIONS`] (the seven current [`CombatAction`] variants) and
+//! it walks [`ALL_ACTIONS`] (the eight current [`CombatAction`] variants) and
 //! builds one descriptor per action, deriving every state-dependent field —
 //! legality, cost, chance, the disabled reason — by calling into the
 //! existing engine/HUD rules ([`CombatAction::stamina_cost`],
@@ -17,7 +17,7 @@
 //! ## Extensibility (#189's acceptance criterion)
 //!
 //! [`ExtraDescriptors`] is a small, always-present (default empty) resource
-//! the desktop palette appends after the seven generated descriptors, before
+//! the desktop palette appends after the eight generated descriptors, before
 //! building buttons. It is not `cfg(test)`-gated (Bevy system parameters
 //! cannot easily be conditionally compiled per-build without duplicating the
 //! system), but it costs nothing when empty and no production code ever
@@ -31,7 +31,8 @@
 use crate::character::{Attributes, stats};
 
 use super::engine::{
-    CombatAction, DuelDistance, HEAVY_STRIKE_BASE_HIT, QUICK_STRIKE_BASE_HIT, REST_RESTORE,
+    CombatAction, DuelDistance, HEAVY_STRIKE_BASE_HIT, NORMAL_STRIKE_BASE_HIT,
+    QUICK_STRIKE_BASE_HIT, REST_RESTORE,
 };
 use super::systems::{CombatSide, CombatTurn};
 
@@ -64,7 +65,7 @@ pub enum ActionCategory {
 }
 
 /// One resource an action can cost (or restore). Only [`ActionCost::Stamina`]
-/// and [`ActionCost::Restore`] are used by the current seven actions
+/// and [`ActionCost::Restore`] are used by the current eight actions
 /// (movement costs [`ActionCost::None`] — a position change, not a resource
 /// spend); [`ActionCost::Mana`]/[`ActionCost::Item`] exist so a later spell
 /// or consumable (#199/#213) can register without extending this enum.
@@ -154,10 +155,12 @@ impl ActionDescriptor {
     }
 }
 
-/// The seven current combat actions, in the order the desktop palette
-/// renders them (unchanged from the pre-#189 HUD's button order).
-pub const ALL_ACTIONS: [CombatAction; 7] = [
+/// The eight current combat actions, in the order the desktop palette
+/// renders them (the pre-#189 HUD's button order, with the combat
+/// redesign's NormalStrike slotted between the quick and heavy strikes).
+pub const ALL_ACTIONS: [CombatAction; 8] = [
     CombatAction::QuickStrike,
+    CombatAction::NormalStrike,
     CombatAction::HeavyStrike,
     CombatAction::Block,
     CombatAction::Rest,
@@ -227,6 +230,7 @@ pub struct ExtraDescriptors(pub Vec<ActionDescriptor>);
 pub fn action_label(action: CombatAction) -> &'static str {
     match action {
         CombatAction::QuickStrike => "Lovitură iute",
+        CombatAction::NormalStrike => "Lovitură dreaptă",
         CombatAction::HeavyStrike => "Lovitură grea",
         CombatAction::Block => "Apărare",
         CombatAction::Rest => "Odihnă",
@@ -246,6 +250,7 @@ pub fn cost_label(action: CombatAction) -> String {
 pub fn action_id(action: CombatAction) -> ActionId {
     match action {
         CombatAction::QuickStrike => "quick-strike",
+        CombatAction::NormalStrike => "normal-strike",
         CombatAction::HeavyStrike => "heavy-strike",
         CombatAction::Block => "block",
         CombatAction::Rest => "rest",
@@ -258,7 +263,9 @@ pub fn action_id(action: CombatAction) -> ActionId {
 /// The category an action belongs to — see [`ActionCategory`].
 pub fn action_category(action: CombatAction) -> ActionCategory {
     match action {
-        CombatAction::QuickStrike | CombatAction::HeavyStrike => ActionCategory::Strikes,
+        CombatAction::QuickStrike | CombatAction::NormalStrike | CombatAction::HeavyStrike => {
+            ActionCategory::Strikes
+        }
         CombatAction::Block => ActionCategory::Defense,
         CombatAction::Rest => ActionCategory::Utility,
         CombatAction::StepForward | CombatAction::StepBack | CombatAction::LeapForward => {
@@ -272,9 +279,10 @@ pub fn action_category(action: CombatAction) -> ActionCategory {
 /// table, rather than restating the numbers.
 pub fn action_cost(action: CombatAction) -> ActionCost {
     match action {
-        CombatAction::QuickStrike | CombatAction::HeavyStrike | CombatAction::Block => {
-            ActionCost::Stamina(action.stamina_cost())
-        }
+        CombatAction::QuickStrike
+        | CombatAction::NormalStrike
+        | CombatAction::HeavyStrike
+        | CombatAction::Block => ActionCost::Stamina(action.stamina_cost()),
         CombatAction::Rest => ActionCost::Restore(REST_RESTORE),
         CombatAction::StepForward | CombatAction::StepBack | CombatAction::LeapForward => {
             ActionCost::None
@@ -288,7 +296,9 @@ pub fn action_cost(action: CombatAction) -> ActionCost {
 /// gates on, so this can never drift from the resolver's own reach rules.
 fn position_legal(action: CombatAction, distance: DuelDistance) -> bool {
     match action {
-        CombatAction::QuickStrike | CombatAction::HeavyStrike => distance.in_melee_reach(),
+        CombatAction::QuickStrike | CombatAction::NormalStrike | CombatAction::HeavyStrike => {
+            distance.in_melee_reach()
+        }
         CombatAction::Block | CombatAction::Rest => true,
         CombatAction::StepForward | CombatAction::LeapForward => {
             distance.band() > DuelDistance::CLOSE.band()
@@ -385,6 +395,11 @@ fn hit_chance(action: CombatAction, attacker: &Attributes, defender: &Attributes
             defender,
             QUICK_STRIKE_BASE_HIT,
         )),
+        CombatAction::NormalStrike => Some(stats::hit_percent(
+            attacker,
+            defender,
+            NORMAL_STRIKE_BASE_HIT,
+        )),
         CombatAction::HeavyStrike => Some(stats::hit_percent(
             attacker,
             defender,
@@ -420,7 +435,8 @@ fn hit_chance(action: CombatAction, attacker: &Attributes, defender: &Attributes
 /// 3. **Not your turn** — it is the enemy's turn.
 /// 4. **Per-action legality** (only reached once 1–3 all pass, i.e. it is
 ///    live and the player's turn):
-///    - Strikes ([`CombatAction::QuickStrike`]/[`CombatAction::HeavyStrike`]):
+///    - Strikes ([`CombatAction::QuickStrike`]/[`CombatAction::NormalStrike`]/
+///      [`CombatAction::HeavyStrike`]):
 ///      **reach** (too far to land the strike) before **stamina** (can't
 ///      afford it) — reach is checked first because it is the more
 ///      fundamental constraint (no amount of stamina makes an out-of-reach
@@ -453,7 +469,7 @@ pub fn action_disabled_reason(
         return Some("Nu e rândul tău.".to_string());
     }
     match action {
-        CombatAction::QuickStrike | CombatAction::HeavyStrike => {
+        CombatAction::QuickStrike | CombatAction::NormalStrike | CombatAction::HeavyStrike => {
             if !turn.distance.in_melee_reach() {
                 return Some("Prea departe pentru lovitură.".to_string());
             }
@@ -517,7 +533,7 @@ fn descriptor_for(action: CombatAction, ctx: &DescriptorContext) -> ActionDescri
     }
 }
 
-/// The one descriptor generator #189 requires: produces all seven current
+/// The one descriptor generator #189 requires: produces all eight current
 /// actions' descriptors from `ctx`, deriving legality/cost/chance from the
 /// existing engine/HUD rules. `action_palette` appends
 /// [`ExtraDescriptors`] after this — registering a later real action means
@@ -589,9 +605,9 @@ mod tests {
     }
 
     #[test]
-    fn generate_action_descriptors_produces_all_seven_current_actions() {
+    fn generate_action_descriptors_produces_all_eight_current_actions() {
         let descriptors = generate_action_descriptors(&ctx(PLAYER_TURN, 50));
-        assert_eq!(descriptors.len(), 7);
+        assert_eq!(descriptors.len(), 8);
         for action in ALL_ACTIONS {
             assert!(
                 descriptors.iter().any(|d| d.intent == action),
@@ -611,6 +627,7 @@ mod tests {
     fn categories_match_the_documented_vocabulary() {
         let cases = [
             (CombatAction::QuickStrike, ActionCategory::Strikes),
+            (CombatAction::NormalStrike, ActionCategory::Strikes),
             (CombatAction::HeavyStrike, ActionCategory::Strikes),
             (CombatAction::Block, ActionCategory::Defense),
             (CombatAction::Rest, ActionCategory::Utility),
@@ -628,6 +645,7 @@ mod tests {
     #[test]
     fn buttons_carry_romanian_labels_and_stamina_costs() {
         assert_eq!(action_label(CombatAction::QuickStrike), "Lovitură iute");
+        assert_eq!(action_label(CombatAction::NormalStrike), "Lovitură dreaptă");
         assert_eq!(action_label(CombatAction::HeavyStrike), "Lovitură grea");
         assert_eq!(action_label(CombatAction::Block), "Apărare");
         assert_eq!(action_label(CombatAction::Rest), "Odihnă");
@@ -635,6 +653,7 @@ mod tests {
         assert_eq!(action_label(CombatAction::StepBack), "Pas înapoi");
         assert_eq!(action_label(CombatAction::LeapForward), "Salt înainte");
         assert_eq!(cost_label(CombatAction::QuickStrike), "-5 stamina");
+        assert_eq!(cost_label(CombatAction::NormalStrike), "-9 stamina");
         assert_eq!(cost_label(CombatAction::HeavyStrike), "-15 stamina");
         assert_eq!(cost_label(CombatAction::Block), "-3 stamina");
         assert_eq!(cost_label(CombatAction::Rest), "+20 stamina");
@@ -648,6 +667,10 @@ mod tests {
         assert_eq!(
             action_cost(CombatAction::QuickStrike),
             ActionCost::Stamina(CombatAction::QuickStrike.stamina_cost())
+        );
+        assert_eq!(
+            action_cost(CombatAction::NormalStrike),
+            ActionCost::Stamina(CombatAction::NormalStrike.stamina_cost())
         );
         assert_eq!(
             action_cost(CombatAction::HeavyStrike),
@@ -695,6 +718,9 @@ mod tests {
             (far, 50, QuickStrike, false, "too far for quick strike"),
             (PLAYER_TURN, 4, QuickStrike, false, "below the 5 cost"),
             (PLAYER_TURN, 5, QuickStrike, true, "exactly the 5 cost"),
+            (far, 50, NormalStrike, false, "too far for normal strike"),
+            (PLAYER_TURN, 8, NormalStrike, false, "below the 9 cost"),
+            (PLAYER_TURN, 9, NormalStrike, true, "exactly the 9 cost"),
             (far, 50, HeavyStrike, false, "too far for heavy strike"),
             (PLAYER_TURN, 14, HeavyStrike, false, "below the 15 cost"),
             (PLAYER_TURN, 15, HeavyStrike, true, "exactly the 15 cost"),
@@ -871,6 +897,8 @@ mod tests {
         let far = DuelDistance::FAR;
         assert!(position_legal(CombatAction::QuickStrike, close));
         assert!(!position_legal(CombatAction::QuickStrike, far));
+        assert!(position_legal(CombatAction::NormalStrike, close));
+        assert!(!position_legal(CombatAction::NormalStrike, far));
         assert!(position_legal(CombatAction::HeavyStrike, close));
         assert!(!position_legal(CombatAction::HeavyStrike, far));
         assert!(position_legal(CombatAction::Block, far));
@@ -934,6 +962,14 @@ mod tests {
             ))
         );
         assert_eq!(
+            hit_chance(CombatAction::NormalStrike, &attacker, &defender),
+            Some(stats::hit_percent(
+                &attacker,
+                &defender,
+                NORMAL_STRIKE_BASE_HIT
+            ))
+        );
+        assert_eq!(
             hit_chance(CombatAction::HeavyStrike, &attacker, &defender),
             Some(stats::hit_percent(
                 &attacker,
@@ -968,6 +1004,18 @@ mod tests {
             .expect("quick strike descriptor exists");
         let expected_quick = quick.hit_chance.expect("quick strike carries a hit chance");
         assert_eq!(quick.sublabel(), format!("{expected_quick}% · -5 stamina"));
+
+        let normal = descriptors
+            .iter()
+            .find(|d| d.intent == CombatAction::NormalStrike)
+            .expect("normal strike descriptor exists");
+        let expected_normal = normal
+            .hit_chance
+            .expect("normal strike carries a hit chance");
+        assert_eq!(
+            normal.sublabel(),
+            format!("{expected_normal}% · -9 stamina")
+        );
 
         let heavy = descriptors
             .iter()
@@ -1063,7 +1111,7 @@ mod tests {
     }
 
     #[test]
-    fn group_by_category_yields_at_most_four_groups_for_the_seven_real_actions() {
+    fn group_by_category_yields_at_most_four_groups_for_the_eight_real_actions() {
         let descriptors = generate_action_descriptors(&ctx(PLAYER_TURN, 50));
         let groups = group_by_category(&descriptors);
         assert!(
@@ -1076,7 +1124,7 @@ mod tests {
                 .iter()
                 .map(|(_, members)| members.len())
                 .sum::<usize>(),
-            7,
+            8,
             "every descriptor must land in exactly one group"
         );
     }
@@ -1092,7 +1140,7 @@ mod tests {
         assert_eq!(
             sizes,
             vec![
-                (ActionCategory::Strikes, 2),
+                (ActionCategory::Strikes, 3),
                 (ActionCategory::Defense, 1),
                 (ActionCategory::Movement, 3),
                 (ActionCategory::Utility, 1),

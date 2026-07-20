@@ -277,8 +277,9 @@ fn init_turn(
 }
 
 /// Debug-only keyboard mapping (the HUD buttons are the real input): 1–4 are
-/// strikes/guard/rest, and 5–7 are movement. Only listens on the player's
-/// turn while the duel is running.
+/// strikes/guard/rest, 5–7 are movement, and 8 is the normal strike
+/// (appended so the long-standing 1–7 bindings keep their meanings). Only
+/// listens on the player's turn while the duel is running.
 #[cfg(debug_assertions)]
 fn player_input(
     keys: Res<ButtonInput<KeyCode>>,
@@ -306,6 +307,7 @@ fn player_input(
         (KeyCode::Digit5, CombatAction::StepForward),
         (KeyCode::Digit6, CombatAction::StepBack),
         (KeyCode::Digit7, CombatAction::LeapForward),
+        (KeyCode::Digit8, CombatAction::NormalStrike),
     ];
     for (key, action) in mappings {
         if keys.just_pressed(key) {

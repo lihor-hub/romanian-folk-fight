@@ -62,7 +62,11 @@ use super::systems::{CombatPresentation, CombatTurn, PlayerActionEvent};
 #[cfg(test)]
 use crate::theme::PANEL_BORDER_INSET;
 
-const ACTION_BUTTON_WIDTH: f32 = 100.0;
+// Narrowed from 100.0 for the combat redesign's eighth action
+// (NormalStrike): the flat desktop strip must keep fitting
+// `HUD_TARGET_WIDTH` until the next phase replaces it with the vertical
+// command banner (docs/combat-redesign-proposal.md §3).
+const ACTION_BUTTON_WIDTH: f32 = 87.0;
 const ACTION_BUTTON_HEIGHT: f32 = 64.0;
 // Narrowed from 6.0 (#120): `panel_bundle` now floors this bar's padding at
 // `PANEL_BORDER_INSET` (24px, up from the 8px below), so the desktop strip
@@ -82,7 +86,7 @@ const ACTION_BAR_DESKTOP_INSET: f32 = 10.0;
 #[cfg(test)]
 const HUD_TARGET_WIDTH: f32 = 800.0;
 #[cfg(test)]
-const ACTION_BUTTON_COUNT: f32 = 7.0;
+const ACTION_BUTTON_COUNT: f32 = 8.0;
 
 /// Row height for every phone control — category buttons and open-category
 /// action buttons alike (#199) — comfortably above the 44px CSS touch-target
@@ -563,6 +567,7 @@ fn spawn_phone_action_button(
 fn glyph_for(pictogram_id: ActionId) -> &'static str {
     match pictogram_id {
         "quick-strike" => ">>",
+        "normal-strike" => "=>",
         "heavy-strike" => "**",
         "block" => "[]",
         "rest" => "++",
@@ -722,7 +727,7 @@ fn live_descriptors(
 /// swap below only touches buttons whose enabled state actually flipped, so
 /// it does not fight the hover-feedback system — the exact cadence the
 /// pre-#189 HUD already used for color alone. Applies identically to
-/// desktop's seven buttons and phone's (0–3) open action-row buttons — both
+/// desktop's eight buttons and phone's (0–3) open action-row buttons — both
 /// carry the same [`ActionButton`] component.
 ///
 /// The cost-or-reason *text* itself is resynced every call regardless of
@@ -889,7 +894,7 @@ pub(super) fn sync_phone_open_category(
 /// #213: also clears [`InputFocus`] on an actual rebuild. Unlike the phone
 /// palette's own category open/close (a documented safe neighbor always
 /// exists — see [`sync_phone_open_category`]), a breakpoint crossing
-/// replaces the *entire* layout (seven flat buttons versus category
+/// replaces the *entire* layout (eight flat buttons versus category
 /// disclosure), so there is no single control on the new layout that is the
 /// "same" one focus was on; clearing is the documented safe fallback here,
 /// and the next Tab press lands on the new layout's first control (the same
@@ -1175,15 +1180,15 @@ mod tests {
     // --- pure descriptor generation used by the palette ---
 
     #[test]
-    fn spawn_placeholder_produces_all_seven_actions_with_no_disabled_reason() {
+    fn spawn_placeholder_produces_all_eight_actions_with_no_disabled_reason() {
         let descriptors = generate_action_descriptors(&DescriptorContext::spawn_placeholder());
-        assert_eq!(descriptors.len(), 7);
+        assert_eq!(descriptors.len(), 8);
     }
 
     // --- headless screen behavior (moved from the pre-#189 hud.rs) ---
 
     #[test]
-    fn entering_fight_spawns_all_seven_action_buttons() {
+    fn entering_fight_spawns_all_eight_action_buttons() {
         let mut app = test_app();
         let buttons = app
             .world_mut()
@@ -1191,8 +1196,8 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(
-            buttons, 7,
-            "four combat buttons plus three movement buttons"
+            buttons, 8,
+            "five combat buttons plus three movement buttons"
         );
     }
 
@@ -1205,7 +1210,7 @@ mod tests {
             .query::<&ActionGlyph>()
             .iter(app.world())
             .count();
-        assert_eq!(glyphs, 7, "every action button has a glyph marker");
+        assert_eq!(glyphs, 8, "every action button has a glyph marker");
 
         let mut buttons = app
             .world_mut()
@@ -1312,6 +1317,7 @@ mod tests {
         assert!(player_pools(&mut app).0 > 0, "player survives");
         for id in [
             "quick-strike",
+            "normal-strike",
             "heavy-strike",
             "block",
             "rest",
@@ -1351,7 +1357,7 @@ mod tests {
     // --- extensibility seam (#189 acceptance criterion) ---
 
     #[test]
-    fn a_test_registered_eighth_descriptor_renders_and_emits_with_no_layout_edits() {
+    fn a_test_registered_extra_descriptor_renders_and_emits_with_no_layout_edits() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, FlowPlugin));
         app.add_plugins((ArenaPlugin, CombatPlugin));
@@ -1396,8 +1402,8 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(
-            buttons, 8,
-            "seven real descriptors plus the test-registered eighth"
+            buttons, 9,
+            "eight real descriptors plus the test-registered ninth"
         );
 
         let extra_button = find_button(&mut app, "test-extra-action");
@@ -1410,7 +1416,7 @@ mod tests {
 
         // Pressing it emits the existing PlayerActionEvent(Rest) command --
         // proof that a registered descriptor emits through the same path as
-        // the seven real ones, with zero edits to this module's layout code.
+        // the eight real ones, with zero edits to this module's layout code.
         drain_enemy_stamina(&mut app);
         press_button(&mut app, extra_button);
         advance_presentation(&mut app);
@@ -1428,14 +1434,14 @@ mod tests {
     }
 
     #[test]
-    fn without_a_test_registration_the_palette_stays_at_seven_buttons() {
+    fn without_a_test_registration_the_palette_stays_at_eight_buttons() {
         let mut app = test_app();
         let buttons = app
             .world_mut()
             .query_filtered::<(), (With<ActionButton>, With<Button>)>()
             .iter(app.world())
             .count();
-        assert_eq!(buttons, 7, "ExtraDescriptors defaults to empty");
+        assert_eq!(buttons, 8, "ExtraDescriptors defaults to empty");
     }
 
     // --- phone category disclosure (#199) ---
@@ -1483,7 +1489,7 @@ mod tests {
             assert_eq!(
                 categories.len(),
                 4,
-                "the seven real actions span exactly four categories today"
+                "the eight real actions span exactly four categories today"
             );
 
             for entity in categories {
@@ -1512,8 +1518,8 @@ mod tests {
             let ids = action_button_ids(&mut app);
             assert_eq!(
                 ids,
-                vec!["heavy-strike", "quick-strike"],
-                "only the Strikes category's two registered actions appear"
+                vec!["heavy-strike", "normal-strike", "quick-strike"],
+                "only the Strikes category's three registered actions appear"
             );
 
             for entity in app
@@ -1550,7 +1556,7 @@ mod tests {
             press_button(&mut app, strikes_button);
             assert_eq!(
                 action_button_ids(&mut app),
-                vec!["heavy-strike", "quick-strike"]
+                vec!["heavy-strike", "normal-strike", "quick-strike"]
             );
 
             let defense_button = find_category_button(&mut app, ActionCategory::Defense);
@@ -1668,7 +1674,7 @@ mod tests {
         #[test]
         fn crossing_into_mobile_at_runtime_rebuilds_categories_from_the_flat_row() {
             let mut app = test_app();
-            assert_eq!(action_button_ids(&mut app).len(), 7, "starts desktop-flat");
+            assert_eq!(action_button_ids(&mut app).len(), 8, "starts desktop-flat");
 
             app.world_mut()
                 .resource_mut::<ViewportInfo>()
@@ -1694,11 +1700,11 @@ mod tests {
         }
 
         #[test]
-        fn crossing_back_to_desktop_at_runtime_restores_the_flat_seven_button_row() {
+        fn crossing_back_to_desktop_at_runtime_restores_the_flat_eight_button_row() {
             let mut app = mobile_test_app();
             let strikes_button = find_category_button(&mut app, ActionCategory::Strikes);
             press_button(&mut app, strikes_button);
-            assert_eq!(action_button_ids(&mut app).len(), 2, "opened on phone");
+            assert_eq!(action_button_ids(&mut app).len(), 3, "opened on phone");
 
             app.world_mut()
                 .resource_mut::<ViewportInfo>()
@@ -1707,7 +1713,7 @@ mod tests {
 
             assert_eq!(
                 action_button_ids(&mut app).len(),
-                7,
+                8,
                 "back to the full desktop row"
             );
             let categories = app
@@ -1937,7 +1943,7 @@ mod tests {
         }
 
         #[test]
-        fn desktop_tab_order_matches_the_seven_visible_buttons_left_to_right() {
+        fn desktop_tab_order_matches_the_eight_visible_buttons_left_to_right() {
             let mut app = test_app();
 
             // #216: the HUD's ⏸ button is its own `TabGroup::new(-1)`,
@@ -1951,6 +1957,7 @@ mod tests {
 
             let expected = [
                 "quick-strike",
+                "normal-strike",
                 "heavy-strike",
                 "block",
                 "rest",
@@ -2019,7 +2026,7 @@ mod tests {
             press_key_and_settle(&mut app, KeyCode::Tab);
             assert!(focused_is_pause_button(&mut app));
 
-            let expected_actions = ["quick-strike", "heavy-strike"];
+            let expected_actions = ["quick-strike", "normal-strike", "heavy-strike"];
             let expected_categories = [
                 ActionCategory::Strikes,
                 ActionCategory::Defense,
@@ -2147,7 +2154,7 @@ mod tests {
 
             assert_eq!(
                 action_button_ids(&mut app),
-                vec!["heavy-strike", "quick-strike"],
+                vec!["heavy-strike", "normal-strike", "quick-strike"],
                 "gamepad South on the focused Strikes button opens it, same as a tap"
             );
         }
@@ -2214,10 +2221,10 @@ mod tests {
             // `0`), so a blind walk must tolerate landing on it (no
             // `ActionButton`, so `focused_action_id` is `None` there)
             // instead of assuming every stop is an action button.
-            for _ in 0..9 {
+            for _ in 0..10 {
                 press_key_and_settle(&mut app, KeyCode::Tab);
             }
-            let visited: Vec<ActionId> = (0..9)
+            let visited: Vec<ActionId> = (0..10)
                 .filter_map(|_| {
                     press_key_and_settle(&mut app, KeyCode::Tab);
                     focused_action_id(&mut app)
