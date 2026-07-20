@@ -65,8 +65,9 @@ Commits:
 - `d663eb2 fix: keep shop row content clear of embroidered border`
 - `75a97f6 test: accept compact shop row baselines`
 
-PR: pending; it will close #249 and include the required Antigravity trailer,
-then enter the squash merge queue.
+PR: [#333](https://github.com/lihor-hub/romanian-folk-fight/pull/333),
+ready for review. It closes #249 and includes the required Antigravity
+trailer; squash auto-merge is enabled after this report update is pushed.
 
 ## Deviations and next notes
 
