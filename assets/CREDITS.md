@@ -28,6 +28,16 @@ The runtime PNG parts below are direct crops derived from the credited source
 sheets above so the Bevy cutout rig can show production-intent art in creator,
 shop, and arena flows without introducing a new production generator pipeline.
 
+The human, strigoi, and gear runtime albedos additionally carry the
+deterministic, idempotent phase-4 folk surface pass applied by
+`scripts/stylize-fighter-parts.py` (uniform dark-walnut outline ink, flat
+folk-black interior ink, flattened highlights, restrained tone quantization;
+gear receives the outline/ink harmonization only). The pass preserves each
+part's dimensions and alpha silhouette byte-for-byte, and every companion
+mask/normal/shadow map is regenerated from the stylized albedo with the
+owning generator's derivations, so provenance and rights remain those of the
+credited sources below. The zmeu set is deliberately untouched.
+
 ### Human runtime parts
 
 The Haiduc, Cioban, Voinic, Ucenic Solomonar, and shared production directories
