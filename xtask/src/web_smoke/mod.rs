@@ -106,6 +106,7 @@ pub mod baseline;
 pub mod browser;
 mod cold_menu;
 mod corrupt_save_recovery;
+mod desktop_fight_freeze;
 pub mod error;
 mod fight_palette_accessible;
 mod fight_palette_desktop;

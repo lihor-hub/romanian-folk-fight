@@ -69,6 +69,7 @@ use std::time::{Duration, Instant};
 
 use crate::process::run_step;
 use crate::web_smoke::browser::{self, Checkpoint, PageStatus};
+use crate::web_smoke::desktop_fight_freeze;
 use crate::web_smoke::error::SmokeError;
 use crate::web_smoke::{artifacts, baseline, server::StaticServer};
 
@@ -404,14 +405,27 @@ fn run_viewport(
             &checkpoint,
             serde_json::json!({"cmd": "selectPreset", "preset": FIGHT_PALETTE_PRESET}),
         )?;
-        send_command(
-            &checkpoint,
-            serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
-        )?;
-        send_command(
-            &checkpoint,
-            serde_json::json!({"cmd": "setTimePaused", "paused": true}),
-        )?;
+        if viewport.name == "desktop" {
+            desktop_fight_freeze::freeze(
+                &checkpoint,
+                |payload| send_command(&checkpoint, payload),
+                || {
+                    send_command(
+                        &checkpoint,
+                        serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
+                    )
+                },
+            )?;
+        } else {
+            send_command(
+                &checkpoint,
+                serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
+            )?;
+            send_command(
+                &checkpoint,
+                serde_json::json!({"cmd": "setTimePaused", "paused": true}),
+            )?;
+        }
 
         let (status, screenshot, readiness) = wait_for_readiness(&checkpoint, viewport)?;
         let mut notes = Vec::new();

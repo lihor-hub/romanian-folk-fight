@@ -66,6 +66,7 @@ use std::time::{Duration, Instant};
 
 use crate::process::run_step;
 use crate::web_smoke::browser::{self, Checkpoint, PageStatus};
+use crate::web_smoke::desktop_fight_freeze;
 use crate::web_smoke::error::SmokeError;
 use crate::web_smoke::{artifacts, baseline, server::StaticServer};
 
@@ -362,12 +363,27 @@ fn run_viewport(
             serde_json::json!({"cmd": "selectPreset", "preset": HIGH_CONTRAST_PRESET}),
         )
     })?;
-    step(viewport, || {
-        send_command(
-            &checkpoint,
-            serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
-        )
-    })?;
+    if viewport.name == "desktop" {
+        step(viewport, || {
+            desktop_fight_freeze::freeze(
+                &checkpoint,
+                |payload| send_command(&checkpoint, payload),
+                || {
+                    send_command(
+                        &checkpoint,
+                        serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
+                    )
+                },
+            )
+        })?;
+    } else {
+        step(viewport, || {
+            send_command(
+                &checkpoint,
+                serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
+            )
+        })?;
+    }
 
     // fight: capture the fresh fight start (full HP/stamina bars in the
     // high-contrast palette).
@@ -446,13 +462,15 @@ fn captured_checkpoint(
     strict_visual: bool,
     missing_baseline: &mut bool,
 ) -> Result<(), SmokeError> {
-    wait_for_readiness_screen_only(checkpoint, viewport, expected_screen)?;
-    step(viewport, || {
-        send_command(
-            checkpoint,
-            serde_json::json!({"cmd": "setTimePaused", "paused": true}),
-        )
-    })?;
+    if viewport.name != "desktop" || expected_screen != "Fight" {
+        wait_for_readiness_screen_only(checkpoint, viewport, expected_screen)?;
+        step(viewport, || {
+            send_command(
+                checkpoint,
+                serde_json::json!({"cmd": "setTimePaused", "paused": true}),
+            )
+        })?;
+    }
     let result = capture(
         checkpoint,
         viewport,
