@@ -76,9 +76,9 @@ pub(crate) fn world_point_for_screen_point(screen: Vec2, letterbox: LetterboxRec
 /// verify a rig's resulting `Transform` actually lands back inside the
 /// `PreviewStage` rect it was derived from (#123, #273). #276 adds a second,
 /// real (feature-gated) production caller: `review::publish_palette_state`
-/// projects the fixed `arena::PLAYER_ANCHOR`/`ENEMY_ANCHOR` world anchors
-/// through this to build its deterministic fighter-readable-region proxy for
-/// the `fight-palette-phone` scenario's obstruction check.
+/// projects the staged fighter positions (`arena::ArenaStaging`) through
+/// this to build its deterministic fighter-readable-region proxy for the
+/// `fight-palette-phone` scenario's obstruction check.
 ///
 /// `#[cfg(any(test, feature = "review"))]` rather than plain `pub(crate)`
 /// since nothing in an ordinary `cargo build`/`trunk build --release` needs

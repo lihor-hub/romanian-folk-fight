@@ -2,8 +2,10 @@
 //! timer component driving a `TextureAtlas` index, the per-fighter clip
 //! table ([`FighterClip`]), the sprite-sheet handles and readiness guard
 //! ([`FighterSpriteSheets`]), and the wiring that turns [`CombatLogEvent`]s
-//! into attack / hurt / KO / footwork animations plus the attack lunge and
-//! presentation-only footwork between the arena anchors.
+//! into attack / hurt / KO / footwork animations. Movement events update
+//! the persistent [`ArenaStaging`] positions and tween the fighters to
+//! their new staged x — fighters never return to fixed anchors — while the
+//! attack lunge arcs out from and back to the attacker's current staged x.
 
 use std::time::Duration;
 
@@ -17,7 +19,7 @@ use crate::cutout::{
 use crate::roster::LADDER;
 use crate::settings::AccessibilityPreferences;
 
-use super::{ENEMY_ANCHOR, PLAYER_ANCHOR};
+use super::ArenaStaging;
 
 /// Side length of one sprite-sheet frame in pixels.
 pub const FRAME_SIZE: u32 = 128;
@@ -46,27 +48,27 @@ const OPPONENT_SHEETS: [&str; 10] = [
     "sprites/zmeul_zmeilor.png",
 ];
 
-/// How far towards the opponent's anchor the attack lunge peaks, as a
-/// fraction of the distance between the two anchors.
+/// How far towards the opponent the attack lunge peaks, as a fraction of
+/// the current staged gap between the two fighters.
 const LUNGE_FRACTION: f32 = 0.35;
 
-/// Presentation-only horizontal distance of a footwork step, in world units.
-const FOOTWORK_DISTANCE: f32 = 28.0;
-
-/// Reduced-motion (#200) displacement for both the attack lunge and
-/// footwork steps, in world units (the codebase treats one world unit as
-/// one logical pixel for presentation-scale distances -- see
-/// `fx::DRIFT_AMPLITUDE`'s doc comment for the same convention). Chosen as
-/// the documented safe treatment: a small, barely-there nudge (well under
-/// the issue's "≤8px" ceiling) that still gives the strike/step a readable
-/// beat instead of removing displacement entirely, while never approaching
-/// the full lunge (up to ~185 world units) or footwork (28 units)
-/// distance. Applies with the exact same easing curve and timer duration as
-/// full motion -- only the peak distance shrinks.
+/// Reduced-motion (#200) displacement for the attack lunge, in world units
+/// (the codebase treats one world unit as one logical pixel for
+/// presentation-scale distances -- see `fx::DRIFT_AMPLITUDE`'s doc comment
+/// for the same convention). Chosen as the documented safe treatment: a
+/// small, barely-there nudge (well under the issue's "≤8px" ceiling) that
+/// still gives the strike a readable beat instead of removing displacement
+/// entirely, while never approaching the full lunge (up to ~126 world
+/// units at the far band). Applies with the exact same easing curve and
+/// timer duration as full motion -- only the peak distance shrinks.
+/// Footwork is different: a staged position change is semantic state, not
+/// decoration, so reduced motion replaces its tween with a near-instant
+/// snap to the new x instead of shrinking it (see [`footwork_x`]).
 const REDUCED_MOTION_DISPLACEMENT: f32 = 6.0;
 
-/// Duration of a footwork step-in or step-back tween.
-const FOOTWORK_DURATION: Duration = Duration::from_millis(500);
+/// Duration of a footwork tween from the old staged x to the new one
+/// (ease-out, see [`footwork_x`]).
+const FOOTWORK_DURATION: Duration = Duration::from_millis(450);
 
 /// Short readable hold for non-sheet rig-only defensive reactions.
 const RIG_REACTION_DURATION: Duration = Duration::from_millis(360);
@@ -249,25 +251,23 @@ fn load_fighter_sheets(
     commands.insert_resource(sheets);
 }
 
-/// Attack lunge of one fighter: an out-and-back tween from its own anchor
-/// towards the opponent's, lasting exactly one attack clip.
+/// Attack lunge of one fighter: an out-and-back arc from the fighter's
+/// *current* staged x towards the opponent's, lasting exactly one attack
+/// clip. Only the side is stored — the endpoints are read live from
+/// [`ArenaStaging`] every frame, so a mid-lunge pair slide (see
+/// [`ArenaStaging::apply_move`]) never strands the fighter on a stale
+/// return position.
 #[derive(Component, Debug, Clone)]
 pub struct AttackLunge {
-    from: Vec3,
-    toward: Vec3,
+    side: CombatSide,
     timer: Timer,
 }
 
 impl AttackLunge {
-    /// A lunge between the two anchors of `side`, timed to the attack clip.
+    /// A lunge for `side`, timed to the attack clip.
     fn for_side(side: CombatSide) -> Self {
-        let (from, toward) = match side {
-            CombatSide::Player => (PLAYER_ANCHOR.translation, ENEMY_ANCHOR.translation),
-            CombatSide::Enemy => (ENEMY_ANCHOR.translation, PLAYER_ANCHOR.translation),
-        };
         Self {
-            from,
-            toward,
+            side,
             timer: Timer::new(
                 FighterClip::Attack.animation().clip_duration(),
                 TimerMode::Once,
@@ -276,99 +276,74 @@ impl AttackLunge {
     }
 }
 
-/// Position of a lunging fighter at `progress` in `0..=1`: an out-and-back
-/// arc peaking at [`LUNGE_FRACTION`] of the way to the opponent's anchor
-/// (or, under reduced motion, at [`REDUCED_MOTION_DISPLACEMENT`] along the
-/// same direction -- see that constant's docs). Recomputed from `from`/
-/// `toward`/`progress`/`reduced_motion` alone every call, with no state of
-/// its own, so a caller re-evaluating this mid-lunge with a flipped
-/// `reduced_motion` gets a consistent position for the new mode
+/// X of a lunging fighter at `progress` in `0..=1`: an out-and-back arc
+/// from the fighter's staged `from_x` peaking at [`LUNGE_FRACTION`] of the
+/// current gap towards the opponent's staged `toward_x` (or, under reduced
+/// motion, at [`REDUCED_MOTION_DISPLACEMENT`] in the same direction -- see
+/// that constant's docs). Recomputed from its inputs alone every call, with
+/// no state of its own, so a caller re-evaluating this mid-lunge with a
+/// flipped `reduced_motion` gets a consistent position for the new mode
 /// immediately -- nothing to restore separately.
-pub fn lunge_position(from: Vec3, toward: Vec3, progress: f32, reduced_motion: bool) -> Vec3 {
+pub fn lunge_x(from_x: f32, toward_x: f32, progress: f32, reduced_motion: bool) -> f32 {
     // `sin(PI)` is a hair negative in f32; the clamp keeps the endpoints
-    // exactly on the anchor.
+    // exactly on the staged x.
     let arc = (progress.clamp(0.0, 1.0) * std::f32::consts::PI)
         .sin()
         .max(0.0);
-    let full_delta = (toward - from) * LUNGE_FRACTION;
+    let full_delta = (toward_x - from_x) * LUNGE_FRACTION;
     let delta = if reduced_motion {
-        full_delta.normalize_or_zero() * REDUCED_MOTION_DISPLACEMENT
+        full_delta.signum() * REDUCED_MOTION_DISPLACEMENT
     } else {
         full_delta
     };
-    let mut position = from + delta * arc;
-    position.z = from.z;
-    position
+    from_x + delta * arc
 }
 
-/// Presentation-only footwork step: a short out-and-back horizontal motion
-/// around the fighter's anchor. Combat distance changes live in the engine;
-/// this component only makes them readable.
+/// One fighter's movement tween from its old staged x to its new one.
+/// The staged positions themselves are combat truth (see [`ArenaStaging`]);
+/// this component only paces the transition — the fighter always ends at
+/// `to_x` and never returns to where it started.
 #[derive(Component, Debug, Clone)]
 struct FootworkStep {
-    anchor: Vec3,
-    direction: f32,
+    from_x: f32,
+    to_x: f32,
     timer: Timer,
 }
 
 impl FootworkStep {
-    /// Footwork for `side` and movement clip. Forward always means towards
-    /// the opponent; backward means away, so the enemy side mirrors the x
-    /// direction.
-    fn for_side(side: CombatSide, clip: FighterClip) -> Self {
-        let anchor = match side {
-            CombatSide::Player => PLAYER_ANCHOR.translation,
-            CombatSide::Enemy => ENEMY_ANCHOR.translation,
-        };
-        let side_forward = match side {
-            CombatSide::Player => 1.0,
-            CombatSide::Enemy => -1.0,
-        };
-        let direction = match clip {
-            FighterClip::StepForward => side_forward,
-            FighterClip::StepBack => -side_forward,
-            _ => side_forward,
-        };
+    /// A [`FOOTWORK_DURATION`] tween between two staged positions.
+    fn new(from_x: f32, to_x: f32) -> Self {
         Self {
-            anchor,
-            direction,
+            from_x,
+            to_x,
             timer: Timer::new(FOOTWORK_DURATION, TimerMode::Once),
         }
     }
 
-    fn position(&self, reduced_motion: bool) -> Vec3 {
-        footwork_position(
-            self.anchor,
-            self.direction,
+    fn x(&self, reduced_motion: bool) -> f32 {
+        footwork_x(
+            self.from_x,
+            self.to_x,
             self.timer.fraction(),
             reduced_motion,
         )
     }
 }
 
-/// Position of a fighter during footwork at `progress` in `0..=1`.
-/// Movement eases out to [`FOOTWORK_DISTANCE`] at the midpoint (or, under
-/// reduced motion, to [`REDUCED_MOTION_DISPLACEMENT`] -- see that
-/// constant's docs), then returns to the exact anchor by the end. Like
-/// [`lunge_position`], this is a pure function of its inputs with no stored
-/// state, so a flipped `reduced_motion` mid-step is reflected immediately
+/// X of a fighter tweening between staged positions at `progress` in
+/// `0..=1`: a cubic ease-out from `from_x` landing exactly on `to_x`.
+/// Position is semantic state, not decoration, so reduced motion (#200)
+/// does not shrink the displacement — it replaces the tween with a
+/// near-instant snap to `to_x`. Like [`lunge_x`], a pure function of its
+/// inputs, so a flipped `reduced_motion` mid-step is reflected immediately
 /// on the very next call.
-fn footwork_position(anchor: Vec3, direction: f32, progress: f32, reduced_motion: bool) -> Vec3 {
+fn footwork_x(from_x: f32, to_x: f32, progress: f32, reduced_motion: bool) -> f32 {
+    if reduced_motion {
+        return to_x;
+    }
     let progress = progress.clamp(0.0, 1.0);
-    let leg = if progress <= 0.5 {
-        progress * 2.0
-    } else {
-        (1.0 - progress) * 2.0
-    };
-    let eased = (leg * std::f32::consts::FRAC_PI_2).sin();
-    let distance = if reduced_motion {
-        REDUCED_MOTION_DISPLACEMENT
-    } else {
-        FOOTWORK_DISTANCE
-    };
-    let mut position = anchor;
-    position.x += distance * direction.signum() * eased;
-    position
+    let eased = 1.0 - (1.0 - progress).powi(3);
+    from_x + (to_x - from_x) * eased
 }
 
 /// Swaps a fighter onto `clip`: restarts the animation and snaps the atlas
@@ -446,10 +421,13 @@ fn set_cutout_pose(
 /// Maps this frame's combat events onto clips: any strike attempt plays the
 /// attacker's attack (with a lunge), miss/reach failures make the defender
 /// avoid, Hit/Crit/Blocked plays the defender's reaction, and Defeated plays
-/// the defender's KO (which then freezes).
+/// the defender's KO (which then freezes). Movement events additionally
+/// advance [`ArenaStaging`] and tween the actor (and, on a pair slide, the
+/// opponent) to the new staged x.
 fn animate_combat_events(
     mut commands: Commands,
     mut events: MessageReader<CombatLogEvent>,
+    mut staging: ResMut<ArenaStaging>,
     mut players: SideAnimation<PlayerFighter, EnemyFighter>,
     mut enemies: SideAnimation<EnemyFighter, PlayerFighter>,
 ) {
@@ -512,7 +490,12 @@ fn animate_combat_events(
                 }
             }
             CombatEvent::Rested { .. } | CombatEvent::OutOfStamina => {}
-            CombatEvent::Moved { .. } => {
+            CombatEvent::Moved { to, .. } => {
+                // The staging update is combat truth and applies regardless
+                // of presentation state; the tweens below only pace it.
+                let old_actor_x = staging.x_of(actor);
+                let old_opponent_x = staging.x_of(actor.opponent());
+                staging.apply_move(actor, to);
                 let clip = match action {
                     CombatAction::StepBack => FighterClip::StepBack,
                     CombatAction::StepForward | CombatAction::LeapForward => {
@@ -531,7 +514,18 @@ fn animate_combat_events(
                     set_cutout_pose(&mut commands, entity, pose_kind, &mut pose);
                     commands
                         .entity(entity)
-                        .insert(FootworkStep::for_side(actor, clip));
+                        .insert(FootworkStep::new(old_actor_x, staging.x_of(actor)));
+                }
+                // A wall hit slides both fighters (see
+                // `ArenaStaging::apply_move`); the standing opponent glides
+                // to its new x with the same tween, no clip change.
+                let new_opponent_x = staging.x_of(actor.opponent());
+                if new_opponent_x != old_opponent_x
+                    && let Ok((entity, _, _, _, _)) = defender
+                {
+                    commands
+                        .entity(entity)
+                        .insert(FootworkStep::new(old_opponent_x, new_opponent_x));
                 }
             }
         }
@@ -760,27 +754,30 @@ fn jointed_part_delta(kind: crate::cutout::CutoutPartKind, pose: CutoutPose) -> 
     }
 }
 
-/// Tweens lunging fighters along [`lunge_position`] and snaps them back to
-/// their anchor when the lunge ends. The lunge's own timer (paced by the
-/// attack clip's duration, see [`AttackLunge::for_side`]) ticks identically
-/// regardless of [`AccessibilityPreferences::reduced_motion`] -- only the
-/// peak displacement `lunge_position` computes changes; presentation timing
-/// never does.
+/// Tweens lunging fighters along [`lunge_x`] and lands them back exactly on
+/// their *current* staged x when the lunge ends — endpoints are read live
+/// from [`ArenaStaging`], never a fixed anchor. The lunge's own timer
+/// (paced by the attack clip's duration, see [`AttackLunge::for_side`])
+/// ticks identically regardless of
+/// [`AccessibilityPreferences::reduced_motion`] -- only the peak
+/// displacement `lunge_x` computes changes; presentation timing never does.
 fn apply_lunges(
     time: Res<Time>,
     mut commands: Commands,
     accessibility: Res<AccessibilityPreferences>,
+    staging: Res<ArenaStaging>,
     mut query: Query<(Entity, &mut AttackLunge, &mut Transform)>,
 ) {
     for (entity, mut lunge, mut transform) in &mut query {
         lunge.timer.tick(time.delta());
+        let from_x = staging.x_of(lunge.side);
         if lunge.timer.is_finished() {
-            transform.translation = lunge.from;
+            transform.translation.x = from_x;
             commands.entity(entity).remove::<AttackLunge>();
         } else {
-            transform.translation = lunge_position(
-                lunge.from,
-                lunge.toward,
+            transform.translation.x = lunge_x(
+                from_x,
+                staging.x_of(lunge.side.opponent()),
                 lunge.timer.fraction(),
                 accessibility.reduced_motion,
             );
@@ -788,10 +785,11 @@ fn apply_lunges(
     }
 }
 
-/// Applies presentation-only footwork and snaps fighters exactly back to
-/// their anchors at the end. Same timing invariant as [`apply_lunges`]:
-/// [`FOOTWORK_DURATION`] never changes with the preference, only the peak
-/// displacement.
+/// Applies the movement tweens and lands fighters exactly on their new
+/// staged x at the end. Same timing invariant as [`apply_lunges`]:
+/// [`FOOTWORK_DURATION`] never changes with the preference — under reduced
+/// motion the fighter simply sits on `to_x` from the first frame (see
+/// [`footwork_x`]), because the staged position is semantic state.
 fn apply_footwork(
     time: Res<Time>,
     mut commands: Commands,
@@ -801,10 +799,10 @@ fn apply_footwork(
     for (entity, mut footwork, mut transform) in &mut query {
         footwork.timer.tick(time.delta());
         if footwork.timer.is_finished() {
-            transform.translation = footwork.anchor;
+            transform.translation.x = footwork.to_x;
             commands.entity(entity).remove::<FootworkStep>();
         } else {
-            transform.translation = footwork.position(accessibility.reduced_motion);
+            transform.translation.x = footwork.x(accessibility.reduced_motion);
         }
     }
 }
@@ -814,7 +812,7 @@ fn apply_footwork(
 pub(super) struct AnimationPlugin;
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum AnimationSet {
+pub(crate) enum AnimationSet {
     Apply,
 }
 
@@ -827,6 +825,9 @@ impl Plugin for AnimationPlugin {
         // reduced-motion systems below usable in apps/tests built without
         // it, defaulting to full motion.
         app.init_resource::<AccessibilityPreferences>();
+        // Idempotent with ArenaPlugin's registration: the staging-driven
+        // systems below never observe a missing resource.
+        app.init_resource::<ArenaStaging>();
         app.add_systems(Startup, load_fighter_sheets).add_systems(
             Update,
             (
@@ -849,7 +850,9 @@ impl Plugin for AnimationPlugin {
 mod tests {
     use super::*;
     use crate::arena::ArenaPlugin;
+    use crate::arena::staging::{CLOSE_GAP, FAR_GAP, NEAR_GAP};
     use crate::character::{Attributes, Fighter};
+    use crate::combat::DuelDistance;
     use crate::core::{CorePlugin, GameState};
     use crate::creation::PlayerCharacter;
     use crate::cutout::{CutoutPartKind, CutoutPartMarker, CutoutPose};
@@ -914,41 +917,55 @@ mod tests {
     }
 
     #[test]
-    fn the_lunge_arcs_out_and_back_between_the_anchors() {
-        let from = PLAYER_ANCHOR.translation;
-        let toward = ENEMY_ANCHOR.translation;
-        assert_eq!(lunge_position(from, toward, 0.0, false), from);
-        assert_eq!(lunge_position(from, toward, 1.0, false), from);
-        let peak = lunge_position(from, toward, 0.5, false);
-        assert!(peak.x > from.x, "the player lunges rightwards");
+    fn the_lunge_arcs_out_and_back_from_the_staged_position() {
+        let staging = ArenaStaging::starting();
+        let from = staging.player_x;
+        let toward = staging.enemy_x;
+        assert_eq!(lunge_x(from, toward, 0.0, false), from);
+        assert_eq!(lunge_x(from, toward, 1.0, false), from);
+        let peak = lunge_x(from, toward, 0.5, false);
+        assert!(peak > from, "the player lunges rightwards");
         assert!(
-            (peak.x - (from.x + (toward.x - from.x) * LUNGE_FRACTION)).abs() < 1e-3,
-            "peaks at the lunge fraction"
+            (peak - (from + staging.gap() * LUNGE_FRACTION)).abs() < 1e-3,
+            "peaks at the lunge fraction of the current staged gap"
         );
-        assert_eq!(peak.z, from.z, "z never changes");
-        let quarter = lunge_position(from, toward, 0.25, false);
-        assert!(from.x < quarter.x && quarter.x < peak.x, "smooth arc out");
+        let quarter = lunge_x(from, toward, 0.25, false);
+        assert!(from < quarter && quarter < peak, "smooth arc out");
+    }
+
+    #[test]
+    fn the_lunge_peak_scales_with_the_current_gap() {
+        let mut staging = ArenaStaging::starting();
+        let close_peak = lunge_x(staging.player_x, staging.enemy_x, 0.5, false);
+        assert!((close_peak - staging.player_x - CLOSE_GAP * LUNGE_FRACTION).abs() < 1e-3);
+        staging.apply_move(CombatSide::Player, DuelDistance::FAR);
+        let far_peak = lunge_x(staging.player_x, staging.enemy_x, 0.5, false);
+        assert!(
+            (far_peak - staging.player_x - FAR_GAP * LUNGE_FRACTION).abs() < 1e-3,
+            "a wider band lunges proportionally further"
+        );
     }
 
     #[test]
     fn reduced_motion_shrinks_the_lunge_to_the_documented_nudge_on_the_same_arc() {
-        let from = PLAYER_ANCHOR.translation;
-        let toward = ENEMY_ANCHOR.translation;
+        let staging = ArenaStaging::starting();
+        let from = staging.player_x;
+        let toward = staging.enemy_x;
         assert_eq!(
-            lunge_position(from, toward, 0.0, true),
+            lunge_x(from, toward, 0.0, true),
             from,
-            "endpoints stay exactly on the anchor in either mode"
+            "endpoints stay exactly on the staged x in either mode"
         );
-        assert_eq!(lunge_position(from, toward, 1.0, true), from);
-        let peak = lunge_position(from, toward, 0.5, true);
-        assert!(peak.x > from.x, "still lunges towards the opponent");
+        assert_eq!(lunge_x(from, toward, 1.0, true), from);
+        let peak = lunge_x(from, toward, 0.5, true);
+        assert!(peak > from, "still lunges towards the opponent");
         assert!(
-            (peak.x - from.x - REDUCED_MOTION_DISPLACEMENT).abs() < 1e-3,
+            (peak - from - REDUCED_MOTION_DISPLACEMENT).abs() < 1e-3,
             "peaks at exactly the documented reduced-motion nudge, not the lunge fraction"
         );
-        let full_peak = lunge_position(from, toward, 0.5, false);
+        let full_peak = lunge_x(from, toward, 0.5, false);
         assert!(
-            peak.x < full_peak.x,
+            peak < full_peak,
             "reduced motion is a strictly smaller displacement than full motion"
         );
     }
@@ -1094,14 +1111,14 @@ mod tests {
             high_contrast: false,
         });
         write_event(&mut app, CombatSide::Player, CombatEvent::Missed);
-        let anchor_x = PLAYER_ANCHOR.translation.x;
+        let staged_x = app.world().resource::<ArenaStaging>().player_x;
         let half_clip = FighterClip::Attack
             .animation()
             .clip_duration()
             .as_secs_f32()
             / 2.0;
         advance(&mut app, half_clip);
-        let offset = (player_transform_x(&mut app) - anchor_x).abs();
+        let offset = (player_transform_x(&mut app) - staged_x).abs();
         assert!(
             offset <= REDUCED_MOTION_DISPLACEMENT + 0.5,
             "the lunge stays within the documented reduced-motion nudge: {offset}"
@@ -1112,14 +1129,14 @@ mod tests {
     fn toggling_reduced_motion_on_mid_lunge_shrinks_the_fighter_offset_immediately() {
         let mut app = test_app();
         write_event(&mut app, CombatSide::Player, CombatEvent::Missed);
-        let anchor_x = PLAYER_ANCHOR.translation.x;
+        let staged_x = app.world().resource::<ArenaStaging>().player_x;
         let half_clip = FighterClip::Attack
             .animation()
             .clip_duration()
             .as_secs_f32()
             / 2.0;
         advance(&mut app, half_clip);
-        let full_offset = (player_transform_x(&mut app) - anchor_x).abs();
+        let full_offset = (player_transform_x(&mut app) - staged_x).abs();
         assert!(
             full_offset > REDUCED_MOTION_DISPLACEMENT,
             "full motion lunges past the reduced-motion nudge: {full_offset}"
@@ -1130,7 +1147,7 @@ mod tests {
             high_contrast: false,
         });
         advance(&mut app, 0.001);
-        let reduced_offset = (player_transform_x(&mut app) - anchor_x).abs();
+        let reduced_offset = (player_transform_x(&mut app) - staged_x).abs();
         assert!(
             reduced_offset <= REDUCED_MOTION_DISPLACEMENT + 0.5,
             "flipping the preference mid-lunge snaps the fighter's offset down \
@@ -1313,69 +1330,150 @@ mod tests {
     }
 
     #[test]
-    fn the_lunge_moves_the_attacker_out_and_snaps_back_on_its_anchor() {
+    fn the_lunge_moves_the_attacker_out_and_ends_on_the_staged_x() {
         // Pure-logic pass over the ECS pieces: build a lunge, tick it midway
         // and to the end through the component API.
+        let staging = ArenaStaging::starting();
         let mut lunge = AttackLunge::for_side(CombatSide::Player);
         let half = lunge.timer.duration() / 2;
         lunge.timer.tick(half);
-        let mid = lunge_position(lunge.from, lunge.toward, lunge.timer.fraction(), false);
-        assert!(
-            mid.x > PLAYER_ANCHOR.translation.x,
-            "moved towards the enemy"
+        let mid = lunge_x(
+            staging.x_of(lunge.side),
+            staging.x_of(lunge.side.opponent()),
+            lunge.timer.fraction(),
+            false,
         );
+        assert!(mid > staging.player_x, "moved towards the enemy");
         lunge.timer.tick(half);
         assert!(lunge.timer.is_finished(), "lunge ends with the attack clip");
     }
 
     #[test]
-    fn footwork_positions_ease_out_and_restore_the_anchor() {
-        let anchor = PLAYER_ANCHOR.translation;
-        assert_eq!(footwork_position(anchor, 1.0, 0.0, false), anchor);
-        assert_eq!(footwork_position(anchor, 1.0, 1.0, false), anchor);
+    fn footwork_eases_out_from_the_old_staged_x_to_the_new_one() {
+        let (from, to) = (-30.0, -140.0);
+        assert_eq!(footwork_x(from, to, 0.0, false), from);
+        assert_eq!(
+            footwork_x(from, to, 1.0, false),
+            to,
+            "lands exactly on the new x"
+        );
 
-        let quarter = footwork_position(anchor, 1.0, 0.25, false);
-        let half = footwork_position(anchor, 1.0, 0.5, false);
-        let three_quarters = footwork_position(anchor, 1.0, 0.75, false);
-        assert!(quarter.x > anchor.x, "forward footwork starts rightward");
+        let quarter = footwork_x(from, to, 0.25, false);
+        let half = footwork_x(from, to, 0.5, false);
+        let three_quarters = footwork_x(from, to, 0.75, false);
         assert!(
-            (half.x - (anchor.x + FOOTWORK_DISTANCE)).abs() < 1e-3,
-            "midpoint reaches the configured step distance"
+            from > quarter && quarter > half && half > three_quarters && three_quarters > to,
+            "the tween moves monotonically towards the new x, never back"
         );
         assert!(
-            three_quarters.x > anchor.x && three_quarters.x < half.x,
-            "the second half returns towards the anchor"
-        );
-        assert_eq!(half.z, anchor.z, "z never changes");
-    }
-
-    #[test]
-    fn reduced_motion_shrinks_footwork_to_the_documented_nudge() {
-        let anchor = PLAYER_ANCHOR.translation;
-        assert_eq!(footwork_position(anchor, 1.0, 0.0, true), anchor);
-        assert_eq!(footwork_position(anchor, 1.0, 1.0, true), anchor);
-        let half = footwork_position(anchor, 1.0, 0.5, true);
-        assert!(
-            (half.x - (anchor.x + REDUCED_MOTION_DISPLACEMENT)).abs() < 1e-3,
-            "midpoint reaches exactly the documented reduced-motion nudge"
-        );
-        let full_half = footwork_position(anchor, 1.0, 0.5, false);
-        assert!(
-            half.x < full_half.x,
-            "reduced motion is a strictly smaller displacement than full motion"
+            (half - from).abs() > (to - from).abs() / 2.0,
+            "ease-out covers more than half the distance by the midpoint"
         );
     }
 
     #[test]
-    fn enemy_forward_footwork_mirrors_towards_the_player() {
-        let mut player = FootworkStep::for_side(CombatSide::Player, FighterClip::StepForward);
-        let mut enemy = FootworkStep::for_side(CombatSide::Enemy, FighterClip::StepForward);
-        player.timer.tick(player.timer.duration() / 2);
-        enemy.timer.tick(enemy.timer.duration() / 2);
-        let player_mid = player.position(false);
-        let enemy_mid = enemy.position(false);
-        assert!(player_mid.x > PLAYER_ANCHOR.translation.x);
-        assert!(enemy_mid.x < ENEMY_ANCHOR.translation.x);
+    fn reduced_motion_footwork_snaps_near_instantly_to_the_new_staged_x() {
+        // Position is semantic state (#200): reduced motion never shortens
+        // the step -- it lands the fighter on the new x immediately.
+        let (from, to) = (-30.0, -140.0);
+        for progress in [0.0, 0.1, 0.5, 1.0] {
+            assert_eq!(footwork_x(from, to, progress, true), to);
+        }
+    }
+
+    /// The player fighter's staged x from the app's [`ArenaStaging`].
+    fn staged_player_x(app: &App) -> f32 {
+        app.world().resource::<ArenaStaging>().player_x
+    }
+
+    /// Advances well past one [`FOOTWORK_DURATION`] in steps below virtual
+    /// time's default `max_delta` clamp (0.25 s), so the whole duration
+    /// actually elapses instead of being capped to one clamped frame.
+    fn advance_past_footwork(app: &mut App) {
+        let step = FOOTWORK_DURATION.as_secs_f32() / 2.0 + 0.01;
+        advance(app, step);
+        advance(app, step);
+    }
+
+    /// The enemy fighter's current transform x.
+    fn enemy_transform_x(app: &mut App) -> f32 {
+        app.world_mut()
+            .query_filtered::<&Transform, With<EnemyFighter>>()
+            .single(app.world())
+            .expect("enemy fighter exists")
+            .translation
+            .x
+    }
+
+    #[test]
+    fn a_movement_event_tweens_only_the_actor_to_its_new_staged_x() {
+        let mut app = test_app();
+        let start = ArenaStaging::starting();
+        app.world_mut().write_message(CombatLogEvent {
+            actor: CombatSide::Player,
+            action: crate::combat::CombatAction::StepBack,
+            event: CombatEvent::Moved {
+                from: DuelDistance::CLOSE,
+                to: DuelDistance::NEAR,
+            },
+        });
+        app.update();
+        advance_past_footwork(&mut app);
+
+        assert_eq!(
+            player_transform_x(&mut app),
+            start.enemy_x - NEAR_GAP,
+            "the actor lands exactly gap(to) from the standing opponent"
+        );
+        assert_eq!(
+            enemy_transform_x(&mut app),
+            start.enemy_x,
+            "the standing opponent never moves without a wall hit"
+        );
+        assert_ne!(
+            player_transform_x(&mut app),
+            start.player_x,
+            "the fighter does not return to where it stood before"
+        );
+    }
+
+    #[test]
+    fn a_wall_hit_slides_both_fighters_keeping_the_gap_exact() {
+        let mut app = test_app();
+        // close -> near: player retreats to 110 - 250 = -140.
+        app.world_mut().write_message(CombatLogEvent {
+            actor: CombatSide::Player,
+            action: crate::combat::CombatAction::StepBack,
+            event: CombatEvent::Moved {
+                from: DuelDistance::CLOSE,
+                to: DuelDistance::NEAR,
+            },
+        });
+        app.update();
+        advance_past_footwork(&mut app);
+        // near -> far: the raw target 110 - 360 = -250 crosses the left
+        // wall; the residual slides the pair right together.
+        app.world_mut().write_message(CombatLogEvent {
+            actor: CombatSide::Player,
+            action: crate::combat::CombatAction::StepBack,
+            event: CombatEvent::Moved {
+                from: DuelDistance::NEAR,
+                to: DuelDistance::FAR,
+            },
+        });
+        app.update();
+        advance_past_footwork(&mut app);
+
+        let player_x = player_transform_x(&mut app);
+        let enemy_x = enemy_transform_x(&mut app);
+        assert_eq!(player_x, crate::arena::staging::STAGE_MIN_X);
+        assert_eq!(enemy_x - player_x, FAR_GAP, "the gap stays exact");
+        let staging = *app.world().resource::<ArenaStaging>();
+        assert_eq!(
+            (player_x, enemy_x),
+            (staging.player_x, staging.enemy_x),
+            "both transforms settle exactly on the staged positions"
+        );
     }
 
     #[test]
@@ -1403,7 +1501,7 @@ mod tests {
     }
 
     #[test]
-    fn reduced_motion_shrinks_footwork_on_the_actual_fighter() {
+    fn reduced_motion_footwork_still_lands_the_fighter_on_the_new_staged_x() {
         let mut app = test_app();
         app.insert_resource(AccessibilityPreferences {
             reduced_motion: true,
@@ -1411,26 +1509,31 @@ mod tests {
         });
         app.world_mut().write_message(CombatLogEvent {
             actor: CombatSide::Player,
-            action: crate::combat::CombatAction::StepForward,
+            action: crate::combat::CombatAction::StepBack,
             event: CombatEvent::Moved {
-                from: crate::combat::DuelDistance::NEAR,
-                to: crate::combat::DuelDistance::CLOSE,
+                from: DuelDistance::CLOSE,
+                to: DuelDistance::NEAR,
             },
         });
         app.update();
-        let anchor_x = PLAYER_ANCHOR.translation.x;
-        advance(&mut app, FOOTWORK_DURATION.as_secs_f32() / 2.0);
-        let offset = (player_transform_x(&mut app) - anchor_x).abs();
-        assert!(
-            offset <= REDUCED_MOTION_DISPLACEMENT + 0.5,
-            "footwork stays within the documented reduced-motion nudge: {offset}"
+        let staged_x = staged_player_x(&app);
+        assert_ne!(
+            staged_x,
+            ArenaStaging::starting().player_x,
+            "the staged position itself moved -- position is semantic state"
         );
-
-        advance(&mut app, FOOTWORK_DURATION.as_secs_f32() / 2.0 + 0.01);
+        advance(&mut app, 0.001);
         assert_eq!(
             player_transform_x(&mut app),
-            anchor_x,
-            "the step still snaps exactly back to the anchor when it ends"
+            staged_x,
+            "reduced motion snaps near-instantly to the new staged x"
+        );
+
+        advance_past_footwork(&mut app);
+        assert_eq!(
+            player_transform_x(&mut app),
+            staged_x,
+            "the fighter stays on the new staged x after the tween window"
         );
     }
 

@@ -31,7 +31,7 @@ use crate::theme::PANEL_BORDER_INSET;
 
 use super::action_palette;
 use super::actions::ExtraDescriptors;
-use super::engine::CombatEvent;
+use super::engine::{CombatEvent, DuelDistance};
 use super::systems::{CombatLogEvent, CombatSide};
 
 /// How many log lines the combat log keeps and shows.
@@ -141,6 +141,17 @@ pub fn bar_percent(current: i32, max: i32) -> f32 {
         return 0.0;
     }
     (100.0 * current as f32 / max as f32).clamp(0.0, 100.0)
+}
+
+/// Romanian name of one [`DuelDistance`] band — the shared distance
+/// vocabulary for every readout of the engine's spacing (the arena's ground
+/// distance chip today; any future HUD text reuses the same words).
+pub fn distance_label(distance: DuelDistance) -> &'static str {
+    match distance.band() {
+        band if band == DuelDistance::CLOSE.band() => "Aproape",
+        band if band == DuelDistance::NEAR.band() => "Aproximativ",
+        _ => "Departe",
+    }
 }
 
 /// Formats one [`CombatEvent`] as a plain factual log line. `actor` performed
@@ -725,6 +736,13 @@ mod tests {
         carisma: 1,
         magie: 0,
     };
+
+    #[test]
+    fn every_distance_band_has_its_romanian_label() {
+        assert_eq!(distance_label(DuelDistance::CLOSE), "Aproape");
+        assert_eq!(distance_label(DuelDistance::NEAR), "Aproximativ");
+        assert_eq!(distance_label(DuelDistance::FAR), "Departe");
+    }
 
     /// Headless app on the fight screen with a deterministic duel RNG whose
     /// first four strikes are clean hits without crits.

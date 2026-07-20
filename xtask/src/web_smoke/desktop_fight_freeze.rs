@@ -38,9 +38,9 @@ struct ParallaxSample {
 #[derive(serde::Deserialize, Debug, Clone, PartialEq)]
 struct MotionSnapshot {
     player_x: f64,
-    player_anchor_x: f64,
+    player_staged_x: f64,
     enemy_x: f64,
-    enemy_anchor_x: f64,
+    enemy_staged_x: f64,
     camera_x: f64,
     camera_y: f64,
     parallax: Vec<ParallaxSample>,
@@ -152,9 +152,9 @@ mod tests {
     fn motion_fixture() -> MotionSnapshot {
         MotionSnapshot {
             player_x: -180.0,
-            player_anchor_x: -180.0,
+            player_staged_x: -180.0,
             enemy_x: 180.0,
-            enemy_anchor_x: 180.0,
+            enemy_staged_x: 180.0,
             camera_x: 0.0,
             camera_y: 0.0,
             parallax: vec![ParallaxSample {
@@ -188,9 +188,9 @@ mod tests {
         let motion = |opponent: &str| {
             serde_json::from_value::<MotionSnapshot>(serde_json::json!({
                 "player_x": -180.0,
-                "player_anchor_x": -180.0,
+                "player_staged_x": -180.0,
                 "enemy_x": 180.0,
-                "enemy_anchor_x": 180.0,
+                "enemy_staged_x": 180.0,
                 "camera_x": 0.0,
                 "camera_y": 0.0,
                 "parallax": [{"base_x": 0.0, "x": 12.5}],
