@@ -33,7 +33,8 @@ overlap but would cause the oversized compact-row regression documented by
   library tests, 0 failures).
 - Formatting: `cargo fmt --all -- --check` — pass.
 - Lint: `cargo clippy --all-targets -- -D warnings` — pass.
-- Post-rebase full gate: pending.
+- Post-rebase `cargo xtask pre-push` — pass: fmt, default/review clippy,
+  default/review tests, and native/release/wasm build matrix (399.38s).
 
 ## Viewport evidence / browser
 
@@ -54,10 +55,15 @@ It confirmed the scope stays local to shop rows and requested rebase plus
 browser proof before merge. It also noted the theme module's generic
 `panel_bundle` documentation still names shop row groups; that wording is
 left untouched because #249 explicitly excludes shared theme changes.
+The final post-baseline review likewise found no critical or important
+findings and confirmed the six retained baselines are shop-only.
 
 ## Commits and PR
 
-Commit: `d663eb2 fix: keep shop row content clear of embroidered border`.
+Commits:
+
+- `d663eb2 fix: keep shop row content clear of embroidered border`
+- `75a97f6 test: accept compact shop row baselines`
 
 PR: pending; it will close #249 and include the required Antigravity trailer,
 then enter the squash merge queue.
