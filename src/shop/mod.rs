@@ -1728,6 +1728,70 @@ mod tests {
         );
     }
 
+    /// #248 regression: at 390x844 both catalog action states fit inside the
+    /// clamped catalog, while the non-shrinking mobile body owns the complete
+    /// preview-plus-catalog column and the root lays Back after that body.
+    /// These are the two containment relationships visible in the original
+    /// issue: horizontal row containment and vertical preview separation.
+    #[test]
+    fn phone_layout_contains_item_actions_and_separates_back_from_preview() {
+        let mut app = test_app_with_window(390.0, 844.0);
+        app.world_mut()
+            .resource_mut::<OwnedItems>()
+            .0
+            .insert(ItemId::BataCiobaneasca);
+        app.world_mut()
+            .resource_mut::<PlayerEquipment>()
+            .0
+            .equip(ItemId::BataCiobaneasca);
+        app.update();
+
+        assert_eq!(
+            item_button_label(&mut app, ItemId::BataCiobaneasca),
+            "Echipat"
+        );
+        assert_eq!(
+            item_button_label(&mut app, ItemId::ToporDePadurar),
+            "Cumpără"
+        );
+        assert!(
+            item_row_min_width(true) <= catalog_clamped_width(390.0),
+            "phone item actions must fit inside the clamped catalog (#248)"
+        );
+
+        let catalog = layout_role_entity(&mut app, ShopLayoutRole::CatalogColumn);
+        let preview = layout_role_entity(&mut app, ShopLayoutRole::PreviewStage);
+        let back = find_button(&mut app, ShopAction::BackToArena);
+        let (catalog_parent, catalog_index) = sibling_position(&mut app, catalog);
+        let (preview_parent, preview_index) = sibling_position(&mut app, preview);
+        let (back_parent, back_index) = sibling_position(&mut app, back);
+
+        assert_eq!(preview_parent, catalog_parent);
+        let body = preview_parent;
+        let body_node = app.world().get::<Node>(body).expect("body has a Node");
+        assert_eq!(body_node.flex_direction, FlexDirection::Column);
+        assert_eq!(body_node.flex_wrap, FlexWrap::NoWrap);
+        assert_eq!(
+            body_node.flex_shrink, 0.0,
+            "the body must retain the full preview-plus-catalog height (#248)"
+        );
+        assert!(
+            preview_index < catalog_index,
+            "the preview must precede the catalog in the mobile body"
+        );
+
+        let (body_parent, body_index) = sibling_position(&mut app, body);
+        assert_eq!(
+            back_parent, body_parent,
+            "Back and the complete mobile body must share the outer screen column"
+        );
+        assert!(
+            body_index < back_index,
+            "Back must be laid out after the non-shrinking mobile body; got body={body_index}, \
+             back={back_index} (#248)"
+        );
+    }
+
     /// #287: desktop widths must keep the *original* catalog-first order --
     /// the two panels sit side by side there (never wrapping), so spawn
     /// order there only controls left/right placement, and every accepted
