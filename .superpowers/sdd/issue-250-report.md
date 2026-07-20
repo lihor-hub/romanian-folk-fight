@@ -80,8 +80,10 @@ then completed the entire 30-checkpoint matrix successfully.
   native/release/wasm build matrix)
 - Independent standards/spec review: final re-review found no actionable
   findings after the visibly inset desktop/phone capture
-- Commit/PR/merge queue: branch ready; PR creation and squash-queueing follow
-  this report commit
+- Implementation commit: `814b372b4b7420e512bcc7b37f6853fe2fdcb539`
+- PR: [#332](https://github.com/lihor-hub/romanian-folk-fight/pull/332),
+  ready for review
+- Merge queue: squash auto-merge enabled; currently blocked on required checks
 
 ## Scope and deviations
 
