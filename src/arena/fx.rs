@@ -55,6 +55,7 @@ use bevy::prelude::*;
 use crate::character::{EnemyFighter, PlayerFighter};
 use crate::combat::{CombatAction, CombatEvent, CombatLogEvent, CombatSide};
 use crate::core::{GameState, UiFont};
+use crate::cutout::{CutoutPartMarker, GearVisualLayer};
 use crate::roster::LadderProgress;
 use crate::settings::AccessibilityPreferences;
 use crate::theme::{BLOCKED_GRAY, CREAM, CRIT_GOLD};
@@ -280,8 +281,9 @@ pub struct DamageText {
     timer: Timer,
 }
 
-/// Spawn height of a damage number above the defender's center.
-const DAMAGE_TEXT_OFFSET_Y: f32 = FIGHTER_SIZE.y / 2.0 + 10.0;
+/// Spawn height of a damage number above the defender's center — clear of
+/// the rig's head, which reaches ~0.68 x [`FIGHTER_SIZE`] above the root.
+const DAMAGE_TEXT_OFFSET_Y: f32 = FIGHTER_SIZE.y * 0.75;
 
 fn spawn_damage_text(
     commands: &mut Commands,
@@ -382,6 +384,157 @@ fn animate_particles(
         transform.translation.y += particle.velocity.y * dt;
         let fraction = particle.timer.fraction();
         sprite.color.set_alpha(1.0 - fraction);
+    }
+}
+
+// --- Hit-stop and impact flash ---------------------------------------------
+
+/// How long a struck fighter's presentation freezes at impact, seconds.
+/// Presentation only: the turn engine's pacing (`CombatPresentation`) and
+/// the other fighter's animation are untouched, and the freeze is far
+/// shorter than the 0.5 s per-event presentation gate, so nothing ever
+/// stacks into the next turn.
+pub const HIT_STOP_SECONDS: f32 = 0.07;
+
+/// Duration of the impact brightness pop, seconds — a blink, not a glow
+/// (about one to four rendered frames depending on refresh rate).
+pub const IMPACT_FLASH_SECONDS: f32 = 0.05;
+
+/// Linear-space brightness gain of the impact flash. Multiplies each part's
+/// existing `Sprite::color` (accent tints included), so the pop keeps every
+/// hue and reads purely as luminance — distinguishable in grayscale (#214)
+/// by construction. Restrained: art highlights clip to white only briefly.
+const IMPACT_FLASH_GAIN: f32 = 1.6;
+
+/// Freezes the struck fighter's presentation for [`HIT_STOP_SECONDS`]:
+/// while present, the fighter's pose envelope, sprite-sheet frames, and
+/// footwork tween do not advance (see the `Without<HitStop>` gates in
+/// `super::animation`). The timer itself always ticks at the same rate —
+/// reduced motion (#200) keeps identical timing and simply has less visible
+/// motion to freeze.
+#[derive(Component, Debug)]
+pub(crate) struct HitStop {
+    timer: Timer,
+}
+
+impl HitStop {
+    fn new() -> Self {
+        Self {
+            timer: Timer::from_seconds(HIT_STOP_SECONDS, TimerMode::Once),
+        }
+    }
+}
+
+/// The single-frame brightness pop on the struck fighter at impact. Lives
+/// on the fighter root; [`apply_impact_flash`] brightens every body-part
+/// and gear sprite the root owns, then restores each sprite's exact
+/// previous color (accent-hue tints included) when the timer runs out.
+#[derive(Component, Debug)]
+pub(crate) struct ImpactFlash {
+    timer: Timer,
+    applied: bool,
+}
+
+impl ImpactFlash {
+    fn new() -> Self {
+        Self {
+            timer: Timer::from_seconds(IMPACT_FLASH_SECONDS, TimerMode::Once),
+            applied: false,
+        }
+    }
+}
+
+/// The exact pre-flash color of one sprite, restored (bit-identical) when
+/// the owning fighter's [`ImpactFlash`] ends.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub(crate) struct FlashRestore(Color);
+
+/// `color` brightened by [`IMPACT_FLASH_GAIN`] in linear space, alpha
+/// untouched.
+fn flashed_color(color: Color) -> Color {
+    let mut linear = color.to_linear();
+    linear.red *= IMPACT_FLASH_GAIN;
+    linear.green *= IMPACT_FLASH_GAIN;
+    linear.blue *= IMPACT_FLASH_GAIN;
+    Color::LinearRgba(linear)
+}
+
+/// Ticks every hit-stop and lifts the freeze when it ends. Ticks
+/// identically under reduced motion — only visible motion is pinned by
+/// #200, never presentation timing.
+fn tick_hit_stops(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut stops: Query<(Entity, &mut HitStop)>,
+) {
+    for (entity, mut stop) in &mut stops {
+        stop.timer.tick(time.delta());
+        if stop.timer.is_finished() {
+            commands.entity(entity).remove::<HitStop>();
+        }
+    }
+}
+
+/// Query alias for the parent links [`apply_impact_flash`] climbs to find
+/// each flashable sprite's owning fighter root.
+type FlashableAncestry<'w, 's> =
+    Query<'w, 's, &'static ChildOf, Or<(With<CutoutPartMarker>, With<GearVisualLayer>)>>;
+
+/// Query alias for the sprites [`apply_impact_flash`] brightens: every
+/// body-part and gear-overlay sprite, with its parent link and any
+/// already-stored restore color.
+type FlashableSprites<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static ChildOf,
+        &'static mut Sprite,
+        Option<&'static FlashRestore>,
+    ),
+    Or<(With<CutoutPartMarker>, With<GearVisualLayer>)>,
+>;
+
+/// Applies and clears the impact flash: on a fresh [`ImpactFlash`], every
+/// sprite owned by the flashed fighter root stores its exact current color
+/// in [`FlashRestore`] and brightens by [`IMPACT_FLASH_GAIN`]; when the
+/// flash ends, each sprite gets its stored color back bit-identically —
+/// opponents keep their accent-hue tints. Not a motion effect, so reduced
+/// motion (#200) leaves it (and its timing) unchanged, like the damage
+/// numbers.
+fn apply_impact_flash(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut flashes: Query<(Entity, &mut ImpactFlash)>,
+    ancestry: FlashableAncestry,
+    mut sprites: FlashableSprites,
+) {
+    let parent_of = |entity: Entity| ancestry.get(entity).ok().map(|child_of| child_of.parent());
+    for (root, mut flash) in &mut flashes {
+        flash.timer.tick(time.delta());
+        let finished = flash.timer.is_finished();
+        if flash.applied && !finished {
+            continue;
+        }
+        for (entity, child_of, mut sprite, restore) in &mut sprites {
+            if crate::cutout::cutout_rig_owner(child_of.parent(), parent_of) != root {
+                continue;
+            }
+            if finished {
+                if let Some(FlashRestore(color)) = restore {
+                    sprite.color = *color;
+                    commands.entity(entity).remove::<FlashRestore>();
+                }
+            } else if restore.is_none() {
+                commands.entity(entity).insert(FlashRestore(sprite.color));
+                sprite.color = flashed_color(sprite.color);
+            }
+        }
+        if finished {
+            commands.entity(root).remove::<ImpactFlash>();
+        } else {
+            flash.applied = true;
+        }
     }
 }
 
@@ -487,6 +640,12 @@ fn reset_screen_shake(
 
 // --- Event -> FX wiring ---------------------------------------------------------
 
+/// Query alias for one side's fighter as an FX target: its entity (for
+/// hit-stop/flash insertion) and transform (for spawn positions). The
+/// camera exclusion keeps the query disjoint from the camera reads.
+type FighterFxTarget<'w, 's, Side> =
+    Query<'w, 's, (Entity, &'static Transform), (With<Side>, Without<crate::core::WorldCamera>)>;
+
 /// Turns this frame's [`CombatLogEvent`]s into FX at the defender: floating
 /// damage numbers, spark bursts, and screen shake on crits and heavy-strike
 /// hits.
@@ -494,8 +653,8 @@ fn spawn_combat_fx(
     mut events: MessageReader<CombatLogEvent>,
     mut commands: Commands,
     mut shake: ResMut<ScreenShake>,
-    players: Query<&Transform, (With<PlayerFighter>, Without<crate::core::WorldCamera>)>,
-    enemies: Query<&Transform, (With<EnemyFighter>, Without<crate::core::WorldCamera>)>,
+    players: FighterFxTarget<PlayerFighter>,
+    enemies: FighterFxTarget<EnemyFighter>,
     cameras: Query<&Transform, With<crate::core::WorldCamera>>,
     ui_font: Res<UiFont>,
 ) {
@@ -509,9 +668,19 @@ fn spawn_combat_fx(
             CombatSide::Player => players.single(),
             CombatSide::Enemy => enemies.single(),
         };
-        let Ok(at) = defender.map(|transform| transform.translation) else {
+        let Ok((struck, at)) = defender.map(|(entity, transform)| (entity, transform.translation))
+        else {
             continue;
         };
+        // ~70 ms hit-stop + a single-frame brightness pop on the struck
+        // fighter for landed damage. Blocked keeps its softer chip cue and
+        // misses stay untouched, so the pop is a reliable "damage landed"
+        // signal on top of the number/particle grammar.
+        if matches!(event, CombatEvent::Hit { .. } | CombatEvent::Crit { .. }) {
+            commands
+                .entity(struck)
+                .insert((HitStop::new(), ImpactFlash::new()));
+        }
         let camera_rest = cameras
             .single()
             .map(|camera| camera.translation)
@@ -587,6 +756,8 @@ impl Plugin for FxPlugin {
                 Update,
                 (
                     spawn_combat_fx,
+                    tick_hit_stops,
+                    apply_impact_flash,
                     drift_parallax_layers,
                     animate_damage_text,
                     animate_particles,
@@ -695,6 +866,122 @@ mod tests {
             .query_filtered::<(), With<C>>()
             .iter(app.world())
             .count()
+    }
+
+    /// Colors of every cutout body-part sprite owned by the fighter tagged
+    /// `M`, keyed by part kind. Parts nest several joints deep (#117), so
+    /// ownership is resolved by climbing to the rig root.
+    fn part_colors<M: Component>(
+        app: &mut App,
+    ) -> std::collections::HashMap<crate::cutout::CutoutPartKind, Color> {
+        let world = app.world_mut();
+        let root = world
+            .query_filtered::<Entity, With<M>>()
+            .single(world)
+            .expect("fighter exists");
+        let parent_of: std::collections::HashMap<Entity, Entity> = world
+            .query_filtered::<(Entity, &ChildOf), With<CutoutPartMarker>>()
+            .iter(world)
+            .map(|(entity, child_of)| (entity, child_of.parent()))
+            .collect();
+        world
+            .query::<(Entity, &CutoutPartMarker, &Sprite)>()
+            .iter(world)
+            .filter(|(entity, _, _)| {
+                crate::cutout::cutout_rig_owner(*entity, |e| parent_of.get(&e).copied()) == root
+            })
+            .map(|(_, marker, sprite)| (marker.kind, sprite.color))
+            .collect()
+    }
+
+    #[test]
+    fn the_impact_flash_brightens_the_struck_fighter_then_restores_exact_tints() {
+        let mut app = test_app();
+        let originals = part_colors::<EnemyFighter>(&mut app);
+        let attacker_originals = part_colors::<PlayerFighter>(&mut app);
+        assert!(
+            originals
+                .values()
+                .any(|color| attacker_originals.values().all(|other| other != color)),
+            "the enemy carries tints of its own the restore must preserve"
+        );
+
+        send_event(
+            &mut app,
+            CombatSide::Player,
+            CombatAction::QuickStrike,
+            CombatEvent::Hit { dmg: 5 },
+        );
+        advance(&mut app, 0.001);
+        let flashed = part_colors::<EnemyFighter>(&mut app);
+        assert!(
+            originals
+                .iter()
+                .all(|(kind, color)| flashed.get(kind) != Some(color)),
+            "every body part brightens during the flash"
+        );
+        assert_eq!(
+            part_colors::<PlayerFighter>(&mut app),
+            attacker_originals,
+            "the attacker never flashes"
+        );
+
+        advance(&mut app, IMPACT_FLASH_SECONDS + 0.02);
+        assert_eq!(
+            part_colors::<EnemyFighter>(&mut app),
+            originals,
+            "the flash restores each sprite's exact previous color, tints included"
+        );
+    }
+
+    #[test]
+    fn the_impact_flash_keeps_identical_behavior_under_reduced_motion() {
+        // #200 pins motion, never timing -- and a luminance pop is not
+        // motion, so it stays (like the damage numbers and particles).
+        let mut app = test_app();
+        app.insert_resource(AccessibilityPreferences {
+            reduced_motion: true,
+            high_contrast: false,
+        });
+        let originals = part_colors::<EnemyFighter>(&mut app);
+        send_event(
+            &mut app,
+            CombatSide::Player,
+            CombatAction::QuickStrike,
+            CombatEvent::Crit { dmg: 9 },
+        );
+        advance(&mut app, 0.001);
+        assert_ne!(
+            part_colors::<EnemyFighter>(&mut app),
+            originals,
+            "the pop still reads under reduced motion"
+        );
+        advance(&mut app, IMPACT_FLASH_SECONDS + 0.02);
+        assert_eq!(
+            part_colors::<EnemyFighter>(&mut app),
+            originals,
+            "and restores on the exact same clock"
+        );
+    }
+
+    #[test]
+    fn misses_and_blocks_never_flash_the_defender() {
+        for event in [CombatEvent::Missed, CombatEvent::Blocked { dmg: 2 }] {
+            let mut app = test_app();
+            let originals = part_colors::<PlayerFighter>(&mut app);
+            send_event(
+                &mut app,
+                CombatSide::Enemy,
+                CombatAction::QuickStrike,
+                event,
+            );
+            advance(&mut app, 0.001);
+            assert_eq!(
+                part_colors::<PlayerFighter>(&mut app),
+                originals,
+                "{event:?} keeps the defender untinted"
+            );
+        }
     }
 
     #[test]

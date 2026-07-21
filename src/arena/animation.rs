@@ -2,8 +2,10 @@
 //! timer component driving a `TextureAtlas` index, the per-fighter clip
 //! table ([`FighterClip`]), the sprite-sheet handles and readiness guard
 //! ([`FighterSpriteSheets`]), and the wiring that turns [`CombatLogEvent`]s
-//! into attack / hurt / KO / footwork animations plus the attack lunge and
-//! presentation-only footwork between the arena anchors.
+//! into attack / hurt / KO / footwork animations. Movement events update
+//! the persistent [`ArenaStaging`] positions and tween the fighters to
+//! their new staged x — fighters never return to fixed anchors — while the
+//! attack lunge arcs out from and back to the attacker's current staged x.
 
 use std::time::Duration;
 
@@ -17,7 +19,7 @@ use crate::cutout::{
 use crate::roster::LADDER;
 use crate::settings::AccessibilityPreferences;
 
-use super::{ENEMY_ANCHOR, PLAYER_ANCHOR};
+use super::ArenaStaging;
 
 /// Side length of one sprite-sheet frame in pixels.
 pub const FRAME_SIZE: u32 = 128;
@@ -46,27 +48,27 @@ const OPPONENT_SHEETS: [&str; 10] = [
     "sprites/zmeul_zmeilor.png",
 ];
 
-/// How far towards the opponent's anchor the attack lunge peaks, as a
-/// fraction of the distance between the two anchors.
+/// How far towards the opponent the attack lunge peaks, as a fraction of
+/// the current staged gap between the two fighters.
 const LUNGE_FRACTION: f32 = 0.35;
 
-/// Presentation-only horizontal distance of a footwork step, in world units.
-const FOOTWORK_DISTANCE: f32 = 28.0;
-
-/// Reduced-motion (#200) displacement for both the attack lunge and
-/// footwork steps, in world units (the codebase treats one world unit as
-/// one logical pixel for presentation-scale distances -- see
-/// `fx::DRIFT_AMPLITUDE`'s doc comment for the same convention). Chosen as
-/// the documented safe treatment: a small, barely-there nudge (well under
-/// the issue's "≤8px" ceiling) that still gives the strike/step a readable
-/// beat instead of removing displacement entirely, while never approaching
-/// the full lunge (up to ~185 world units) or footwork (28 units)
-/// distance. Applies with the exact same easing curve and timer duration as
-/// full motion -- only the peak distance shrinks.
+/// Reduced-motion (#200) displacement for the attack lunge, in world units
+/// (the codebase treats one world unit as one logical pixel for
+/// presentation-scale distances -- see `fx::DRIFT_AMPLITUDE`'s doc comment
+/// for the same convention). Chosen as the documented safe treatment: a
+/// small, barely-there nudge (well under the issue's "≤8px" ceiling) that
+/// still gives the strike a readable beat instead of removing displacement
+/// entirely, while never approaching the full lunge (up to ~126 world
+/// units at the far band). Applies with the exact same easing curve and
+/// timer duration as full motion -- only the peak distance shrinks.
+/// Footwork is different: a staged position change is semantic state, not
+/// decoration, so reduced motion replaces its tween with a near-instant
+/// snap to the new x instead of shrinking it (see [`footwork_x`]).
 const REDUCED_MOTION_DISPLACEMENT: f32 = 6.0;
 
-/// Duration of a footwork step-in or step-back tween.
-const FOOTWORK_DURATION: Duration = Duration::from_millis(500);
+/// Duration of a footwork tween from the old staged x to the new one
+/// (ease-out, see [`footwork_x`]).
+const FOOTWORK_DURATION: Duration = Duration::from_millis(450);
 
 /// Short readable hold for non-sheet rig-only defensive reactions.
 const RIG_REACTION_DURATION: Duration = Duration::from_millis(360);
@@ -249,25 +251,23 @@ fn load_fighter_sheets(
     commands.insert_resource(sheets);
 }
 
-/// Attack lunge of one fighter: an out-and-back tween from its own anchor
-/// towards the opponent's, lasting exactly one attack clip.
+/// Attack lunge of one fighter: an out-and-back arc from the fighter's
+/// *current* staged x towards the opponent's, lasting exactly one attack
+/// clip. Only the side is stored — the endpoints are read live from
+/// [`ArenaStaging`] every frame, so a mid-lunge pair slide (see
+/// [`ArenaStaging::apply_move`]) never strands the fighter on a stale
+/// return position.
 #[derive(Component, Debug, Clone)]
 pub struct AttackLunge {
-    from: Vec3,
-    toward: Vec3,
+    side: CombatSide,
     timer: Timer,
 }
 
 impl AttackLunge {
-    /// A lunge between the two anchors of `side`, timed to the attack clip.
+    /// A lunge for `side`, timed to the attack clip.
     fn for_side(side: CombatSide) -> Self {
-        let (from, toward) = match side {
-            CombatSide::Player => (PLAYER_ANCHOR.translation, ENEMY_ANCHOR.translation),
-            CombatSide::Enemy => (ENEMY_ANCHOR.translation, PLAYER_ANCHOR.translation),
-        };
         Self {
-            from,
-            toward,
+            side,
             timer: Timer::new(
                 FighterClip::Attack.animation().clip_duration(),
                 TimerMode::Once,
@@ -276,99 +276,74 @@ impl AttackLunge {
     }
 }
 
-/// Position of a lunging fighter at `progress` in `0..=1`: an out-and-back
-/// arc peaking at [`LUNGE_FRACTION`] of the way to the opponent's anchor
-/// (or, under reduced motion, at [`REDUCED_MOTION_DISPLACEMENT`] along the
-/// same direction -- see that constant's docs). Recomputed from `from`/
-/// `toward`/`progress`/`reduced_motion` alone every call, with no state of
-/// its own, so a caller re-evaluating this mid-lunge with a flipped
-/// `reduced_motion` gets a consistent position for the new mode
+/// X of a lunging fighter at `progress` in `0..=1`: an out-and-back arc
+/// from the fighter's staged `from_x` peaking at [`LUNGE_FRACTION`] of the
+/// current gap towards the opponent's staged `toward_x` (or, under reduced
+/// motion, at [`REDUCED_MOTION_DISPLACEMENT`] in the same direction -- see
+/// that constant's docs). Recomputed from its inputs alone every call, with
+/// no state of its own, so a caller re-evaluating this mid-lunge with a
+/// flipped `reduced_motion` gets a consistent position for the new mode
 /// immediately -- nothing to restore separately.
-pub fn lunge_position(from: Vec3, toward: Vec3, progress: f32, reduced_motion: bool) -> Vec3 {
+pub fn lunge_x(from_x: f32, toward_x: f32, progress: f32, reduced_motion: bool) -> f32 {
     // `sin(PI)` is a hair negative in f32; the clamp keeps the endpoints
-    // exactly on the anchor.
+    // exactly on the staged x.
     let arc = (progress.clamp(0.0, 1.0) * std::f32::consts::PI)
         .sin()
         .max(0.0);
-    let full_delta = (toward - from) * LUNGE_FRACTION;
+    let full_delta = (toward_x - from_x) * LUNGE_FRACTION;
     let delta = if reduced_motion {
-        full_delta.normalize_or_zero() * REDUCED_MOTION_DISPLACEMENT
+        full_delta.signum() * REDUCED_MOTION_DISPLACEMENT
     } else {
         full_delta
     };
-    let mut position = from + delta * arc;
-    position.z = from.z;
-    position
+    from_x + delta * arc
 }
 
-/// Presentation-only footwork step: a short out-and-back horizontal motion
-/// around the fighter's anchor. Combat distance changes live in the engine;
-/// this component only makes them readable.
+/// One fighter's movement tween from its old staged x to its new one.
+/// The staged positions themselves are combat truth (see [`ArenaStaging`]);
+/// this component only paces the transition — the fighter always ends at
+/// `to_x` and never returns to where it started.
 #[derive(Component, Debug, Clone)]
 struct FootworkStep {
-    anchor: Vec3,
-    direction: f32,
+    from_x: f32,
+    to_x: f32,
     timer: Timer,
 }
 
 impl FootworkStep {
-    /// Footwork for `side` and movement clip. Forward always means towards
-    /// the opponent; backward means away, so the enemy side mirrors the x
-    /// direction.
-    fn for_side(side: CombatSide, clip: FighterClip) -> Self {
-        let anchor = match side {
-            CombatSide::Player => PLAYER_ANCHOR.translation,
-            CombatSide::Enemy => ENEMY_ANCHOR.translation,
-        };
-        let side_forward = match side {
-            CombatSide::Player => 1.0,
-            CombatSide::Enemy => -1.0,
-        };
-        let direction = match clip {
-            FighterClip::StepForward => side_forward,
-            FighterClip::StepBack => -side_forward,
-            _ => side_forward,
-        };
+    /// A [`FOOTWORK_DURATION`] tween between two staged positions.
+    fn new(from_x: f32, to_x: f32) -> Self {
         Self {
-            anchor,
-            direction,
+            from_x,
+            to_x,
             timer: Timer::new(FOOTWORK_DURATION, TimerMode::Once),
         }
     }
 
-    fn position(&self, reduced_motion: bool) -> Vec3 {
-        footwork_position(
-            self.anchor,
-            self.direction,
+    fn x(&self, reduced_motion: bool) -> f32 {
+        footwork_x(
+            self.from_x,
+            self.to_x,
             self.timer.fraction(),
             reduced_motion,
         )
     }
 }
 
-/// Position of a fighter during footwork at `progress` in `0..=1`.
-/// Movement eases out to [`FOOTWORK_DISTANCE`] at the midpoint (or, under
-/// reduced motion, to [`REDUCED_MOTION_DISPLACEMENT`] -- see that
-/// constant's docs), then returns to the exact anchor by the end. Like
-/// [`lunge_position`], this is a pure function of its inputs with no stored
-/// state, so a flipped `reduced_motion` mid-step is reflected immediately
+/// X of a fighter tweening between staged positions at `progress` in
+/// `0..=1`: a cubic ease-out from `from_x` landing exactly on `to_x`.
+/// Position is semantic state, not decoration, so reduced motion (#200)
+/// does not shrink the displacement — it replaces the tween with a
+/// near-instant snap to `to_x`. Like [`lunge_x`], a pure function of its
+/// inputs, so a flipped `reduced_motion` mid-step is reflected immediately
 /// on the very next call.
-fn footwork_position(anchor: Vec3, direction: f32, progress: f32, reduced_motion: bool) -> Vec3 {
+fn footwork_x(from_x: f32, to_x: f32, progress: f32, reduced_motion: bool) -> f32 {
+    if reduced_motion {
+        return to_x;
+    }
     let progress = progress.clamp(0.0, 1.0);
-    let leg = if progress <= 0.5 {
-        progress * 2.0
-    } else {
-        (1.0 - progress) * 2.0
-    };
-    let eased = (leg * std::f32::consts::FRAC_PI_2).sin();
-    let distance = if reduced_motion {
-        REDUCED_MOTION_DISPLACEMENT
-    } else {
-        FOOTWORK_DISTANCE
-    };
-    let mut position = anchor;
-    position.x += distance * direction.signum() * eased;
-    position
+    let eased = 1.0 - (1.0 - progress).powi(3);
+    from_x + (to_x - from_x) * eased
 }
 
 /// Swaps a fighter onto `clip`: restarts the animation and snaps the atlas
@@ -400,10 +375,151 @@ type SideAnimation<'w, 's, Side, Other> = Query<
     (With<Side>, Without<Other>),
 >;
 
-/// Timer for a non-idle [`CutoutPose`] that should return to idle once its
-/// presentation beat has read. Knockdowns intentionally do not carry one.
+/// Three-phase pose envelope (§6 of the combat redesign): every non-idle
+/// [`CutoutPose`] now plays anticipation → impact → recovery instead of
+/// snapping to a single keyframe. The component stores the per-phase
+/// durations and one total timer; [`apply_cutout_poses`] turns the elapsed
+/// time into eased blend weights over the pose's anticipation and main
+/// keyframes (see [`PoseEnvelope::weights`]).
 #[derive(Component, Debug, Clone)]
-struct CutoutPoseTimer(Timer);
+struct PoseEnvelope {
+    /// Total envelope clock. For a holding envelope (Knockdown) the pose
+    /// stays at the full main keyframe once the timer finishes.
+    timer: Timer,
+    /// Anticipation phase length, seconds (idle → anticipation key).
+    anticipation: f32,
+    /// Impact phase length, seconds (anticipation key → main key).
+    impact: f32,
+    /// Whether the envelope holds the main keyframe forever once finished
+    /// (Knockdown) instead of returning the fighter to idle.
+    hold: bool,
+}
+
+/// Attack anticipation phase: the wind-up back before the strike.
+const ATTACK_ANTICIPATION_SECONDS: f32 = 0.120;
+/// Attack impact phase: wind-up key to full strike extension. Ends exactly
+/// [`ATTACK_ANTICIPATION_SECONDS`] + this = 0.2 s into the attack — the
+/// lunge peak, since [`AttackLunge`] is timed to the 0.4 s attack clip and
+/// [`lunge_x`] peaks at progress 0.5. Recovery is the remaining clip time.
+const ATTACK_IMPACT_SECONDS: f32 = 0.080;
+/// Hurt anticipation: near-instant ramp to the overshoot recoil.
+const HURT_ANTICIPATION_SECONDS: f32 = 0.060;
+/// Hurt impact: overshoot settles back onto the held recoil key.
+const HURT_IMPACT_SECONDS: f32 = 0.090;
+/// Hurt total: sharp recoil then settle, releasing well inside the 0.5 s
+/// presentation gate.
+const HURT_TOTAL_SECONDS: f32 = 0.360;
+/// Block/Dodge anticipation: the quick brace / lean, then held.
+const BRACE_ANTICIPATION_SECONDS: f32 = 0.070;
+/// Step anticipation: lean into the [`FOOTWORK_DURATION`] position tween.
+const STEP_ANTICIPATION_SECONDS: f32 = 0.100;
+/// Step recovery: release the lean just as the tween lands.
+const STEP_RECOVERY_SECONDS: f32 = 0.100;
+/// Knockdown anticipation: the stagger before the fall.
+const KNOCKDOWN_ANTICIPATION_SECONDS: f32 = 0.140;
+/// Knockdown impact: stagger key to the ground sprawl, then holds forever.
+const KNOCKDOWN_IMPACT_SECONDS: f32 = 0.320;
+
+impl PoseEnvelope {
+    fn new(total: f32, anticipation: f32, impact: f32, hold: bool) -> Self {
+        Self {
+            timer: Timer::from_seconds(total, TimerMode::Once),
+            anticipation,
+            impact,
+            hold,
+        }
+    }
+
+    /// The envelope for `pose`, or `None` for idle (no envelope: the rig
+    /// rests, plus the breathing sway).
+    fn for_pose(pose: CutoutPose) -> Option<Self> {
+        match pose {
+            CutoutPose::Idle => None,
+            CutoutPose::Attack => Some(Self::new(
+                FighterClip::Attack
+                    .animation()
+                    .clip_duration()
+                    .as_secs_f32(),
+                ATTACK_ANTICIPATION_SECONDS,
+                ATTACK_IMPACT_SECONDS,
+                false,
+            )),
+            CutoutPose::HitReaction => Some(Self::new(
+                HURT_TOTAL_SECONDS,
+                HURT_ANTICIPATION_SECONDS,
+                HURT_IMPACT_SECONDS,
+                false,
+            )),
+            CutoutPose::Block | CutoutPose::Dodge => Some(Self::new(
+                RIG_REACTION_DURATION.as_secs_f32(),
+                BRACE_ANTICIPATION_SECONDS,
+                0.0,
+                false,
+            )),
+            CutoutPose::StepForward | CutoutPose::StepBack => Some(Self::new(
+                FOOTWORK_DURATION.as_secs_f32(),
+                STEP_ANTICIPATION_SECONDS,
+                FOOTWORK_DURATION.as_secs_f32() - STEP_ANTICIPATION_SECONDS - STEP_RECOVERY_SECONDS,
+                false,
+            )),
+            CutoutPose::Knockdown => Some(Self::new(
+                KNOCKDOWN_ANTICIPATION_SECONDS + KNOCKDOWN_IMPACT_SECONDS,
+                KNOCKDOWN_ANTICIPATION_SECONDS,
+                KNOCKDOWN_IMPACT_SECONDS,
+                true,
+            )),
+        }
+    }
+
+    /// `(anticipation_weight, main_weight)` blend over the two keyframes at
+    /// the current envelope time:
+    ///
+    /// - anticipation: idle → anticipation key, cubic ease-out;
+    /// - impact: anticipation key → main key, cubic ease-out (sharp);
+    /// - recovery: main key → idle, smooth ease-in-out;
+    /// - a finished holding envelope stays at the full main key.
+    ///
+    /// Reduced motion (#200) never sees these weights —
+    /// [`apply_cutout_poses`] pins the pose at the full main key for the
+    /// envelope's whole (identical) duration instead, preserving the
+    /// pre-envelope snap treatment; only presentation blending changes with
+    /// the preference, never timing.
+    fn weights(&self) -> (f32, f32) {
+        let t = self.timer.elapsed_secs();
+        if self.timer.is_finished() {
+            return if self.hold { (0.0, 1.0) } else { (0.0, 0.0) };
+        }
+        if t < self.anticipation {
+            (ease_out_cubic(t / self.anticipation), 0.0)
+        } else if t < self.anticipation + self.impact {
+            let s = ease_out_cubic((t - self.anticipation) / self.impact);
+            (1.0 - s, s)
+        } else {
+            let recovery = (self.timer.duration().as_secs_f32() - self.anticipation - self.impact)
+                .max(f32::EPSILON);
+            let r = (t - self.anticipation - self.impact) / recovery;
+            if self.hold {
+                (0.0, 1.0)
+            } else {
+                (0.0, 1.0 - ease_in_out_cubic(r.clamp(0.0, 1.0)))
+            }
+        }
+    }
+}
+
+fn ease_out_cubic(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+fn ease_in_out_cubic(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    if t < 0.5 {
+        4.0 * t * t * t
+    } else {
+        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+    }
+}
 
 fn set_cutout_pose(
     commands: &mut Commands,
@@ -412,33 +528,12 @@ fn set_cutout_pose(
     slot: &mut CutoutPose,
 ) {
     *slot = pose;
-    match pose {
-        CutoutPose::Idle | CutoutPose::Knockdown => {
-            commands.entity(entity).remove::<CutoutPoseTimer>();
+    match PoseEnvelope::for_pose(pose) {
+        Some(envelope) => {
+            commands.entity(entity).insert(envelope);
         }
-        CutoutPose::Attack => {
-            commands.entity(entity).insert(CutoutPoseTimer(Timer::new(
-                FighterClip::Attack.animation().clip_duration(),
-                TimerMode::Once,
-            )));
-        }
-        CutoutPose::HitReaction => {
-            commands.entity(entity).insert(CutoutPoseTimer(Timer::new(
-                FighterClip::Hurt.animation().clip_duration(),
-                TimerMode::Once,
-            )));
-        }
-        CutoutPose::StepForward | CutoutPose::StepBack => {
-            commands.entity(entity).insert(CutoutPoseTimer(Timer::new(
-                FOOTWORK_DURATION,
-                TimerMode::Once,
-            )));
-        }
-        CutoutPose::Block | CutoutPose::Dodge => {
-            commands.entity(entity).insert(CutoutPoseTimer(Timer::new(
-                RIG_REACTION_DURATION,
-                TimerMode::Once,
-            )));
+        None => {
+            commands.entity(entity).remove::<PoseEnvelope>();
         }
     }
 }
@@ -446,10 +541,13 @@ fn set_cutout_pose(
 /// Maps this frame's combat events onto clips: any strike attempt plays the
 /// attacker's attack (with a lunge), miss/reach failures make the defender
 /// avoid, Hit/Crit/Blocked plays the defender's reaction, and Defeated plays
-/// the defender's KO (which then freezes).
+/// the defender's KO (which then freezes). Movement events additionally
+/// advance [`ArenaStaging`] and tween the actor (and, on a pair slide, the
+/// opponent) to the new staged x.
 fn animate_combat_events(
     mut commands: Commands,
     mut events: MessageReader<CombatLogEvent>,
+    mut staging: ResMut<ArenaStaging>,
     mut players: SideAnimation<PlayerFighter, EnemyFighter>,
     mut enemies: SideAnimation<EnemyFighter, PlayerFighter>,
 ) {
@@ -512,7 +610,12 @@ fn animate_combat_events(
                 }
             }
             CombatEvent::Rested { .. } | CombatEvent::OutOfStamina => {}
-            CombatEvent::Moved { .. } => {
+            CombatEvent::Moved { to, .. } => {
+                // The staging update is combat truth and applies regardless
+                // of presentation state; the tweens below only pace it.
+                let old_actor_x = staging.x_of(actor);
+                let old_opponent_x = staging.x_of(actor.opponent());
+                staging.apply_move(actor, to);
                 let clip = match action {
                     CombatAction::StepBack => FighterClip::StepBack,
                     CombatAction::StepForward | CombatAction::LeapForward => {
@@ -531,25 +634,42 @@ fn animate_combat_events(
                     set_cutout_pose(&mut commands, entity, pose_kind, &mut pose);
                     commands
                         .entity(entity)
-                        .insert(FootworkStep::for_side(actor, clip));
+                        .insert(FootworkStep::new(old_actor_x, staging.x_of(actor)));
+                }
+                // A wall hit slides both fighters (see
+                // `ArenaStaging::apply_move`); the standing opponent glides
+                // to its new x with the same tween, no clip change.
+                let new_opponent_x = staging.x_of(actor.opponent());
+                if new_opponent_x != old_opponent_x
+                    && let Ok((entity, _, _, _, _)) = defender
+                {
+                    commands
+                        .entity(entity)
+                        .insert(FootworkStep::new(old_opponent_x, new_opponent_x));
                 }
             }
         }
     }
 }
 
-/// Returns timed rig-only poses to idle. The sprite-sheet clip system remains
-/// authoritative for root clip state; this only clears jointed body poses.
-fn tick_cutout_pose_timers(
+/// Advances every pose envelope and returns finished non-holding poses to
+/// idle. The sprite-sheet clip system remains authoritative for root clip
+/// state; this only clears jointed body poses. A holding envelope
+/// (Knockdown) keeps both its pose and its finished envelope so the fighter
+/// stays on the ground.
+/// A hit-stopped fighter (`fx::HitStop`, ~70 ms) freezes its pose envelope,
+/// sprite frames, and footwork mid-flight; the `Without` filters below
+/// simply skip ticking it. The opponent and the turn engine never freeze.
+fn tick_pose_envelopes(
     time: Res<Time>,
     mut commands: Commands,
-    mut query: Query<(Entity, &mut CutoutPose, &mut CutoutPoseTimer)>,
+    mut query: Query<(Entity, &mut CutoutPose, &mut PoseEnvelope), Without<super::fx::HitStop>>,
 ) {
-    for (entity, mut pose, mut timer) in &mut query {
-        timer.0.tick(time.delta());
-        if timer.0.is_finished() {
+    for (entity, mut pose, mut envelope) in &mut query {
+        envelope.timer.tick(time.delta());
+        if envelope.timer.is_finished() && !envelope.hold {
             *pose = CutoutPose::Idle;
-            commands.entity(entity).remove::<CutoutPoseTimer>();
+            commands.entity(entity).remove::<PoseEnvelope>();
         }
     }
 }
@@ -558,7 +678,7 @@ fn tick_cutout_pose_timers(
 /// sprite's atlas index.
 fn advance_animations(
     time: Res<Time>,
-    mut query: Query<(&mut SpriteAnimation, Option<&mut Sprite>)>,
+    mut query: Query<(&mut SpriteAnimation, Option<&mut Sprite>), Without<super::fx::HitStop>>,
 ) {
     for (mut anim, sprite) in &mut query {
         if let Some(mut sprite) = sprite
@@ -589,6 +709,16 @@ fn return_to_idle(mut query: Query<(&mut FighterClip, &mut SpriteAnimation, Opti
     }
 }
 
+/// Query data alias for the fighter-root state [`apply_cutout_poses`] reads:
+/// the pose, its envelope (if any), the rig (for mirroring), and whether the
+/// fighter is currently hit-stopped.
+type PosedFighter = (
+    &'static CutoutPose,
+    Option<&'static PoseEnvelope>,
+    Option<&'static CutoutRig>,
+    Has<super::fx::HitStop>,
+);
+
 /// Applies the current jointed pose to every body-part child, rebuilding from
 /// the part's neutral transform so gear parented beneath hands/arms/shields
 /// inherits the same motion without independent drift.
@@ -598,7 +728,9 @@ fn return_to_idle(mut query: Query<(&mut FighterClip, &mut SpriteAnimation, Opti
 /// root (#117), so the owning fighter is found by climbing the chain via
 /// [`cutout_rig_owner`] instead of assuming a single `ChildOf` hop.
 fn apply_cutout_poses(
-    fighters: Query<(&CutoutPose, Option<&CutoutRig>)>,
+    time: Res<Time>,
+    accessibility: Res<AccessibilityPreferences>,
+    fighters: Query<PosedFighter>,
     ancestry: Query<&ChildOf, With<CutoutPartMarker>>,
     mut parts: Query<(
         &CutoutPartMarker,
@@ -607,15 +739,35 @@ fn apply_cutout_poses(
         &mut Transform,
     )>,
 ) {
+    let breath_phase = if accessibility.reduced_motion {
+        None
+    } else {
+        Some(time.elapsed_secs())
+    };
     for (marker, child_of, rest, mut transform) in &mut parts {
         let root = cutout_rig_owner(child_of.parent(), |entity| {
             ancestry.get(entity).ok().map(|child_of| child_of.parent())
         });
-        let Ok((pose, rig)) = fighters.get(root) else {
+        let Ok((pose, envelope, rig, hit_stopped)) = fighters.get(root) else {
             continue;
         };
+        // A hit-stopped fighter is fully frozen: no breathing sway either.
+        let breath_phase = if hit_stopped { None } else { breath_phase };
+        // Reduced motion (#200) pins the pose at the full main keyframe for
+        // the envelope's whole duration — the pre-envelope treatment: state
+        // is readable immediately, no blended in-between frames. Timing is
+        // identical either way (the envelope timer ticks the same).
+        let weights = match (*pose, envelope, accessibility.reduced_motion) {
+            // Idle carries no keyframe: full weight would only zero out the
+            // breathing sway's fade factor below.
+            (CutoutPose::Idle, _, _) => (0.0, 0.0),
+            // Reduced motion, or a pose set without an envelope: pinned at
+            // the full main key, the pre-envelope treatment.
+            (_, Some(_), true) | (_, None, _) => (0.0, 1.0),
+            (_, Some(envelope), false) => envelope.weights(),
+        };
         let flip_x = rig.map(|rig| rig.flip_x).unwrap_or(false);
-        *transform = posed_part_transform(marker.kind, rest, *pose, flip_x);
+        *transform = posed_part_transform(marker.kind, rest, *pose, weights, breath_phase, flip_x);
     }
 }
 
@@ -625,13 +777,39 @@ struct JointedPartDelta {
     rotation: f32,
 }
 
+impl JointedPartDelta {
+    fn scaled(self, factor: f32) -> Self {
+        Self {
+            offset: self.offset * factor,
+            rotation: self.rotation * factor,
+        }
+    }
+
+    fn plus(self, other: Self) -> Self {
+        Self {
+            offset: self.offset + other.offset,
+            rotation: self.rotation + other.rotation,
+        }
+    }
+}
+
 fn posed_part_transform(
     kind: crate::cutout::CutoutPartKind,
     rest: &CutoutPartRestPose,
     pose: CutoutPose,
+    (anticipation_weight, main_weight): (f32, f32),
+    breath_phase: Option<f32>,
     flip_x: bool,
 ) -> Transform {
-    let mut delta = jointed_part_delta(kind, pose);
+    let mut delta = anticipation_part_delta(kind, pose)
+        .scaled(anticipation_weight)
+        .plus(jointed_part_delta(kind, pose).scaled(main_weight));
+    // The breathing sway rides on top of (and fades out against) any active
+    // pose so idle never pops when a pose starts or releases.
+    if let Some(phase) = breath_phase {
+        let pose_presence = (anticipation_weight + main_weight).clamp(0.0, 1.0);
+        delta = delta.plus(idle_breath_delta(kind, phase).scaled(1.0 - pose_presence));
+    }
     if flip_x {
         delta.offset.x = -delta.offset.x;
         delta.rotation = -delta.rotation;
@@ -714,22 +892,32 @@ fn jointed_part_delta(kind: crate::cutout::CutoutPartKind, pose: CutoutPose) -> 
             ThighFront | ShinFront | FootFront => (-3.0, -1.0, -0.06),
             ThighBack | ShinBack | FootBack => (2.0, 0.0, 0.08),
         },
+        // Ground sprawl re-derived chain-length-relatively for the phase-4
+        // folk proportions (the old deltas predated the #117 joint nesting
+        // and the leg-length pass, leaving limbs detached and the sprawl
+        // floating). Root-level parts (torso, head, hair, upper arms,
+        // thighs) are placed so the body lies along the rest-pose ground
+        // line (foot bottom ≈ 104.8 rig units below the root); chained
+        // parts (forearms, hands, shins, feet) get rotation-only deltas —
+        // their rest offsets already sit on the parent joint pivot, so
+        // transform propagation keeps them glued while `pivot_shift` turns
+        // the rotation into a joint bend.
         CutoutPose::Knockdown => match kind {
-            Torso => (-24.0, -60.0, 1.22),
-            Head => (-49.0, -57.0, 1.1),
-            Hair => (-52.0, -56.0, 1.1),
-            UpperArmFront => (-20.0, -52.0, 1.45),
-            ForearmFront => (-36.0, -51.0, 1.7),
-            HandFront => (-48.0, -49.0, 1.72),
-            UpperArmBack => (-7.0, -60.0, 0.86),
-            ForearmBack => (-16.0, -72.0, 1.08),
-            HandBack => (-26.0, -80.0, 1.08),
-            ThighFront => (19.0, -44.0, 1.0),
-            ShinFront => (35.0, -42.0, 1.16),
-            FootFront => (49.0, -38.0, 1.08),
-            ThighBack => (-7.0, -49.0, 0.74),
-            ShinBack => (4.0, -54.0, 0.64),
-            FootBack => (15.0, -55.0, 0.54),
+            Torso => (2.0, -67.4, 1.35),
+            Head => (-62.7, -120.8, 1.38),
+            Hair => (-83.8, -143.7, 1.40),
+            UpperArmBack => (-46.0, -134.1, -1.39),
+            ForearmBack => (0.0, 0.0, -0.2),
+            HandBack => (0.0, 0.0, -0.1),
+            UpperArmFront => (-78.4, -92.8, 1.37),
+            ForearmFront => (0.0, 0.0, 0.25),
+            HandFront => (0.0, 0.0, 0.15),
+            ThighFront => (-5.1, -47.0, 1.17),
+            ShinFront => (0.0, 0.0, -0.22),
+            FootFront => (0.0, 0.0, -0.8),
+            ThighBack => (20.5, -74.0, 1.2),
+            ShinBack => (0.0, 0.0, 0.35),
+            FootBack => (0.0, 0.0, -0.1),
         },
         CutoutPose::StepForward => match kind {
             UpperArmFront | ForearmFront | HandFront => (-4.0, 0.0, 0.22),
@@ -760,27 +948,125 @@ fn jointed_part_delta(kind: crate::cutout::CutoutPartKind, pose: CutoutPose) -> 
     }
 }
 
-/// Tweens lunging fighters along [`lunge_position`] and snaps them back to
-/// their anchor when the lunge ends. The lunge's own timer (paced by the
-/// attack clip's duration, see [`AttackLunge::for_side`]) ticks identically
-/// regardless of [`AccessibilityPreferences::reduced_motion`] -- only the
-/// peak displacement `lunge_position` computes changes; presentation timing
-/// never does.
+/// The anticipation keyframe of `pose` — what the envelope blends towards
+/// during its anticipation phase, before crossing to the main
+/// [`jointed_part_delta`] key at impact.
+///
+/// - Attack winds up: arms pulled back, slight counter-lean.
+/// - HitReaction overshoots the held recoil, so the settle reads as a sharp
+///   snap-then-ease.
+/// - Block/Dodge/Steps brace straight into the main key (the envelope's
+///   anticipation phase is the quick ramp, impact holds it).
+/// - Knockdown staggers upright before the fall.
+fn anticipation_part_delta(
+    kind: crate::cutout::CutoutPartKind,
+    pose: CutoutPose,
+) -> JointedPartDelta {
+    use crate::cutout::CutoutPartKind::*;
+    /// How far past the held recoil the hurt overshoot key reaches.
+    const HURT_OVERSHOOT: f32 = 1.22;
+    let (x, y, rotation) = match pose {
+        CutoutPose::Idle => (0.0, 0.0, 0.0),
+        CutoutPose::Attack => match kind {
+            UpperArmFront => (-5.0, 2.0, 0.42),
+            ForearmFront => (-9.0, 4.0, 0.55),
+            HandFront => (-11.0, 5.0, 0.3),
+            UpperArmBack => (2.0, 1.0, -0.2),
+            ForearmBack => (3.0, 2.0, -0.26),
+            HandBack => (3.0, 3.0, -0.12),
+            Torso => (-3.0, -1.0, 0.07),
+            Head | Hair => (-4.0, 0.0, 0.05),
+            ThighFront | ShinBack => (-1.0, -1.0, 0.06),
+            ThighBack | ShinFront => (1.0, 0.0, -0.05),
+            FootFront => (-1.0, 0.0, -0.02),
+            FootBack => (1.0, 0.0, 0.02),
+        },
+        CutoutPose::HitReaction => {
+            return jointed_part_delta(kind, pose).scaled(HURT_OVERSHOOT);
+        }
+        CutoutPose::Block | CutoutPose::Dodge | CutoutPose::StepForward | CutoutPose::StepBack => {
+            return jointed_part_delta(kind, pose);
+        }
+        // The stagger: a hard backward lean with flailing arms, still
+        // upright. Chained parts bend rotation-only (see the Knockdown main
+        // key in [`jointed_part_delta`]) so the limbs stay glued mid-fall.
+        CutoutPose::Knockdown => match kind {
+            Torso => (-10.0, -3.0, 0.3),
+            Head => (-16.0, -3.0, 0.34),
+            Hair => (-17.0, -2.0, 0.34),
+            UpperArmFront => (-8.0, 4.0, 0.5),
+            ForearmFront => (0.0, 0.0, 0.3),
+            HandFront => (0.0, 0.0, 0.2),
+            UpperArmBack => (-5.0, 3.0, -0.3),
+            ForearmBack => (0.0, 0.0, -0.25),
+            HandBack => (0.0, 0.0, -0.15),
+            ThighFront => (4.0, -2.0, -0.15),
+            ShinFront => (0.0, 0.0, -0.08),
+            FootFront => (0.0, 0.0, 0.05),
+            ThighBack => (-4.0, -2.0, 0.12),
+            ShinBack => (0.0, 0.0, 0.08),
+            FootBack => (0.0, 0.0, -0.04),
+        },
+    };
+    JointedPartDelta {
+        offset: Vec2::new(x, y),
+        rotation,
+    }
+}
+
+/// Angular frequency of the idle breathing sway, rad/s (~4 s per breath).
+const BREATH_FREQUENCY: f32 = 1.55;
+/// Peak torso rise of the breathing sway, in rig units — deliberately tiny.
+const BREATH_TORSO_AMPLITUDE: f32 = 0.8;
+
+/// The subtle idle breathing sway: torso and head rise and settle a hair,
+/// arms follow with a slight lag. Computed fresh from the elapsed-time
+/// `phase` every frame (never accumulated), so frozen virtual time (the
+/// baseline freeze fixtures) holds it perfectly still — the same pattern as
+/// `fx::drift_parallax_layers`. Reduced motion (#200) disables it entirely
+/// (the caller passes no phase); legs stay planted in either mode.
+fn idle_breath_delta(kind: crate::cutout::CutoutPartKind, phase: f32) -> JointedPartDelta {
+    use crate::cutout::CutoutPartKind::*;
+    let breath = (phase * BREATH_FREQUENCY).sin();
+    let lagged = (phase * BREATH_FREQUENCY - 0.6).sin();
+    let (x, y, rotation) = match kind {
+        Torso => (0.0, BREATH_TORSO_AMPLITUDE * breath, 0.0),
+        Head => (0.0, 1.1 * lagged, 0.006 * breath),
+        Hair => (0.0, 1.2 * lagged, 0.006 * breath),
+        UpperArmFront | ForearmFront | HandFront => (0.0, 0.5 * lagged, 0.008 * breath),
+        UpperArmBack | ForearmBack | HandBack => (0.0, 0.5 * lagged, -0.008 * breath),
+        ThighFront | ThighBack | ShinFront | ShinBack | FootFront | FootBack => (0.0, 0.0, 0.0),
+    };
+    JointedPartDelta {
+        offset: Vec2::new(x, y),
+        rotation,
+    }
+}
+
+/// Tweens lunging fighters along [`lunge_x`] and lands them back exactly on
+/// their *current* staged x when the lunge ends — endpoints are read live
+/// from [`ArenaStaging`], never a fixed anchor. The lunge's own timer
+/// (paced by the attack clip's duration, see [`AttackLunge::for_side`])
+/// ticks identically regardless of
+/// [`AccessibilityPreferences::reduced_motion`] -- only the peak
+/// displacement `lunge_x` computes changes; presentation timing never does.
 fn apply_lunges(
     time: Res<Time>,
     mut commands: Commands,
     accessibility: Res<AccessibilityPreferences>,
+    staging: Res<ArenaStaging>,
     mut query: Query<(Entity, &mut AttackLunge, &mut Transform)>,
 ) {
     for (entity, mut lunge, mut transform) in &mut query {
         lunge.timer.tick(time.delta());
+        let from_x = staging.x_of(lunge.side);
         if lunge.timer.is_finished() {
-            transform.translation = lunge.from;
+            transform.translation.x = from_x;
             commands.entity(entity).remove::<AttackLunge>();
         } else {
-            transform.translation = lunge_position(
-                lunge.from,
-                lunge.toward,
+            transform.translation.x = lunge_x(
+                from_x,
+                staging.x_of(lunge.side.opponent()),
                 lunge.timer.fraction(),
                 accessibility.reduced_motion,
             );
@@ -788,23 +1074,24 @@ fn apply_lunges(
     }
 }
 
-/// Applies presentation-only footwork and snaps fighters exactly back to
-/// their anchors at the end. Same timing invariant as [`apply_lunges`]:
-/// [`FOOTWORK_DURATION`] never changes with the preference, only the peak
-/// displacement.
+/// Applies the movement tweens and lands fighters exactly on their new
+/// staged x at the end. Same timing invariant as [`apply_lunges`]:
+/// [`FOOTWORK_DURATION`] never changes with the preference — under reduced
+/// motion the fighter simply sits on `to_x` from the first frame (see
+/// [`footwork_x`]), because the staged position is semantic state.
 fn apply_footwork(
     time: Res<Time>,
     mut commands: Commands,
     accessibility: Res<AccessibilityPreferences>,
-    mut query: Query<(Entity, &mut FootworkStep, &mut Transform)>,
+    mut query: Query<(Entity, &mut FootworkStep, &mut Transform), Without<super::fx::HitStop>>,
 ) {
     for (entity, mut footwork, mut transform) in &mut query {
         footwork.timer.tick(time.delta());
         if footwork.timer.is_finished() {
-            transform.translation = footwork.anchor;
+            transform.translation.x = footwork.to_x;
             commands.entity(entity).remove::<FootworkStep>();
         } else {
-            transform.translation = footwork.position(accessibility.reduced_motion);
+            transform.translation.x = footwork.x(accessibility.reduced_motion);
         }
     }
 }
@@ -814,7 +1101,7 @@ fn apply_footwork(
 pub(super) struct AnimationPlugin;
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum AnimationSet {
+pub(crate) enum AnimationSet {
     Apply,
 }
 
@@ -827,13 +1114,16 @@ impl Plugin for AnimationPlugin {
         // reduced-motion systems below usable in apps/tests built without
         // it, defaulting to full motion.
         app.init_resource::<AccessibilityPreferences>();
+        // Idempotent with ArenaPlugin's registration: the staging-driven
+        // systems below never observe a missing resource.
+        app.init_resource::<ArenaStaging>();
         app.add_systems(Startup, load_fighter_sheets).add_systems(
             Update,
             (
                 animate_combat_events,
                 advance_animations,
                 return_to_idle,
-                tick_cutout_pose_timers,
+                tick_pose_envelopes,
                 apply_cutout_poses,
                 apply_lunges,
                 apply_footwork,
@@ -849,7 +1139,9 @@ impl Plugin for AnimationPlugin {
 mod tests {
     use super::*;
     use crate::arena::ArenaPlugin;
+    use crate::arena::staging::{CLOSE_GAP, FAR_GAP, NEAR_GAP};
     use crate::character::{Attributes, Fighter};
+    use crate::combat::DuelDistance;
     use crate::core::{CorePlugin, GameState};
     use crate::creation::PlayerCharacter;
     use crate::cutout::{CutoutPartKind, CutoutPartMarker, CutoutPose};
@@ -914,41 +1206,55 @@ mod tests {
     }
 
     #[test]
-    fn the_lunge_arcs_out_and_back_between_the_anchors() {
-        let from = PLAYER_ANCHOR.translation;
-        let toward = ENEMY_ANCHOR.translation;
-        assert_eq!(lunge_position(from, toward, 0.0, false), from);
-        assert_eq!(lunge_position(from, toward, 1.0, false), from);
-        let peak = lunge_position(from, toward, 0.5, false);
-        assert!(peak.x > from.x, "the player lunges rightwards");
+    fn the_lunge_arcs_out_and_back_from_the_staged_position() {
+        let staging = ArenaStaging::starting();
+        let from = staging.player_x;
+        let toward = staging.enemy_x;
+        assert_eq!(lunge_x(from, toward, 0.0, false), from);
+        assert_eq!(lunge_x(from, toward, 1.0, false), from);
+        let peak = lunge_x(from, toward, 0.5, false);
+        assert!(peak > from, "the player lunges rightwards");
         assert!(
-            (peak.x - (from.x + (toward.x - from.x) * LUNGE_FRACTION)).abs() < 1e-3,
-            "peaks at the lunge fraction"
+            (peak - (from + staging.gap() * LUNGE_FRACTION)).abs() < 1e-3,
+            "peaks at the lunge fraction of the current staged gap"
         );
-        assert_eq!(peak.z, from.z, "z never changes");
-        let quarter = lunge_position(from, toward, 0.25, false);
-        assert!(from.x < quarter.x && quarter.x < peak.x, "smooth arc out");
+        let quarter = lunge_x(from, toward, 0.25, false);
+        assert!(from < quarter && quarter < peak, "smooth arc out");
+    }
+
+    #[test]
+    fn the_lunge_peak_scales_with_the_current_gap() {
+        let mut staging = ArenaStaging::starting();
+        let close_peak = lunge_x(staging.player_x, staging.enemy_x, 0.5, false);
+        assert!((close_peak - staging.player_x - CLOSE_GAP * LUNGE_FRACTION).abs() < 1e-3);
+        staging.apply_move(CombatSide::Player, DuelDistance::FAR);
+        let far_peak = lunge_x(staging.player_x, staging.enemy_x, 0.5, false);
+        assert!(
+            (far_peak - staging.player_x - FAR_GAP * LUNGE_FRACTION).abs() < 1e-3,
+            "a wider band lunges proportionally further"
+        );
     }
 
     #[test]
     fn reduced_motion_shrinks_the_lunge_to_the_documented_nudge_on_the_same_arc() {
-        let from = PLAYER_ANCHOR.translation;
-        let toward = ENEMY_ANCHOR.translation;
+        let staging = ArenaStaging::starting();
+        let from = staging.player_x;
+        let toward = staging.enemy_x;
         assert_eq!(
-            lunge_position(from, toward, 0.0, true),
+            lunge_x(from, toward, 0.0, true),
             from,
-            "endpoints stay exactly on the anchor in either mode"
+            "endpoints stay exactly on the staged x in either mode"
         );
-        assert_eq!(lunge_position(from, toward, 1.0, true), from);
-        let peak = lunge_position(from, toward, 0.5, true);
-        assert!(peak.x > from.x, "still lunges towards the opponent");
+        assert_eq!(lunge_x(from, toward, 1.0, true), from);
+        let peak = lunge_x(from, toward, 0.5, true);
+        assert!(peak > from, "still lunges towards the opponent");
         assert!(
-            (peak.x - from.x - REDUCED_MOTION_DISPLACEMENT).abs() < 1e-3,
+            (peak - from - REDUCED_MOTION_DISPLACEMENT).abs() < 1e-3,
             "peaks at exactly the documented reduced-motion nudge, not the lunge fraction"
         );
-        let full_peak = lunge_position(from, toward, 0.5, false);
+        let full_peak = lunge_x(from, toward, 0.5, false);
         assert!(
-            peak.x < full_peak.x,
+            peak < full_peak,
             "reduced motion is a strictly smaller displacement than full motion"
         );
     }
@@ -1094,14 +1400,14 @@ mod tests {
             high_contrast: false,
         });
         write_event(&mut app, CombatSide::Player, CombatEvent::Missed);
-        let anchor_x = PLAYER_ANCHOR.translation.x;
+        let staged_x = app.world().resource::<ArenaStaging>().player_x;
         let half_clip = FighterClip::Attack
             .animation()
             .clip_duration()
             .as_secs_f32()
             / 2.0;
         advance(&mut app, half_clip);
-        let offset = (player_transform_x(&mut app) - anchor_x).abs();
+        let offset = (player_transform_x(&mut app) - staged_x).abs();
         assert!(
             offset <= REDUCED_MOTION_DISPLACEMENT + 0.5,
             "the lunge stays within the documented reduced-motion nudge: {offset}"
@@ -1112,14 +1418,14 @@ mod tests {
     fn toggling_reduced_motion_on_mid_lunge_shrinks_the_fighter_offset_immediately() {
         let mut app = test_app();
         write_event(&mut app, CombatSide::Player, CombatEvent::Missed);
-        let anchor_x = PLAYER_ANCHOR.translation.x;
+        let staged_x = app.world().resource::<ArenaStaging>().player_x;
         let half_clip = FighterClip::Attack
             .animation()
             .clip_duration()
             .as_secs_f32()
             / 2.0;
         advance(&mut app, half_clip);
-        let full_offset = (player_transform_x(&mut app) - anchor_x).abs();
+        let full_offset = (player_transform_x(&mut app) - staged_x).abs();
         assert!(
             full_offset > REDUCED_MOTION_DISPLACEMENT,
             "full motion lunges past the reduced-motion nudge: {full_offset}"
@@ -1130,7 +1436,7 @@ mod tests {
             high_contrast: false,
         });
         advance(&mut app, 0.001);
-        let reduced_offset = (player_transform_x(&mut app) - anchor_x).abs();
+        let reduced_offset = (player_transform_x(&mut app) - staged_x).abs();
         assert!(
             reduced_offset <= REDUCED_MOTION_DISPLACEMENT + 0.5,
             "flipping the preference mid-lunge snaps the fighter's offset down \
@@ -1223,6 +1529,11 @@ mod tests {
             part_transform::<PlayerFighter>(&mut app, CutoutPartKind::ForearmFront);
 
         write_event(&mut app, CombatSide::Player, CombatEvent::Missed);
+        // Mid-envelope: past the wind-up, inside the strike extension.
+        advance(
+            &mut app,
+            ATTACK_ANTICIPATION_SECONDS + ATTACK_IMPACT_SECONDS,
+        );
 
         let attacking_hand = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::HandFront);
         let attacking_forearm =
@@ -1234,6 +1545,210 @@ mod tests {
         assert_ne!(
             attacking_forearm.rotation, neutral_forearm.rotation,
             "forearm rotates into the attack pose"
+        );
+    }
+
+    #[test]
+    fn the_attack_envelope_winds_up_back_before_striking_forward() {
+        let mut app = test_app();
+        let rest_x = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::HandFront)
+            .translation
+            .x;
+        write_event(&mut app, CombatSide::Player, CombatEvent::Missed);
+
+        // Mid-anticipation: the striking hand pulls back behind its rest x.
+        advance(&mut app, ATTACK_ANTICIPATION_SECONDS * 0.5);
+        let windup_x = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::HandFront)
+            .translation
+            .x;
+        assert!(
+            windup_x < rest_x - 3.0,
+            "anticipation winds the hand back: {windup_x} vs rest {rest_x}"
+        );
+
+        // End of the impact phase: full strike extension, exactly when the
+        // lunge peaks (0.2 s = half the 0.4 s attack clip).
+        advance(
+            &mut app,
+            ATTACK_ANTICIPATION_SECONDS * 0.5 + ATTACK_IMPACT_SECONDS,
+        );
+        let strike_x = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::HandFront)
+            .translation
+            .x;
+        assert!(
+            strike_x > rest_x + 10.0,
+            "impact extends the hand forward: {strike_x} vs rest {rest_x}"
+        );
+
+        // Recovery releases back to idle by the end of the attack clip.
+        advance(&mut app, 0.15);
+        advance(&mut app, 0.15);
+        assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::Idle);
+    }
+
+    #[test]
+    fn the_attack_envelope_spans_exactly_the_attack_clip_and_lunge() {
+        let envelope = PoseEnvelope::for_pose(CutoutPose::Attack).expect("attack has an envelope");
+        assert_eq!(
+            envelope.timer.duration(),
+            FighterClip::Attack.animation().clip_duration(),
+            "pose envelope, attack clip, and lunge all share one duration"
+        );
+        assert!(
+            (envelope.anticipation + envelope.impact
+                - envelope.timer.duration().as_secs_f32() / 2.0)
+                .abs()
+                < 1e-6,
+            "the impact phase ends exactly at the lunge peak (progress 0.5)"
+        );
+    }
+
+    #[test]
+    fn the_hurt_envelope_overshoots_the_recoil_then_settles() {
+        let mut app = test_app();
+        let rest_x = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso)
+            .translation
+            .x;
+        write_event(&mut app, CombatSide::Enemy, CombatEvent::Hit { dmg: 4 });
+
+        // The landed hit first freezes the defender for the hit-stop
+        // window; the recoil envelope only starts ticking once it lifts.
+        advance(&mut app, crate::arena::fx::HIT_STOP_SECONDS);
+        advance(&mut app, 0.001);
+        advance(&mut app, HURT_ANTICIPATION_SECONDS);
+        let overshoot_x = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso)
+            .translation
+            .x;
+        advance(&mut app, HURT_IMPACT_SECONDS);
+        let settled_x = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso)
+            .translation
+            .x;
+        assert!(
+            overshoot_x < settled_x && settled_x < rest_x,
+            "the recoil snaps past the held key then eases back onto it: \
+             overshoot {overshoot_x}, settled {settled_x}, rest {rest_x}"
+        );
+    }
+
+    #[test]
+    fn a_landed_hit_freezes_only_the_struck_fighters_presentation_briefly() {
+        let mut app = test_app();
+        write_event(&mut app, CombatSide::Enemy, CombatEvent::Hit { dmg: 4 });
+
+        // Inside the hit-stop window: the struck player's reaction pose is
+        // frozen at rest while the attacking enemy's envelope advances.
+        advance(&mut app, 0.03);
+        let frozen_a = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso);
+        let attacker_a = part_transform::<EnemyFighter>(&mut app, CutoutPartKind::HandFront);
+        advance(&mut app, 0.03);
+        let frozen_b = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso);
+        let attacker_b = part_transform::<EnemyFighter>(&mut app, CutoutPartKind::HandFront);
+        assert_eq!(
+            frozen_a, frozen_b,
+            "the struck fighter's pose does not progress during the hit-stop"
+        );
+        assert_ne!(
+            attacker_a, attacker_b,
+            "the attacker's envelope keeps playing through the defender's hit-stop"
+        );
+
+        // After the window the freeze lifts and the recoil plays.
+        advance(&mut app, crate::arena::fx::HIT_STOP_SECONDS);
+        advance(&mut app, 0.05);
+        let recoiling = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso);
+        assert_ne!(frozen_b, recoiling, "the recoil starts once the stop ends");
+    }
+
+    #[test]
+    fn misses_and_blocks_do_not_hit_stop_the_defender() {
+        for event in [CombatEvent::Missed, CombatEvent::Blocked { dmg: 2 }] {
+            let mut app = test_app();
+            write_event(&mut app, CombatSide::Enemy, event);
+            let stopped = app
+                .world_mut()
+                .query_filtered::<(), (With<crate::arena::fx::HitStop>, With<PlayerFighter>)>()
+                .iter(app.world())
+                .count();
+            assert_eq!(stopped, 0, "{event:?} must not freeze the defender");
+        }
+    }
+
+    #[test]
+    fn a_knockdown_staggers_then_falls_and_holds_the_ground_sprawl() {
+        let mut app = test_app();
+        write_event(&mut app, CombatSide::Player, CombatEvent::Defeated);
+
+        // Past the whole envelope: the sprawl holds instead of returning to
+        // idle, and the pose stays bit-identical from then on.
+        advance(&mut app, 0.3);
+        advance(&mut app, 0.3);
+        assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::Knockdown);
+        let held = part_transform::<EnemyFighter>(&mut app, CutoutPartKind::Torso);
+        advance(&mut app, 0.5);
+        assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::Knockdown);
+        assert_eq!(
+            part_transform::<EnemyFighter>(&mut app, CutoutPartKind::Torso),
+            held,
+            "the finished knockdown envelope holds the sprawl exactly"
+        );
+    }
+
+    #[test]
+    fn reduced_motion_pins_poses_at_the_full_key_with_identical_timing() {
+        let mut app = test_app();
+        app.insert_resource(AccessibilityPreferences {
+            reduced_motion: true,
+            high_contrast: false,
+        });
+        write_event(&mut app, CombatSide::Enemy, CombatEvent::Hit { dmg: 4 });
+
+        // Immediately at the full key: no blended in-between frames.
+        advance(&mut app, 0.001);
+        let early = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso);
+        advance(
+            &mut app,
+            HURT_ANTICIPATION_SECONDS + HURT_IMPACT_SECONDS / 2.0,
+        );
+        let mid = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso);
+        assert_eq!(
+            early, mid,
+            "reduced motion never eases through intermediate pose frames"
+        );
+
+        // The envelope still times out on the exact same clock and returns
+        // the pose to idle.
+        advance(&mut app, HURT_TOTAL_SECONDS / 2.0 + 0.05);
+        advance(&mut app, HURT_TOTAL_SECONDS / 2.0 + 0.05);
+        assert_eq!(rig_pose::<PlayerFighter>(&mut app), CutoutPose::Idle);
+    }
+
+    #[test]
+    fn idle_fighters_breathe_only_under_full_motion_and_legs_stay_planted() {
+        let mut app = test_app();
+        advance(&mut app, 0.4);
+        let torso_a = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso);
+        let foot_a = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::FootFront);
+        advance(&mut app, 0.9);
+        let torso_b = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso);
+        let foot_b = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::FootFront);
+        assert_ne!(
+            torso_a.translation.y, torso_b.translation.y,
+            "the idle torso breathes between two distinct sway phases"
+        );
+        assert_eq!(foot_a, foot_b, "feet stay planted through the sway");
+
+        let mut app = test_app();
+        app.insert_resource(AccessibilityPreferences {
+            reduced_motion: true,
+            high_contrast: false,
+        });
+        advance(&mut app, 0.4);
+        let torso_a = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso);
+        advance(&mut app, 0.9);
+        let torso_b = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso);
+        assert_eq!(
+            torso_a, torso_b,
+            "reduced motion holds the idle rig perfectly still"
         );
     }
 
@@ -1313,69 +1828,150 @@ mod tests {
     }
 
     #[test]
-    fn the_lunge_moves_the_attacker_out_and_snaps_back_on_its_anchor() {
+    fn the_lunge_moves_the_attacker_out_and_ends_on_the_staged_x() {
         // Pure-logic pass over the ECS pieces: build a lunge, tick it midway
         // and to the end through the component API.
+        let staging = ArenaStaging::starting();
         let mut lunge = AttackLunge::for_side(CombatSide::Player);
         let half = lunge.timer.duration() / 2;
         lunge.timer.tick(half);
-        let mid = lunge_position(lunge.from, lunge.toward, lunge.timer.fraction(), false);
-        assert!(
-            mid.x > PLAYER_ANCHOR.translation.x,
-            "moved towards the enemy"
+        let mid = lunge_x(
+            staging.x_of(lunge.side),
+            staging.x_of(lunge.side.opponent()),
+            lunge.timer.fraction(),
+            false,
         );
+        assert!(mid > staging.player_x, "moved towards the enemy");
         lunge.timer.tick(half);
         assert!(lunge.timer.is_finished(), "lunge ends with the attack clip");
     }
 
     #[test]
-    fn footwork_positions_ease_out_and_restore_the_anchor() {
-        let anchor = PLAYER_ANCHOR.translation;
-        assert_eq!(footwork_position(anchor, 1.0, 0.0, false), anchor);
-        assert_eq!(footwork_position(anchor, 1.0, 1.0, false), anchor);
+    fn footwork_eases_out_from_the_old_staged_x_to_the_new_one() {
+        let (from, to) = (-30.0, -140.0);
+        assert_eq!(footwork_x(from, to, 0.0, false), from);
+        assert_eq!(
+            footwork_x(from, to, 1.0, false),
+            to,
+            "lands exactly on the new x"
+        );
 
-        let quarter = footwork_position(anchor, 1.0, 0.25, false);
-        let half = footwork_position(anchor, 1.0, 0.5, false);
-        let three_quarters = footwork_position(anchor, 1.0, 0.75, false);
-        assert!(quarter.x > anchor.x, "forward footwork starts rightward");
+        let quarter = footwork_x(from, to, 0.25, false);
+        let half = footwork_x(from, to, 0.5, false);
+        let three_quarters = footwork_x(from, to, 0.75, false);
         assert!(
-            (half.x - (anchor.x + FOOTWORK_DISTANCE)).abs() < 1e-3,
-            "midpoint reaches the configured step distance"
+            from > quarter && quarter > half && half > three_quarters && three_quarters > to,
+            "the tween moves monotonically towards the new x, never back"
         );
         assert!(
-            three_quarters.x > anchor.x && three_quarters.x < half.x,
-            "the second half returns towards the anchor"
-        );
-        assert_eq!(half.z, anchor.z, "z never changes");
-    }
-
-    #[test]
-    fn reduced_motion_shrinks_footwork_to_the_documented_nudge() {
-        let anchor = PLAYER_ANCHOR.translation;
-        assert_eq!(footwork_position(anchor, 1.0, 0.0, true), anchor);
-        assert_eq!(footwork_position(anchor, 1.0, 1.0, true), anchor);
-        let half = footwork_position(anchor, 1.0, 0.5, true);
-        assert!(
-            (half.x - (anchor.x + REDUCED_MOTION_DISPLACEMENT)).abs() < 1e-3,
-            "midpoint reaches exactly the documented reduced-motion nudge"
-        );
-        let full_half = footwork_position(anchor, 1.0, 0.5, false);
-        assert!(
-            half.x < full_half.x,
-            "reduced motion is a strictly smaller displacement than full motion"
+            (half - from).abs() > (to - from).abs() / 2.0,
+            "ease-out covers more than half the distance by the midpoint"
         );
     }
 
     #[test]
-    fn enemy_forward_footwork_mirrors_towards_the_player() {
-        let mut player = FootworkStep::for_side(CombatSide::Player, FighterClip::StepForward);
-        let mut enemy = FootworkStep::for_side(CombatSide::Enemy, FighterClip::StepForward);
-        player.timer.tick(player.timer.duration() / 2);
-        enemy.timer.tick(enemy.timer.duration() / 2);
-        let player_mid = player.position(false);
-        let enemy_mid = enemy.position(false);
-        assert!(player_mid.x > PLAYER_ANCHOR.translation.x);
-        assert!(enemy_mid.x < ENEMY_ANCHOR.translation.x);
+    fn reduced_motion_footwork_snaps_near_instantly_to_the_new_staged_x() {
+        // Position is semantic state (#200): reduced motion never shortens
+        // the step -- it lands the fighter on the new x immediately.
+        let (from, to) = (-30.0, -140.0);
+        for progress in [0.0, 0.1, 0.5, 1.0] {
+            assert_eq!(footwork_x(from, to, progress, true), to);
+        }
+    }
+
+    /// The player fighter's staged x from the app's [`ArenaStaging`].
+    fn staged_player_x(app: &App) -> f32 {
+        app.world().resource::<ArenaStaging>().player_x
+    }
+
+    /// Advances well past one [`FOOTWORK_DURATION`] in steps below virtual
+    /// time's default `max_delta` clamp (0.25 s), so the whole duration
+    /// actually elapses instead of being capped to one clamped frame.
+    fn advance_past_footwork(app: &mut App) {
+        let step = FOOTWORK_DURATION.as_secs_f32() / 2.0 + 0.01;
+        advance(app, step);
+        advance(app, step);
+    }
+
+    /// The enemy fighter's current transform x.
+    fn enemy_transform_x(app: &mut App) -> f32 {
+        app.world_mut()
+            .query_filtered::<&Transform, With<EnemyFighter>>()
+            .single(app.world())
+            .expect("enemy fighter exists")
+            .translation
+            .x
+    }
+
+    #[test]
+    fn a_movement_event_tweens_only_the_actor_to_its_new_staged_x() {
+        let mut app = test_app();
+        let start = ArenaStaging::starting();
+        app.world_mut().write_message(CombatLogEvent {
+            actor: CombatSide::Player,
+            action: crate::combat::CombatAction::StepBack,
+            event: CombatEvent::Moved {
+                from: DuelDistance::CLOSE,
+                to: DuelDistance::NEAR,
+            },
+        });
+        app.update();
+        advance_past_footwork(&mut app);
+
+        assert_eq!(
+            player_transform_x(&mut app),
+            start.enemy_x - NEAR_GAP,
+            "the actor lands exactly gap(to) from the standing opponent"
+        );
+        assert_eq!(
+            enemy_transform_x(&mut app),
+            start.enemy_x,
+            "the standing opponent never moves without a wall hit"
+        );
+        assert_ne!(
+            player_transform_x(&mut app),
+            start.player_x,
+            "the fighter does not return to where it stood before"
+        );
+    }
+
+    #[test]
+    fn a_wall_hit_slides_both_fighters_keeping_the_gap_exact() {
+        let mut app = test_app();
+        // close -> near: player retreats to 110 - 250 = -140.
+        app.world_mut().write_message(CombatLogEvent {
+            actor: CombatSide::Player,
+            action: crate::combat::CombatAction::StepBack,
+            event: CombatEvent::Moved {
+                from: DuelDistance::CLOSE,
+                to: DuelDistance::NEAR,
+            },
+        });
+        app.update();
+        advance_past_footwork(&mut app);
+        // near -> far: the raw target 110 - 360 = -250 crosses the left
+        // wall; the residual slides the pair right together.
+        app.world_mut().write_message(CombatLogEvent {
+            actor: CombatSide::Player,
+            action: crate::combat::CombatAction::StepBack,
+            event: CombatEvent::Moved {
+                from: DuelDistance::NEAR,
+                to: DuelDistance::FAR,
+            },
+        });
+        app.update();
+        advance_past_footwork(&mut app);
+
+        let player_x = player_transform_x(&mut app);
+        let enemy_x = enemy_transform_x(&mut app);
+        assert_eq!(player_x, crate::arena::staging::STAGE_MIN_X);
+        assert_eq!(enemy_x - player_x, FAR_GAP, "the gap stays exact");
+        let staging = *app.world().resource::<ArenaStaging>();
+        assert_eq!(
+            (player_x, enemy_x),
+            (staging.player_x, staging.enemy_x),
+            "both transforms settle exactly on the staged positions"
+        );
     }
 
     #[test]
@@ -1403,7 +1999,7 @@ mod tests {
     }
 
     #[test]
-    fn reduced_motion_shrinks_footwork_on_the_actual_fighter() {
+    fn reduced_motion_footwork_still_lands_the_fighter_on_the_new_staged_x() {
         let mut app = test_app();
         app.insert_resource(AccessibilityPreferences {
             reduced_motion: true,
@@ -1411,26 +2007,31 @@ mod tests {
         });
         app.world_mut().write_message(CombatLogEvent {
             actor: CombatSide::Player,
-            action: crate::combat::CombatAction::StepForward,
+            action: crate::combat::CombatAction::StepBack,
             event: CombatEvent::Moved {
-                from: crate::combat::DuelDistance::NEAR,
-                to: crate::combat::DuelDistance::CLOSE,
+                from: DuelDistance::CLOSE,
+                to: DuelDistance::NEAR,
             },
         });
         app.update();
-        let anchor_x = PLAYER_ANCHOR.translation.x;
-        advance(&mut app, FOOTWORK_DURATION.as_secs_f32() / 2.0);
-        let offset = (player_transform_x(&mut app) - anchor_x).abs();
-        assert!(
-            offset <= REDUCED_MOTION_DISPLACEMENT + 0.5,
-            "footwork stays within the documented reduced-motion nudge: {offset}"
+        let staged_x = staged_player_x(&app);
+        assert_ne!(
+            staged_x,
+            ArenaStaging::starting().player_x,
+            "the staged position itself moved -- position is semantic state"
         );
-
-        advance(&mut app, FOOTWORK_DURATION.as_secs_f32() / 2.0 + 0.01);
+        advance(&mut app, 0.001);
         assert_eq!(
             player_transform_x(&mut app),
-            anchor_x,
-            "the step still snaps exactly back to the anchor when it ends"
+            staged_x,
+            "reduced motion snaps near-instantly to the new staged x"
+        );
+
+        advance_past_footwork(&mut app);
+        assert_eq!(
+            player_transform_x(&mut app),
+            staged_x,
+            "the fighter stays on the new staged x after the tween window"
         );
     }
 
@@ -1470,6 +2071,105 @@ mod tests {
     fn without_an_asset_server_the_sheets_count_as_ready() {
         let sheets = FighterSpriteSheets::default();
         assert!(sheets.ready(None), "headless apps never wait on assets");
+    }
+
+    /// Ignored art-iteration helper (the phase-4 `dump_template_geometry`
+    /// pattern): dumps the *posed* part transforms of the player rig at
+    /// interesting envelope moments as JSON, so external compositor tooling
+    /// can render pose previews from the real runtime part art. Run with:
+    /// `POSE_DUMP_DIR=/tmp/dump cargo test --lib \
+    ///  arena::animation::tests::dump_posed_geometry -- --ignored`
+    #[test]
+    #[ignore]
+    fn dump_posed_geometry() {
+        let Ok(dir) = std::env::var("POSE_DUMP_DIR") else {
+            return;
+        };
+        std::fs::create_dir_all(&dir).unwrap();
+        let cases: Vec<(&str, Option<CombatEvent>, f32)> = vec![
+            ("idle", None, 1.0),
+            (
+                "attack_windup",
+                Some(CombatEvent::Missed),
+                ATTACK_ANTICIPATION_SECONDS,
+            ),
+            (
+                "attack_impact",
+                Some(CombatEvent::Missed),
+                ATTACK_ANTICIPATION_SECONDS + ATTACK_IMPACT_SECONDS,
+            ),
+            (
+                "hurt_overshoot",
+                Some(CombatEvent::Hit { dmg: 4 }),
+                HURT_ANTICIPATION_SECONDS,
+            ),
+            ("block", Some(CombatEvent::Blocked { dmg: 2 }), 0.2),
+            (
+                "knockdown_stagger",
+                Some(CombatEvent::Defeated),
+                KNOCKDOWN_ANTICIPATION_SECONDS,
+            ),
+            ("knockdown_hold", Some(CombatEvent::Defeated), 1.0),
+        ];
+        for (name, event, at) in cases {
+            let mut app = test_app();
+            match event {
+                // Hurt/block/knockdown read on the defender: strike as the
+                // enemy so the *player* rig (unflipped) shows the reaction.
+                Some(event @ (CombatEvent::Hit { .. } | CombatEvent::Blocked { .. })) => {
+                    write_event(&mut app, CombatSide::Enemy, event);
+                }
+                Some(CombatEvent::Defeated) => {
+                    write_event(&mut app, CombatSide::Enemy, CombatEvent::Defeated);
+                }
+                Some(event) => write_event(&mut app, CombatSide::Player, event),
+                None => {}
+            }
+            // Split the advance so no step exceeds virtual time's clamp.
+            advance(&mut app, at / 2.0);
+            advance(&mut app, at / 2.0);
+
+            let world = app.world_mut();
+            let parent_kind_of: std::collections::HashMap<Entity, CutoutPartKind> = world
+                .query::<(Entity, &CutoutPartMarker)>()
+                .iter(world)
+                .map(|(entity, marker)| (entity, marker.kind))
+                .collect();
+            let player = world
+                .query_filtered::<Entity, With<PlayerFighter>>()
+                .single(world)
+                .expect("player exists");
+            let parent_of: std::collections::HashMap<Entity, Entity> = world
+                .query_filtered::<(Entity, &ChildOf), With<CutoutPartMarker>>()
+                .iter(world)
+                .map(|(entity, child_of)| (entity, child_of.parent()))
+                .collect();
+            let mut parts: Vec<serde_json::Value> = Vec::new();
+            let mut query =
+                world.query::<(Entity, &CutoutPartMarker, &CutoutPartRestPose, &Transform)>();
+            for (entity, marker, rest, transform) in query.iter(world) {
+                if cutout_rig_owner(entity, |e| parent_of.get(&e).copied()) != player {
+                    continue;
+                }
+                let parent = parent_of
+                    .get(&entity)
+                    .and_then(|parent| parent_kind_of.get(parent))
+                    .map(|kind| format!("{kind:?}"));
+                parts.push(serde_json::json!({
+                    "kind": format!("{:?}", marker.kind),
+                    "parent": parent,
+                    "offset": [transform.translation.x, transform.translation.y],
+                    "rotation": transform.rotation.to_euler(EulerRot::XYZ).2,
+                    "z_offset": transform.translation.z,
+                    "size": [rest.size.x, rest.size.y],
+                }));
+            }
+            std::fs::write(
+                format!("{dir}/{name}.json"),
+                serde_json::to_string_pretty(&parts).unwrap(),
+            )
+            .unwrap();
+        }
     }
 
     #[test]

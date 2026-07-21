@@ -134,6 +134,8 @@ impl Plugin for CombatPlugin {
             .add_plugins(FocusNavigationPlugin)
             .init_resource::<ExtraDescriptors>()
             .init_resource::<action_palette::PhonePaletteState>()
+            .init_resource::<action_palette::ActionPictograms>()
+            .add_systems(Startup, action_palette::load_action_pictograms)
             .add_message::<PlayerActionEvent>()
             .add_message::<CombatLogEvent>()
             .add_systems(OnEnter(GameState::Fight), (setup_combat, hud::spawn_hud))
@@ -163,6 +165,7 @@ impl Plugin for CombatPlugin {
                     hud::collect_log_lines,
                     action_palette::update_button_backgrounds,
                     action_palette::update_action_buttons,
+                    action_palette::pulse_distance_chip_on_reach_hover,
                     hud::apply_responsive_hud_layout,
                     action_palette::handle_category_buttons.after(FocusNavigationSet),
                     action_palette::rebuild_action_bar_on_breakpoint_change,
@@ -174,6 +177,7 @@ impl Plugin for CombatPlugin {
                         hud::update_labels,
                         hud::update_log_text,
                         hud::sync_hud_palette,
+                        hud::sync_hud_panel_alpha,
                     ),
                 )
                     .chain()
@@ -277,8 +281,9 @@ fn init_turn(
 }
 
 /// Debug-only keyboard mapping (the HUD buttons are the real input): 1–4 are
-/// strikes/guard/rest, and 5–7 are movement. Only listens on the player's
-/// turn while the duel is running.
+/// strikes/guard/rest, 5–7 are movement, and 8 is the normal strike
+/// (appended so the long-standing 1–7 bindings keep their meanings). Only
+/// listens on the player's turn while the duel is running.
 #[cfg(debug_assertions)]
 fn player_input(
     keys: Res<ButtonInput<KeyCode>>,
@@ -306,6 +311,7 @@ fn player_input(
         (KeyCode::Digit5, CombatAction::StepForward),
         (KeyCode::Digit6, CombatAction::StepBack),
         (KeyCode::Digit7, CombatAction::LeapForward),
+        (KeyCode::Digit8, CombatAction::NormalStrike),
     ];
     for (key, action) in mappings {
         if keys.just_pressed(key) {

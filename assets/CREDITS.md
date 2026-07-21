@@ -28,6 +28,16 @@ The runtime PNG parts below are direct crops derived from the credited source
 sheets above so the Bevy cutout rig can show production-intent art in creator,
 shop, and arena flows without introducing a new production generator pipeline.
 
+The human, strigoi, and gear runtime albedos additionally carry the
+deterministic, idempotent phase-4 folk surface pass applied by
+`scripts/stylize-fighter-parts.py` (uniform dark-walnut outline ink, flat
+folk-black interior ink, flattened highlights, restrained tone quantization;
+gear receives the outline/ink harmonization only). The pass preserves each
+part's dimensions and alpha silhouette byte-for-byte, and every companion
+mask/normal/shadow map is regenerated from the stylized albedo with the
+owning generator's derivations, so provenance and rights remain those of the
+credited sources below. The zmeu set is deliberately untouched.
+
 ### Human runtime parts
 
 The Haiduc, Cioban, Voinic, Ucenic Solomonar, and shared production directories
@@ -225,6 +235,7 @@ pending replacement by bespoke final art.
 | `sprites/balaur.png` | Balaur cu trei capete | self-generated | CC0 1.0 |
 | `sprites/zmeu.png` | Zmeu | self-generated | CC0 1.0 |
 | `sprites/zmeul_zmeilor.png` | Zmeul Zmeilor | self-generated | CC0 1.0 |
+| `sprites/contact_shadow.png` | Soft ground contact shadow ellipse (arena FX, `scripts/generate-fx-sprites.py`) | self-generated | CC0 1.0 |
 
 ## UI panel border (`assets/ui/`)
 
@@ -256,6 +267,26 @@ by `scripts/generate-shop-icons.py` for this project (issue #73), following
 | `ui/icon_torso.png` | Torso armor slot icon | self-generated | CC0 1.0 |
 | `ui/icon_head.png` | Head armor slot icon | self-generated | CC0 1.0 |
 | `ui/icon_feet.png` | Feet armor slot icon | self-generated | CC0 1.0 |
+
+## Combat action pictograms (`assets/ui/pictograms/`)
+
+The combat action pictograms below are **self-generated placeholder art**
+produced by `scripts/generate-pictograms.py` for this project (combat
+redesign §3, `docs/combat-redesign-proposal.md`), following
+`docs/art-direction.md`. One 32x32 glyph per combat action descriptor id.
+They are dedicated to the public domain (**CC0 1.0**,
+<https://creativecommons.org/publicdomain/zero/1.0/>).
+
+| File | Depicts | Source | License |
+| --- | --- | --- | --- |
+| `ui/pictograms/quick-strike.png` | Quick strike: two motion slashes | self-generated | CC0 1.0 |
+| `ui/pictograms/normal-strike.png` | Normal strike: straight punch | self-generated | CC0 1.0 |
+| `ui/pictograms/heavy-strike.png` | Heavy strike: downward club arc | self-generated | CC0 1.0 |
+| `ui/pictograms/block.png` | Block: pointed shield | self-generated | CC0 1.0 |
+| `ui/pictograms/rest.png` | Rest: steaming bowl | self-generated | CC0 1.0 |
+| `ui/pictograms/step-forward.png` | Step forward: footprint and arrow | self-generated | CC0 1.0 |
+| `ui/pictograms/step-back.png` | Step back: mirrored footprint and arrow | self-generated | CC0 1.0 |
+| `ui/pictograms/leap-forward.png` | Leap forward: double chevron | self-generated | CC0 1.0 |
 
 ## Equipment overlays (`assets/gear/`)
 

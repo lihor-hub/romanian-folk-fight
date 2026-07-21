@@ -137,3 +137,15 @@ generator = "scripts/generate-placeholder-sprites.py"
 license = "CC0 1.0"
 dimensions = [512, 512]
 sampler = "linear"
+
+[[record]]
+id = "sprites.contact-shadow"
+path = "contact_shadow.png"
+kind = "image"
+category = "sprite"
+status = "runtime"
+provenance = "repo-generated"
+generator = "scripts/generate-fx-sprites.py"
+license = "CC0 1.0"
+dimensions = [96, 24]
+sampler = "linear"

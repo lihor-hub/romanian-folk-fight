@@ -10,6 +10,8 @@ use crate::character::{Attributes, stats};
 
 /// Stamina cost of [`CombatAction::QuickStrike`].
 pub const QUICK_STRIKE_COST: i32 = 5;
+/// Stamina cost of [`CombatAction::NormalStrike`].
+pub const NORMAL_STRIKE_COST: i32 = 9;
 /// Stamina cost of [`CombatAction::HeavyStrike`].
 pub const HEAVY_STRIKE_COST: i32 = 15;
 /// Stamina cost of [`CombatAction::Block`].
@@ -18,11 +20,23 @@ pub const BLOCK_COST: i32 = 3;
 pub const REST_RESTORE: i32 = 20;
 /// Base hit chance in percent for [`CombatAction::QuickStrike`].
 pub const QUICK_STRIKE_BASE_HIT: i32 = 80;
+/// Base hit chance in percent for [`CombatAction::NormalStrike`].
+pub const NORMAL_STRIKE_BASE_HIT: i32 = 70;
 /// Base hit chance in percent for [`CombatAction::HeavyStrike`].
 pub const HEAVY_STRIKE_BASE_HIT: i32 = 60;
 /// Damage multiplier of [`CombatAction::HeavyStrike`] over base damage; the
 /// AI's kill-range check builds on the same number.
 pub const HEAVY_DAMAGE_MULTIPLIER: i32 = 2;
+/// Damage of [`CombatAction::QuickStrike`] in percent of base damage.
+pub const QUICK_DAMAGE_PERCENT: i32 = 100;
+/// Damage of [`CombatAction::NormalStrike`] in percent of base damage: the
+/// 1.5x middle ground between the quick and heavy strikes.
+pub const NORMAL_DAMAGE_PERCENT: i32 = 150;
+/// Damage of [`CombatAction::HeavyStrike`] in percent of base damage —
+/// exactly [`HEAVY_DAMAGE_MULTIPLIER`] expressed in the percent form
+/// [`resolve_action_at_distance`] feeds `strike()`, so the two constants can
+/// never drift apart.
+pub const HEAVY_DAMAGE_PERCENT: i32 = 100 * HEAVY_DAMAGE_MULTIPLIER;
 
 /// Minimum tactical distance: both fighters are inside melee reach.
 pub const MIN_DISTANCE_BAND: u8 = 0;
@@ -81,6 +95,9 @@ impl DuelDistance {
 pub enum CombatAction {
     /// Cheap, accurate strike for `base_damage`.
     QuickStrike,
+    /// The honest middle strike: moderately priced, moderately accurate,
+    /// for `1.5 * base_damage` (rounded down, min 1).
+    NormalStrike,
     /// Expensive, inaccurate strike for `2 * base_damage`.
     HeavyStrike,
     /// Raise a guard until the actor's next turn: incoming damage is halved
@@ -104,6 +121,7 @@ impl CombatAction {
     pub fn stamina_cost(self) -> i32 {
         match self {
             Self::QuickStrike => QUICK_STRIKE_COST,
+            Self::NormalStrike => NORMAL_STRIKE_COST,
             Self::HeavyStrike => HEAVY_STRIKE_COST,
             Self::Block => BLOCK_COST,
             Self::Rest | Self::StepForward | Self::StepBack | Self::LeapForward => 0,
@@ -223,7 +241,16 @@ pub fn resolve_action_at_distance(
             target,
             action.stamina_cost(),
             QUICK_STRIKE_BASE_HIT,
-            1,
+            QUICK_DAMAGE_PERCENT,
+            *distance,
+            rng,
+        ),
+        CombatAction::NormalStrike => strike(
+            actor,
+            target,
+            action.stamina_cost(),
+            NORMAL_STRIKE_BASE_HIT,
+            NORMAL_DAMAGE_PERCENT,
             *distance,
             rng,
         ),
@@ -232,7 +259,7 @@ pub fn resolve_action_at_distance(
             target,
             action.stamina_cost(),
             HEAVY_STRIKE_BASE_HIT,
-            HEAVY_DAMAGE_MULTIPLIER,
+            HEAVY_DAMAGE_PERCENT,
             *distance,
             rng,
         ),
@@ -263,7 +290,7 @@ fn strike(
     target: &mut FighterState,
     cost: i32,
     base_hit: i32,
-    damage_multiplier: i32,
+    damage_percent: i32,
     distance: DuelDistance,
     rng: &mut impl Rng,
 ) -> Vec<CombatEvent> {
@@ -284,8 +311,13 @@ fn strike(
 
     // Order of operations (#18): hit roll, crit roll, block halving, armor
     // subtraction, floor at 1. The weapon's flat bonus is part of the
-    // strike's base damage, so the heavy multiplier and crits scale it too.
-    let base = damage_multiplier * (stats::base_damage(&actor.attributes) + actor.damage_bonus);
+    // strike's base damage, so the damage percent and crits scale it too.
+    // The percent form (100/150/200) divides after multiplying and floors
+    // at 1, so the quick (100%) and heavy (200%) strikes produce exactly the
+    // integers the pre-percent multipliers did.
+    let base = (damage_percent * (stats::base_damage(&actor.attributes) + actor.damage_bonus)
+        / 100)
+        .max(1);
     let crit = roll(rng, stats::crit_percent(&actor.attributes));
     let pre_armor = if target.blocking {
         // A guard downgrades crits to normal hits, then halves the damage
@@ -504,6 +536,67 @@ mod tests {
     }
 
     #[test]
+    fn normal_strike_hit_deals_one_and_a_half_damage_and_costs_nine_stamina() {
+        let mut actor = fighter();
+        let mut target = fighter();
+        let events = resolve_action(
+            &mut actor,
+            &mut target,
+            CombatAction::NormalStrike,
+            &mut rng_hit_no_crit(),
+        );
+        assert_eq!(events, vec![CombatEvent::Hit { dmg: 9 }]);
+        assert_eq!(target.hp, 91, "base_damage(putere 4) 6 * 150 / 100 = 9");
+        assert_eq!(actor.stamina, 46, "normal strike costs 9");
+    }
+
+    #[test]
+    fn normal_strike_damage_rounds_down_and_crits_double_it() {
+        // putere 3 -> base damage 5 -> 5 * 150 / 100 = 7 (rounded down).
+        let mut actor = FighterState::new(attrs(3, 2, 5, 1));
+        let mut target = fighter();
+        let events = resolve_action(
+            &mut actor,
+            &mut target,
+            CombatAction::NormalStrike,
+            &mut rng_hit_no_crit(),
+        );
+        assert_eq!(events, vec![CombatEvent::Hit { dmg: 7 }]);
+        assert_eq!(target.hp, 93);
+
+        let mut actor = fighter();
+        let mut target = fighter();
+        let events = resolve_action(
+            &mut actor,
+            &mut target,
+            CombatAction::NormalStrike,
+            &mut rng_hit_crit(),
+        );
+        assert_eq!(
+            events,
+            vec![CombatEvent::Crit { dmg: 18 }],
+            "crit doubles the already-scaled 9"
+        );
+        assert_eq!(target.hp, 82);
+    }
+
+    #[test]
+    fn normal_strike_is_reach_gated_like_every_melee_strike() {
+        let mut actor = fighter();
+        let mut target = fighter();
+        let mut distance = DuelDistance::FAR;
+        let events = resolve_action_at_distance(
+            &mut actor,
+            &mut target,
+            CombatAction::NormalStrike,
+            &mut distance,
+            &mut rng_hit_no_crit(),
+        );
+        assert_eq!(events, vec![CombatEvent::OutOfReach]);
+        assert_eq!(actor.stamina, 55, "reach-gated strike spends no stamina");
+    }
+
+    #[test]
     fn heavy_strike_hit_deals_double_damage_and_costs_fifteen_stamina() {
         let mut actor = fighter();
         let mut target = fighter();
@@ -707,6 +800,7 @@ mod tests {
     fn strikes_without_enough_stamina_are_rejected_as_no_ops() {
         for (action, stamina) in [
             (CombatAction::QuickStrike, QUICK_STRIKE_COST - 1),
+            (CombatAction::NormalStrike, NORMAL_STRIKE_COST - 1),
             (CombatAction::HeavyStrike, HEAVY_STRIKE_COST - 1),
         ] {
             let mut actor = fighter();

@@ -41,9 +41,10 @@
 //!
 //! - **Idle** (before any combat action): every parallax layer's current x
 //!   must equal its rest `base_x` *exactly*, on every sampled frame, and
-//!   both fighters must sit exactly on their anchors.
+//!   both fighters must sit exactly on their staged positions.
 //! - **In combat** (autoplay driving real strikes): the peak fighter
-//!   displacement from its anchor (the lunge/footwork treatment) must never
+//!   displacement from its staged position (the lunge/footwork treatment,
+//!   measured against the staged x the game itself publishes) must never
 //!   exceed [`REDUCED_MOTION_CEILING`] -- the issue's documented "≤8px"
 //!   ceiling, generously above the game's own `REDUCED_MOTION_DISPLACEMENT`
 //!   (6.0 units) -- and at least one nonzero displacement must be observed,
@@ -366,9 +367,9 @@ struct ParallaxSample {
 #[derive(serde::Deserialize, Debug, Clone)]
 struct MotionSnapshot {
     player_x: f64,
-    player_anchor_x: f64,
+    player_staged_x: f64,
     enemy_x: f64,
-    enemy_anchor_x: f64,
+    enemy_staged_x: f64,
     camera_x: f64,
     camera_y: f64,
     parallax: Vec<ParallaxSample>,
@@ -387,7 +388,7 @@ fn read_motion(checkpoint: &Checkpoint) -> Result<Option<MotionSnapshot>, String
 /// Samples [`MotionSnapshot`] for `frames` real rendered frames before any
 /// combat action has happened and asserts every parallax layer's x equals
 /// its rest `base_x` *exactly*, and both fighters sit exactly on their
-/// anchors, on every single sampled frame.
+/// staged positions, on every single sampled frame.
 fn sample_idle(checkpoint: &Checkpoint, frames: usize) -> Result<String, String> {
     let mut samples = 0usize;
     for i in 0..frames {
@@ -405,18 +406,18 @@ fn sample_idle(checkpoint: &Checkpoint, frames: usize) -> Result<String, String>
                 ));
             }
         }
-        if motion.player_x != motion.player_anchor_x {
+        if motion.player_x != motion.player_staged_x {
             return Err(format!(
-                "idle frame {i}: player fighter is off its anchor with no combat \
-                 action taken (anchor {}, x {})",
-                motion.player_anchor_x, motion.player_x
+                "idle frame {i}: player fighter is off its staged position with no combat \
+                 action taken (staged {}, x {})",
+                motion.player_staged_x, motion.player_x
             ));
         }
-        if motion.enemy_x != motion.enemy_anchor_x {
+        if motion.enemy_x != motion.enemy_staged_x {
             return Err(format!(
-                "idle frame {i}: enemy fighter is off its anchor with no combat \
-                 action taken (anchor {}, x {})",
-                motion.enemy_anchor_x, motion.enemy_x
+                "idle frame {i}: enemy fighter is off its staged position with no combat \
+                 action taken (staged {}, x {})",
+                motion.enemy_staged_x, motion.enemy_x
             ));
         }
     }
@@ -457,8 +458,8 @@ fn sample_combat(checkpoint: &Checkpoint, frames: usize) -> Result<String, Strin
         samples += 1;
         let (rest_x, rest_y) = *camera_rest.get_or_insert((motion.camera_x, motion.camera_y));
 
-        let player_offset = (motion.player_x - motion.player_anchor_x).abs();
-        let enemy_offset = (motion.enemy_x - motion.enemy_anchor_x).abs();
+        let player_offset = (motion.player_x - motion.player_staged_x).abs();
+        let enemy_offset = (motion.enemy_x - motion.enemy_staged_x).abs();
         let camera_offset =
             ((motion.camera_x - rest_x).powi(2) + (motion.camera_y - rest_y).powi(2)).sqrt();
 

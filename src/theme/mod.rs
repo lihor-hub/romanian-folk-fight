@@ -307,6 +307,22 @@ pub fn panel_bundle(panel_texture: &PanelTexture, mut node: Node) -> impl Bundle
     (node, panel_border(panel_texture))
 }
 
+/// [`panel_bundle`] with the panel art tinted to `alpha`: the slimmer
+/// combat HUD (combat redesign §6) renders its always-on fight panels
+/// slightly translucent so they compete less with the fighters. Callers
+/// are responsible for passing `1.0` when high contrast (#214) is active —
+/// see `combat::hud::sync_hud_panel_alpha`.
+pub fn panel_bundle_with_alpha(
+    panel_texture: &PanelTexture,
+    mut node: Node,
+    alpha: f32,
+) -> impl Bundle {
+    node.padding = merge_panel_padding(node.padding);
+    let mut border = panel_border(panel_texture);
+    border.color = Color::WHITE.with_alpha(alpha);
+    (node, border)
+}
+
 fn load_panel_texture(
     mut panel_texture: ResMut<PanelTexture>,
     asset_server: Option<Res<AssetServer>>,

@@ -8,6 +8,7 @@
 
 pub mod animation;
 pub mod fx;
+pub mod staging;
 
 use bevy::{ecs::system::SystemParam, prelude::*};
 
@@ -15,8 +16,9 @@ use crate::character::{
     Attributes, CatalogError, CharacterCatalog, CharacterDefinition, EnemyFighter, GenerationError,
     PlayerFighter, bundled_human_catalog, fallback_human, spawn_fighter,
 };
-use crate::combat::AiProfile;
-use crate::core::{GameState, despawn_screen};
+use crate::combat::hud::distance_label;
+use crate::combat::{AiProfile, CombatSide};
+use crate::core::{GameState, UiFont, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::cutout::{
     CutoutPartMarker, CutoutRig, CutoutRigTemplate, CutoutTemplate, GearVisualLayer, boss_template,
@@ -25,30 +27,83 @@ use crate::cutout::{
 };
 use crate::items::{Equipment, GearMotion};
 use crate::roster::{Boss, CampaignSeed, LadderProgress, Opponent, PreparedEncounter};
-use crate::theme::GROUND_COLOR;
+use crate::theme::{GROUND_COLOR, NIGHT_BLACK, TEXT_DISABLED};
 use animation::{AnimationSet, FighterClip, FighterSpriteSheets};
 use fx::{ArenaBackgrounds, background_tier, spawn_background};
+pub use staging::ArenaStaging;
 
 /// Logical resolution the scene is designed for (the window in `main.rs`).
 pub const ARENA_WIDTH: f32 = 800.0;
 /// Logical height matching [`ARENA_WIDTH`].
 pub const ARENA_HEIGHT: f32 = 600.0;
 
-/// Rendered size of a fighter: one 128x128 sprite-sheet frame.
-pub const FIGHTER_SIZE: Vec2 = Vec2::new(128.0, 128.0);
+/// Rendered reference size of a fighter (combat redesign §6: fighter
+/// primacy — was 128). The cutout rigs are authored against the historical
+/// [`FIGHTER_BASE_SIZE`] frame, so this constant drives the rig root's
+/// uniform scale (see [`staged_fighter_transform`]) as well as every
+/// fighter-relative offset (damage text height, telemetry rects).
+pub const FIGHTER_SIZE: Vec2 = Vec2::new(160.0, 160.0);
+
+/// The frame size the cutout rig geometry (and its poses) was authored
+/// against; [`FIGHTER_SIZE`] / this = the rig root scale.
+const FIGHTER_BASE_SIZE: f32 = 128.0;
+
+/// Uniform world scale of a fighter root realizing [`FIGHTER_SIZE`].
+pub(crate) const FIGHTER_SCALE: f32 = FIGHTER_SIZE.y / FIGHTER_BASE_SIZE;
 
 /// Height of the ground strip along the bottom of the arena.
 const GROUND_HEIGHT: f32 = 120.0;
 /// World-space y of the top edge of the ground; fighters stand on it.
 const GROUND_TOP_Y: f32 = -ARENA_HEIGHT / 2.0 + GROUND_HEIGHT;
-/// World-space y of a fighter standing on the ground.
-const FIGHTER_Y: f32 = GROUND_TOP_Y + FIGHTER_SIZE.y / 2.0;
 
-/// Where the player's fighter stands, facing right. The Phase 4 animation
-/// issue reuses this anchor.
-pub const PLAYER_ANCHOR: Transform = Transform::from_xyz(-220.0, FIGHTER_Y, 0.0);
-/// Where the opponent stands, facing left; mirrors [`PLAYER_ANCHOR`].
-pub const ENEMY_ANCHOR: Transform = Transform::from_xyz(220.0, FIGHTER_Y, 0.0);
+/// World-space y of the composed standing line — where rest-pose foot
+/// bottoms sit, slightly inside the ground strip's face so fighters read
+/// as standing *on* the painted ground rather than at its very edge (the
+/// same line the pre-redesign composition used).
+const FOOT_LINE_Y: f32 = GROUND_TOP_Y - 44.0;
+
+/// Measured rest-pose foot-bottom drop below the fighter root, in
+/// unscaled rig units (human template after the phase-4 folk-proportion
+/// pass; re-measure with `cutout::tests::dump_template_geometry` if leg
+/// geometry changes). Folds the phase-4 leg-shortening rise into the
+/// root height so feet land exactly on [`FOOT_LINE_Y`] at any scale.
+const REST_FOOT_DROP: f32 = 104.78;
+
+/// World-space y of a fighter root standing with its feet on the line.
+const FIGHTER_Y: f32 = FOOT_LINE_Y + REST_FOOT_DROP * FIGHTER_SCALE;
+
+/// World transform of a fighter standing at staged center `x` (see
+/// [`ArenaStaging`]): on the ground, at the shared fighter depth, scaled to
+/// realize [`FIGHTER_SIZE`]. The only per-fighter difference is the staged
+/// x — y, z, and scale are composition constants.
+pub fn staged_fighter_transform(x: f32) -> Transform {
+    Transform::from_xyz(x, FIGHTER_Y, 0.0).with_scale(Vec3::splat(FIGHTER_SCALE))
+}
+
+/// World-space y of the ground distance chip: on the ground strip, below
+/// the fighters' feet.
+const GROUND_CHIP_Y: f32 = GROUND_TOP_Y - 34.0;
+/// Depth of the ground distance chip: in front of the ground strip (-9)
+/// but behind the fighters (0), so it reads as etched into the ground.
+const GROUND_CHIP_Z: f32 = -8.0;
+/// Font size of the ground distance chip — deliberately small; the chip is
+/// a ground marker, not a UI label.
+const GROUND_CHIP_FONT_SIZE: f32 = 15.0;
+/// Alpha of the ground chip's [`TEXT_DISABLED`] tone: low-contrast on the
+/// brown ground, an etched marker rather than a bright label.
+// `pub(crate)`: `combat::action_palette`'s reach-hover pulse restores the
+// chip to exactly this resting alpha (see `pulse_distance_chip_on_reach_hover`).
+pub(crate) const GROUND_CHIP_ALPHA: f32 = 0.45;
+
+/// The always-present presentation resources [`spawn_scene`] draws from,
+/// bundled so the two spawn systems stay within clippy's argument budget.
+#[derive(SystemParam)]
+struct SceneResources<'w> {
+    sheets: Res<'w, FighterSpriteSheets>,
+    backgrounds: Res<'w, ArenaBackgrounds>,
+    staging: Res<'w, ArenaStaging>,
+    ui_font: Res<'w, UiFont>,
+}
 
 #[derive(SystemParam)]
 struct EncounterResources<'w> {
@@ -72,13 +127,19 @@ pub struct ArenaPlugin;
 impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((animation::AnimationPlugin, fx::FxPlugin))
-            .add_systems(OnEnter(GameState::Fight), spawn_arena)
+            .init_resource::<ArenaStaging>()
+            .add_systems(
+                OnEnter(GameState::Fight),
+                (reset_staging, spawn_arena).chain(),
+            )
             .add_systems(
                 Update,
                 (
                     spawn_arena_when_ready,
                     spawn_equipped_gear_layers.in_set(ArenaSet::GearRefresh),
                     sync_gear_visual_layers,
+                    sync_ground_distance_chip,
+                    sync_contact_shadows,
                 )
                     .chain()
                     .after(AnimationSet::Apply)
@@ -96,15 +157,14 @@ fn spawn_arena(
     commands: Commands,
     player: Option<Res<PlayerCharacter>>,
     encounter: EncounterResources,
-    sheets: Res<FighterSpriteSheets>,
-    backgrounds: Res<ArenaBackgrounds>,
+    scene: SceneResources,
     asset_server: Option<Res<AssetServer>>,
 ) {
     let Some(player) = player else {
         warn!("entered GameState::Fight without a PlayerCharacter; arena not spawned");
         return;
     };
-    if !sheets.ready(asset_server.as_deref()) {
+    if !scene.sheets.ready(asset_server.as_deref()) {
         // The loading guard: `spawn_arena_when_ready` retries every frame.
         // Combat cannot start either — its turn resource waits for the
         // fighters to exist.
@@ -119,9 +179,15 @@ fn spawn_arena(
             .map(|seed| *seed)
             .unwrap_or_default(),
         encounter.prepared.as_deref(),
-        &backgrounds,
+        &scene,
         asset_server.as_deref(),
     );
+}
+
+/// Resets [`ArenaStaging`] to the opening placement on every fight entry —
+/// staged positions are per-fight presentation state, not run state.
+fn reset_staging(mut staging: ResMut<ArenaStaging>) {
+    *staging = ArenaStaging::starting();
 }
 
 /// The loading-guard retry: once the sheets finish loading mid-fight-screen,
@@ -130,15 +196,14 @@ fn spawn_arena_when_ready(
     commands: Commands,
     player: Option<Res<PlayerCharacter>>,
     encounter: EncounterResources,
-    sheets: Res<FighterSpriteSheets>,
-    backgrounds: Res<ArenaBackgrounds>,
+    scene: SceneResources,
     asset_server: Option<Res<AssetServer>>,
     spawned: Query<(), With<ArenaScreen>>,
 ) {
     let Some(player) = player else {
         return; // spawn_arena already warned
     };
-    if !spawned.is_empty() || !sheets.ready(asset_server.as_deref()) {
+    if !spawned.is_empty() || !scene.sheets.ready(asset_server.as_deref()) {
         return;
     }
     spawn_scene(
@@ -150,7 +215,7 @@ fn spawn_arena_when_ready(
             .map(|seed| *seed)
             .unwrap_or_default(),
         encounter.prepared.as_deref(),
-        &backgrounds,
+        &scene,
         asset_server.as_deref(),
     );
 }
@@ -164,7 +229,7 @@ fn spawn_scene(
     ladder: Option<Res<LadderProgress>>,
     campaign_seed: CampaignSeed,
     prepared_encounter: Option<&PreparedEncounter>,
-    backgrounds: &ArenaBackgrounds,
+    scene: &SceneResources,
     asset_server: Option<&AssetServer>,
 ) {
     let ladder = ladder.map(|ladder| *ladder).unwrap_or_default();
@@ -179,14 +244,16 @@ fn spawn_scene(
             Some(generated) => seeded_encounter_visual(generated),
             None => SeededEncounterVisual::Legacy,
         });
-    spawn_background(&mut commands, backgrounds, background_tier(ladder));
+    spawn_background(&mut commands, &scene.backgrounds, background_tier(ladder));
     spawn_scenery(&mut commands);
+    spawn_contact_shadows(&mut commands, &scene.staging, asset_server);
+    spawn_ground_distance_chip(&mut commands, &scene.staging, &scene.ui_font);
     let player_fighter = spawn_arena_fighter(
         &mut commands,
         player.name.clone(),
         player.attributes,
         PlayerFighter,
-        PLAYER_ANCHOR,
+        staged_fighter_transform(scene.staging.player_x),
         ArenaRig::Character(&player.definition),
         false,
         asset_server,
@@ -203,7 +270,7 @@ fn spawn_scene(
                 aggression: opponent.aggression,
             },
         ),
-        ENEMY_ANCHOR,
+        staged_fighter_transform(scene.staging.enemy_x),
         match &seeded_visual {
             SeededEncounterVisual::Generated(generated) => {
                 ArenaRig::Character(&generated.definition)
@@ -281,9 +348,115 @@ fn spawn_scenery(commands: &mut Commands) {
     ));
 }
 
+/// Asset path of the soft contact-shadow ellipse under each fighter
+/// (`scripts/generate-fx-sprites.py`).
+const CONTACT_SHADOW_SPRITE: &str = "sprites/contact_shadow.png";
+/// Rendered size of one contact shadow: a touch wider than a fighter's
+/// planted stance, squashed flat, scaled with the fighter.
+const CONTACT_SHADOW_SIZE: Vec2 = Vec2::new(88.0 * FIGHTER_SCALE, 20.0 * FIGHTER_SCALE);
+/// Global alpha of the contact shadow — subtle grounding, not a hard decal.
+const CONTACT_SHADOW_ALPHA: f32 = 0.34;
+/// Depth of the contact shadows: over the ground strip (-9) and the tier
+/// foreground (-8.5), behind the ground distance chip (-8) and fighters
+/// (0), so the chip text always reads over them.
+const CONTACT_SHADOW_Z: f32 = -8.25;
+
+/// One fighter's soft ground contact shadow: a dark ellipse pinned to the
+/// standing line that follows the fighter's live x every frame — staged
+/// position, footwork tweens, and attack lunges alike (see
+/// [`sync_contact_shadows`]).
+#[derive(Component)]
+pub(crate) struct GroundShadow {
+    side: CombatSide,
+}
+
+/// Spawns the two contact shadows. Headless apps (no `AssetServer`) fall
+/// back to a plain translucent quad so the presentation tests still see
+/// (and can pin) the entities.
+fn spawn_contact_shadows(
+    commands: &mut Commands,
+    staging: &ArenaStaging,
+    asset_server: Option<&AssetServer>,
+) {
+    for side in [CombatSide::Player, CombatSide::Enemy] {
+        let color = NIGHT_BLACK.with_alpha(CONTACT_SHADOW_ALPHA);
+        let sprite = match asset_server {
+            Some(server) => Sprite {
+                image: server.load(CONTACT_SHADOW_SPRITE),
+                custom_size: Some(CONTACT_SHADOW_SIZE),
+                color: Color::WHITE.with_alpha(CONTACT_SHADOW_ALPHA),
+                ..default()
+            },
+            None => Sprite::from_color(color, CONTACT_SHADOW_SIZE),
+        };
+        commands.spawn((
+            ArenaScreen,
+            GroundShadow { side },
+            sprite,
+            Transform::from_xyz(staging.x_of(side), FOOT_LINE_Y, CONTACT_SHADOW_Z),
+        ));
+    }
+}
+
+/// Keeps each contact shadow under its fighter's live transform x, so it
+/// tracks staged moves, footwork tweens, and lunge arcs without any state
+/// of its own.
+fn sync_contact_shadows(
+    players: Query<&Transform, (With<PlayerFighter>, Without<GroundShadow>)>,
+    enemies: Query<&Transform, (With<EnemyFighter>, Without<GroundShadow>)>,
+    mut shadows: Query<(&GroundShadow, &mut Transform), Without<crate::character::Fighter>>,
+) {
+    for (shadow, mut transform) in &mut shadows {
+        let fighter = match shadow.side {
+            CombatSide::Player => players.single(),
+            CombatSide::Enemy => enemies.single(),
+        };
+        if let Ok(fighter) = fighter {
+            transform.translation.x = fighter.translation.x;
+        }
+    }
+}
+
+/// Marker for the etched ground marker centered between the fighters that
+/// names the current [`crate::combat::DuelDistance`] band. It follows
+/// [`ArenaStaging`] (see [`sync_ground_distance_chip`]) so distance stays
+/// readable off the stage itself, without the log or HUD text.
+#[derive(Component)]
+pub(crate) struct GroundDistanceChip;
+
+/// The ground distance chip: a small, low-contrast [`Text2d`] band label at
+/// ground level, centered between the two staged fighters. Deliberately a
+/// ground-tone etched marker, not a bright UI label.
+fn spawn_ground_distance_chip(commands: &mut Commands, staging: &ArenaStaging, ui_font: &UiFont) {
+    commands.spawn((
+        ArenaScreen,
+        GroundDistanceChip,
+        Text2d::new(distance_label(staging.distance())),
+        ui_font.text_font(GROUND_CHIP_FONT_SIZE),
+        TextColor(TEXT_DISABLED.with_alpha(GROUND_CHIP_ALPHA)),
+        Transform::from_xyz(staging.midpoint_x(), GROUND_CHIP_Y, GROUND_CHIP_Z),
+    ));
+}
+
+/// Keeps the ground distance chip centered between the staged fighters and
+/// naming the current band whenever [`ArenaStaging`] changes.
+fn sync_ground_distance_chip(
+    staging: Res<ArenaStaging>,
+    mut chips: Query<(&mut Text2d, &mut Transform), With<GroundDistanceChip>>,
+) {
+    if !staging.is_changed() {
+        return;
+    }
+    for (mut text, mut transform) in &mut chips {
+        text.0 = distance_label(staging.distance()).to_string();
+        transform.translation.x = staging.midpoint_x();
+    }
+}
+
 /// Spawns one fighter through the shared [`spawn_fighter`] (so it carries the
 /// #8 components and full pools), then dresses it with the arena visuals: its
-/// animated sprite at its anchor (starting on the idle loop). `accent_hue`
+/// animated sprite at its staged position (starting on the idle loop).
+/// `accent_hue`
 /// (#118) is the opponent's one muted accent color, tinted onto the rig's
 /// clothing/accent parts; the player is always spawned with `None` so its
 /// template stays untinted.
@@ -295,7 +468,7 @@ fn spawn_arena_fighter<'a>(
     name: impl Into<String>,
     attrs: Attributes,
     marker: impl Bundle,
-    anchor: Transform,
+    at: Transform,
     rig: ArenaRig<'a>,
     flip_x: bool,
     asset_server: Option<&AssetServer>,
@@ -307,7 +480,7 @@ fn spawn_arena_fighter<'a>(
         ArenaScreen,
         FighterClip::Idle,
         FighterClip::Idle.animation(),
-        anchor,
+        at,
     ));
     match rig {
         ArenaRig::Character(definition) => spawn_character_definition_rig(
@@ -733,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    fn fighters_stand_at_the_anchor_transforms_on_opposite_sides() {
+    fn fighters_spawn_at_the_starting_staged_positions() {
         let mut app = test_app();
         let player = app
             .world_mut()
@@ -747,9 +920,56 @@ mod tests {
             .single(app.world())
             .expect("enemy fighter exists")
             .translation;
-        assert_eq!(player, PLAYER_ANCHOR.translation);
-        assert_eq!(enemy, ENEMY_ANCHOR.translation);
-        assert!(player.x < 0.0 && enemy.x > 0.0, "opposite sides");
+        let staging = ArenaStaging::starting();
+        assert_eq!(
+            player,
+            staged_fighter_transform(staging.player_x).translation
+        );
+        assert_eq!(enemy, staged_fighter_transform(staging.enemy_x).translation);
+        assert_eq!(
+            enemy.x - player.x,
+            staging::band_gap(crate::combat::DuelDistance::starting()),
+            "the opening gap realizes the engine's starting band"
+        );
+        assert!(player.x < enemy.x, "player left, enemy right");
+    }
+
+    #[test]
+    fn the_ground_distance_chip_spawns_centered_between_the_fighters() {
+        let mut app = test_app();
+        let (text, transform) = app
+            .world_mut()
+            .query_filtered::<(&Text2d, &Transform), With<GroundDistanceChip>>()
+            .single(app.world())
+            .expect("exactly one ground distance chip");
+        assert_eq!(text.0, "Aproape", "the starting band is named in Romanian");
+        assert_eq!(
+            transform.translation.x,
+            ArenaStaging::starting().midpoint_x()
+        );
+        assert!(
+            transform.translation.y < FIGHTER_Y - FIGHTER_SIZE.y / 2.0,
+            "the chip sits at ground level, below the fighters"
+        );
+    }
+
+    #[test]
+    fn the_ground_distance_chip_follows_staging_changes() {
+        let mut app = test_app();
+        app.world_mut().resource_mut::<ArenaStaging>().apply_move(
+            crate::combat::CombatSide::Enemy,
+            crate::combat::DuelDistance::FAR,
+        );
+        app.update();
+
+        let expected_midpoint = app.world().resource::<ArenaStaging>().midpoint_x();
+        let (text, transform) = app
+            .world_mut()
+            .query_filtered::<(&Text2d, &Transform), With<GroundDistanceChip>>()
+            .single(app.world())
+            .expect("exactly one ground distance chip");
+        assert_eq!(text.0, "Departe", "the chip renames to the new band");
+        assert_eq!(transform.translation.x, expected_midpoint);
     }
 
     /// Recursively counts every `CutoutPartMarker` entity under `root`, at
@@ -1040,8 +1260,14 @@ mod tests {
 
     #[test]
     fn arena_spawns_no_floating_name_labels() {
+        // The ground distance chip is the arena's only sanctioned Text2d;
+        // fighters still carry no floating name labels.
         let mut app = test_app();
-        let labels = app.world_mut().query::<&Text2d>().iter(app.world()).count();
+        let labels = app
+            .world_mut()
+            .query_filtered::<&Text2d, Without<GroundDistanceChip>>()
+            .iter(app.world())
+            .count();
         assert_eq!(labels, 0, "no floating Text2d name labels in the arena");
     }
 
@@ -1384,8 +1610,92 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(
-            scenery, 4,
-            "two parallax layers + foreground depth + ground"
+            scenery, 6,
+            "two parallax layers + foreground depth + ground + two contact shadows"
+        );
+    }
+
+    #[test]
+    fn fighters_scale_to_fighter_size_with_feet_on_the_standing_line() {
+        let transform = staged_fighter_transform(0.0);
+        assert_eq!(
+            transform.scale,
+            Vec3::splat(FIGHTER_SIZE.y / FIGHTER_BASE_SIZE),
+            "the rig root realizes FIGHTER_SIZE via uniform scale"
+        );
+        assert_eq!(
+            transform.translation.y - REST_FOOT_DROP * FIGHTER_SCALE,
+            FOOT_LINE_Y,
+            "the measured rest-pose foot bottom lands exactly on the standing line"
+        );
+    }
+
+    #[test]
+    fn contact_shadows_sit_on_the_standing_line_under_each_fighter() {
+        let mut app = test_app();
+        let staging = ArenaStaging::starting();
+        let mut shadows: Vec<(f32, f32, f32)> = app
+            .world_mut()
+            .query_filtered::<&Transform, With<GroundShadow>>()
+            .iter(app.world())
+            .map(|transform| {
+                (
+                    transform.translation.x,
+                    transform.translation.y,
+                    transform.translation.z,
+                )
+            })
+            .collect();
+        shadows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(
+            shadows,
+            vec![
+                (staging.player_x, FOOT_LINE_Y, CONTACT_SHADOW_Z),
+                (staging.enemy_x, FOOT_LINE_Y, CONTACT_SHADOW_Z),
+            ],
+            "one shadow per fighter, on the line, behind the chip (z -8) and \
+             in front of the tier foreground (z -8.5)"
+        );
+    }
+
+    #[test]
+    fn contact_shadows_follow_movement_tweens() {
+        let mut app = test_app();
+        app.world_mut()
+            .write_message(crate::combat::CombatLogEvent {
+                actor: CombatSide::Player,
+                action: crate::combat::CombatAction::StepBack,
+                event: crate::combat::CombatEvent::Moved {
+                    from: crate::combat::DuelDistance::CLOSE,
+                    to: crate::combat::DuelDistance::NEAR,
+                },
+            });
+        app.update();
+        // Mid-tween: the shadow rides the fighter's live transform x.
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(200),
+        ));
+        app.update();
+        let fighter_x = app
+            .world_mut()
+            .query_filtered::<&Transform, With<PlayerFighter>>()
+            .single(app.world())
+            .expect("player exists")
+            .translation
+            .x;
+        let shadow_x = app
+            .world_mut()
+            .query_filtered::<(&GroundShadow, &Transform), ()>()
+            .iter(app.world())
+            .find_map(|(shadow, transform)| {
+                matches!(shadow.side, CombatSide::Player).then_some(transform.translation.x)
+            })
+            .expect("player shadow exists");
+        assert_eq!(shadow_x, fighter_x, "the shadow tracks the live tween x");
+        assert_ne!(
+            fighter_x,
+            ArenaStaging::starting().player_x,
+            "the sampled moment is genuinely mid-move"
         );
     }
 

@@ -97,7 +97,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
 use crate::arena::fx::ParallaxLayer;
-use crate::arena::{ENEMY_ANCHOR, FIGHTER_SIZE, PLAYER_ANCHOR};
+use crate::arena::{ArenaStaging, FIGHTER_SIZE, staged_fighter_transform};
 use crate::character::material::{HybridCharacterMaterial, PendingHybridCharacterMaterial};
 use crate::character::{EnemyFighter, PlayerFighter, Stamina};
 use crate::combat::action_palette::{
@@ -346,6 +346,10 @@ impl Plugin for ReviewPlugin {
             // with `ui_widgets::focus::FocusNavigationPlugin`'s own
             // registration (added by `CombatPlugin`).
             .init_resource::<InputFocus>()
+            // publish_motion_state/publish_palette_state read the staged
+            // fighter positions; idempotent with ArenaPlugin's own
+            // registration.
+            .init_resource::<ArenaStaging>()
             .add_message::<PlayerActionEvent>()
             .add_systems(PreStartup, prefetch_paper_doll_gear)
             .add_systems(
@@ -366,7 +370,12 @@ impl Plugin for ReviewPlugin {
                         .before(crate::flow::FlowIntentEmission)
                         .before(crate::combat::action_palette::handle_category_buttons),
                     publish_current_screen,
-                    publish_motion_state,
+                    // After the arena's animation/staging chain so a
+                    // movement event's staging update and its transform
+                    // write are always sampled from the same frame's final
+                    // state -- never a transient staged/transform mismatch
+                    // in between.
+                    publish_motion_state.after(crate::arena::animation::AnimationSet::Apply),
                     publish_palette_state,
                     publish_theme_state,
                     publish_accessibility_state,
@@ -878,16 +887,17 @@ fn publish_paper_doll_state(
 
 /// Everything the `reduced-motion-fight` scenario (#200) needs to assert the
 /// reduced-motion treatment precisely: both fighters' root transform (and
-/// their rest anchors, so the scenario can compute an exact offset without
-/// duplicating `arena`'s anchor constants), the camera translation (screen
-/// shake's target), and every parallax layer's rest/current x. Published
-/// under [`REVIEW_MOTION_KEY`] every frame the arena is up.
+/// their staged rest positions from [`ArenaStaging`], so the scenario can
+/// compute an exact offset without duplicating `arena`'s staging math), the
+/// camera translation (screen shake's target), and every parallax layer's
+/// rest/current x. Published under [`REVIEW_MOTION_KEY`] every frame the
+/// arena is up.
 #[derive(serde::Serialize, Debug, Clone, PartialEq)]
 struct MotionSnapshot {
     player_x: f32,
-    player_anchor_x: f32,
+    player_staged_x: f32,
     enemy_x: f32,
-    enemy_anchor_x: f32,
+    enemy_staged_x: f32,
     camera_x: f32,
     camera_y: f32,
     parallax: Vec<ParallaxSample>,
@@ -908,6 +918,7 @@ type EnemyMotionQuery<'w, 's> = Query<
 /// scenario can't mistake a stale snapshot from a previous fight for the
 /// current one).
 fn publish_motion_state(
+    staging: Res<ArenaStaging>,
     players: Query<&Transform, (With<PlayerFighter>, Without<EnemyFighter>)>,
     enemies: EnemyMotionQuery,
     cameras: Query<&Transform, With<WorldCamera>>,
@@ -923,9 +934,9 @@ fn publish_motion_state(
         .unwrap_or((0.0, 0.0));
     let snapshot = MotionSnapshot {
         player_x: player.translation.x,
-        player_anchor_x: PLAYER_ANCHOR.translation.x,
+        player_staged_x: staging.player_x,
         enemy_x: enemy.translation.x,
-        enemy_anchor_x: ENEMY_ANCHOR.translation.x,
+        enemy_staged_x: staging.enemy_x,
         camera_x,
         camera_y,
         parallax: parallax
@@ -1091,20 +1102,21 @@ struct PhonePaletteSnapshot {
 }
 
 /// #276's deterministic proxy for "the area a fighter's body is readable
-/// in": a world-space box centered on `anchor` (`arena::PLAYER_ANCHOR` or
-/// `arena::ENEMY_ANCHOR`) sized to `arena::FIGHTER_SIZE`, projected to
-/// full-window logical screen space through the same letterbox projection
-/// every other geometry fact in this module uses. Deliberately built from
-/// the fixed spawn anchor/sprite-bounding-box constants rather than a
-/// fighter's *live* `Transform` (which can shift with duel distance or a
+/// in": a world-space box centered on the fighter's *staged* position
+/// (`arena::ArenaStaging`, the per-event-sequence-deterministic rest x)
+/// sized to `arena::FIGHTER_SIZE`, projected to full-window logical screen
+/// space through the same letterbox projection every other geometry fact in
+/// this module uses. Deliberately built from the staged rest position
+/// rather than a fighter's *live* `Transform` (which can shift with a
 /// mid-animation attack lunge/footwork offset): a proxy that changed frame
 /// to frame depending on incidental animation state would not be
 /// deterministic, and the bug this guards against (#276) is a vertical
-/// layout overlap, not a horizontal-position one -- both anchors share the
-/// same Y, so the fixed anchor is exact for the axis that matters here.
-fn fighter_readable_rect(anchor: Transform, letterbox: LetterboxRect) -> Rect {
+/// layout overlap, not a horizontal-position one -- both staged positions
+/// share the same Y, so the staged rest x is exact for the axis that
+/// matters here.
+fn fighter_readable_rect(staged_x: f32, letterbox: LetterboxRect) -> Rect {
     let half_size = FIGHTER_SIZE / 2.0;
-    let center = anchor.translation.truncate();
+    let center = staged_fighter_transform(staged_x).translation.truncate();
     let corner_a = screen_point_for_world_point(center - half_size, letterbox);
     let corner_b = screen_point_for_world_point(center + half_size, letterbox);
     Rect::from_corners(corner_a, corner_b)
@@ -1168,6 +1180,7 @@ fn focus_snapshot(
 #[allow(clippy::too_many_arguments)]
 fn publish_palette_state(
     letterbox: Option<Res<LetterboxRect>>,
+    staging: Res<ArenaStaging>,
     viewport: Res<ViewportInfo>,
     phone_state: Option<Res<PhonePaletteState>>,
     input_focus: Res<InputFocus>,
@@ -1241,8 +1254,8 @@ fn publish_palette_state(
         let window = Rect::from_corners(Vec2::ZERO, Vec2::new(viewport.width, viewport.height));
         let fits_in_window = window.contains(extent.min) && window.contains(extent.max);
         let fighter_rects = [
-            fighter_readable_rect(PLAYER_ANCHOR, *letterbox),
-            fighter_readable_rect(ENEMY_ANCHOR, *letterbox),
+            fighter_readable_rect(staging.player_x, *letterbox),
+            fighter_readable_rect(staging.enemy_x, *letterbox),
         ];
         let overlaps_fighter_region = all_rects.iter().any(|target| {
             fighter_rects

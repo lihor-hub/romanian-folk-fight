@@ -12,7 +12,7 @@ use crate::character::stats;
 
 use super::engine::{
     CombatAction, DuelDistance, FighterState, HEAVY_DAMAGE_MULTIPLIER, HEAVY_STRIKE_COST,
-    QUICK_STRIKE_COST, roll,
+    NORMAL_STRIKE_COST, QUICK_STRIKE_COST, roll,
 };
 
 /// Per-archetype tuning knob for the enemy decision policy, attached as a
@@ -36,6 +36,10 @@ const EXHAUSTED_REST_PERCENT: i32 = 70;
 /// Baseline weight of the quick strike in the weighted pick; it is always
 /// affordable once the forced-Rest branch has passed.
 const QUICK_STRIKE_WEIGHT: f32 = 1.0;
+/// Weight of the normal strike in the weighted pick while affordable — just
+/// under the quick strike's baseline, so the honest default stays a strong
+/// but not dominant habit.
+const NORMAL_STRIKE_WEIGHT: f32 = 0.9;
 /// Scale applied to `1.0 - aggression` for the Block weight.
 const BLOCK_WEIGHT_SCALE: f32 = 0.6;
 
@@ -47,11 +51,12 @@ const BLOCK_WEIGHT_SCALE: f32 = 0.6;
 /// 2. Low stamina (< heavy cost) and hurt (hp < 30% of max): 70% Rest,
 ///    30% Block.
 /// 3. Foe in kill range (hp within one heavy strike's damage): the
-///    strongest affordable strike.
+///    strongest affordable strike (Heavy > Normal > Quick).
 /// 4. Weighted pick — HeavyStrike weight `aggression` (0 if unaffordable),
-///    QuickStrike weight 1.0, Block weight `0.6 * (1.0 - aggression)`, Rest
-///    weight the missing-stamina fraction (0 at full stamina, so a rested
-///    fighter never Rests).
+///    NormalStrike weight 0.9 (0 if unaffordable), QuickStrike weight 1.0,
+///    Block weight `0.6 * (1.0 - aggression)`, Rest weight the
+///    missing-stamina fraction (0 at full stamina, so a rested fighter
+///    never Rests).
 pub fn choose_action(
     me: &FighterState,
     foe: &FighterState,
@@ -93,6 +98,8 @@ pub fn choose_action_at_distance(
     if foe.hp <= HEAVY_DAMAGE_MULTIPLIER * stats::base_damage(&me.attributes) {
         return if me.stamina >= HEAVY_STRIKE_COST {
             CombatAction::HeavyStrike
+        } else if me.stamina >= NORMAL_STRIKE_COST {
+            CombatAction::NormalStrike
         } else {
             CombatAction::QuickStrike
         };
@@ -104,9 +111,15 @@ pub fn choose_action_at_distance(
     } else {
         0.0
     };
+    let normal_weight = if me.stamina >= NORMAL_STRIKE_COST {
+        NORMAL_STRIKE_WEIGHT
+    } else {
+        0.0
+    };
     let missing_stamina_fraction = (me.max_stamina() - me.stamina) as f32 / me.max_stamina() as f32;
     let weighted = [
         (CombatAction::HeavyStrike, heavy_weight),
+        (CombatAction::NormalStrike, normal_weight),
         (CombatAction::QuickStrike, QUICK_STRIKE_WEIGHT),
         (CombatAction::Block, BLOCK_WEIGHT_SCALE * (1.0 - aggression)),
         (CombatAction::Rest, missing_stamina_fraction),
@@ -220,8 +233,17 @@ mod tests {
             let action = choose_action(&tired, &foe, &profile(1.0), &mut rng(seed));
             assert_eq!(
                 action,
+                CombatAction::NormalStrike,
+                "seed {seed}: without the heavy's stamina the normal strike still finishes"
+            );
+
+            let mut spent = fighter();
+            spent.stamina = NORMAL_STRIKE_COST - 1;
+            let action = choose_action(&spent, &foe, &profile(1.0), &mut rng(seed));
+            assert_eq!(
+                action,
                 CombatAction::QuickStrike,
-                "seed {seed}: without the heavy's stamina the quick strike still finishes"
+                "seed {seed}: below the normal's cost the quick strike still finishes"
             );
         }
     }
@@ -264,6 +286,11 @@ mod tests {
                 CombatAction::QuickStrike => assert!(
                     me.stamina >= QUICK_STRIKE_COST,
                     "sample {sample}: quick strike with stamina {}",
+                    me.stamina
+                ),
+                CombatAction::NormalStrike => assert!(
+                    me.stamina >= NORMAL_STRIKE_COST,
+                    "sample {sample}: normal strike with stamina {}",
                     me.stamina
                 ),
                 CombatAction::HeavyStrike => assert!(

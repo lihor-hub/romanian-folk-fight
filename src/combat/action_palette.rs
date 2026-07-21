@@ -6,10 +6,14 @@
 //! descriptors from live duel state and reconciles the already-spawned
 //! buttons against them.
 //!
-//! ## Desktop (#189)
+//! ## Desktop (combat redesign §3, replacing #189's flat strip)
 //!
-//! A single, non-wrapping row of one button per descriptor — untouched by
-//! #199.
+//! A vertical command banner on the stage's left edge
+//! ([`spawn_desktop_banner`]): an embroidered-linen column holding the four
+//! labeled groups of [`BANNER_CATEGORY_ORDER`] in decision order, one
+//! pictogram-led row per descriptor. Reach-disabled strike rows show a small
+//! distance mark and, while hovered, pulse the arena's ground distance chip
+//! ([`pulse_distance_chip_on_reach_hover`]).
 //!
 //! ## Phone (#199)
 //!
@@ -39,12 +43,17 @@
 //! comes from [`ActionDescriptor::category`], including for a
 //! test-registered descriptor.
 
+use std::collections::HashMap;
+
 use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 
+use crate::arena::GROUND_CHIP_ALPHA;
+use crate::arena::GroundDistanceChip;
 use crate::character::{Attributes, EnemyFighter, PlayerFighter, Stamina};
 use crate::core::{LetterboxRect, UiFont, ViewportInfo};
 use crate::menu::DisabledButton;
+use crate::settings::AccessibilityPreferences;
 use crate::theme::{
     ACTION_BUTTON_TOUCH_TARGET, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED,
     CREAM, GOLD, PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
@@ -52,8 +61,8 @@ use crate::theme::{
 use crate::ui_widgets::focus::{Focusable, TabGroup, TabIndex, redirect_focus_if_inside};
 
 use super::actions::{
-    ActionCategory, ActionDescriptor, ActionId, DescriptorContext, ExtraDescriptors,
-    category_label, generate_action_descriptors, group_by_category,
+    ActionCategory, ActionCost, ActionDescriptor, ActionId, DescriptorContext, ExtraDescriptors,
+    action_id, category_label, generate_action_descriptors, group_by_category,
 };
 use super::engine::CombatAction;
 use super::hud::{ActionBarRoot, HudScreen};
@@ -62,27 +71,38 @@ use super::systems::{CombatPresentation, CombatTurn, PlayerActionEvent};
 #[cfg(test)]
 use crate::theme::PANEL_BORDER_INSET;
 
-const ACTION_BUTTON_WIDTH: f32 = 100.0;
-const ACTION_BUTTON_HEIGHT: f32 = 64.0;
-// Narrowed from 6.0 (#120): `panel_bundle` now floors this bar's padding at
-// `PANEL_BORDER_INSET` (24px, up from the 8px below), so the desktop strip
-// needs the extra ~4px of the 7-button row back to still fit
-// `HUD_TARGET_WIDTH`; see `desktop_action_strip_occupied_width`.
-pub(super) const ACTION_BAR_DESKTOP_GAP: f32 = 5.0;
 const ACTION_BAR_PADDING: f32 = 8.0;
-/// Conservative side margin the desktop strip's fit check reserves against
-/// `HUD_TARGET_WIDTH` (see `desktop_action_strip_available_width`). The
-/// *rendered* desktop bar spans the full stage width (`left`/`right` 0):
-/// pre-#199, `hud::apply_responsive_hud_layout` always overwrote the
-/// spawn-time 10px insets to 0 before the first layout pass, so 0 is the
-/// value every accepted desktop baseline actually shows — #199 spawns with
-/// it directly (byte-identical desktop) instead of patching after the fact.
-#[cfg(test)]
-const ACTION_BAR_DESKTOP_INSET: f32 = 10.0;
-#[cfg(test)]
-const HUD_TARGET_WIDTH: f32 = 800.0;
-#[cfg(test)]
-const ACTION_BUTTON_COUNT: f32 = 7.0;
+
+/// Width of the desktop command banner's embroidered-linen column (combat
+/// redesign §3, `docs/combat-redesign-proposal.md`).
+const BANNER_WIDTH: f32 = 200.0;
+/// Left/bottom margin anchoring the banner to the stage's lower-left corner.
+const BANNER_MARGIN: f32 = 16.0;
+/// Hard cap on the banner's height, as a percentage of the letterboxed
+/// stage (§3: "height to ~65% of stage"); `banner_occupied_height`'s test
+/// proves the nominal eight-row content stays inside it.
+const BANNER_MAX_HEIGHT_PERCENT: f32 = 65.0;
+/// Side of a banner row's square pictogram tile. 28 (not the proposal's
+/// sketched ~40) so eight rows plus four group headers fit the 65% height
+/// budget inside `panel_bundle`'s 24px border inset; the 32px source
+/// pictograms downscale cleanly.
+const BANNER_TILE_SIZE: f32 = 28.0;
+/// Minimum height of one banner action row (the tile side: the two text
+/// lines beside it are shorter).
+const BANNER_ROW_HEIGHT: f32 = 28.0;
+/// Gap between a group's header and its rows, and between sibling rows.
+const BANNER_ROW_GAP: f32 = 2.0;
+/// Gap between two labeled groups.
+const BANNER_GROUP_GAP: f32 = 8.0;
+/// Fixed height of a group header line, so the banner's occupied height is
+/// a pure function of these constants (see `banner_occupied_height`).
+const BANNER_HEADER_HEIGHT: f32 = 14.0;
+/// Side of the phone tiles' square pictogram, sized to fit the 56px rows
+/// alongside their two text lines.
+const PHONE_TILE_SIZE: f32 = 20.0;
+/// Side of the small square distance mark a reach-disabled strike row shows
+/// (see [`ReachDistanceMark`]).
+const REACH_MARK_SIZE: f32 = 8.0;
 
 /// Row height for every phone control — category buttons and open-category
 /// action buttons alike (#199) — comfortably above the 44px CSS touch-target
@@ -207,11 +227,146 @@ pub(super) struct ActionGlyph;
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ActionCostOrReason;
 
-/// The bottom action bar: desktop's single wrapping row (#189, unchanged) or
-/// phone's category-disclosure stack (#199, see [`spawn_phone_action_bar`]).
-/// Both iterate [`generate_action_descriptors`] plus [`ExtraDescriptors`] —
-/// never a hard-coded button list — so a later registered action renders
-/// here with no edits to this function.
+/// Marker on every desktop banner action row (§3): tells
+/// [`update_action_buttons`] to render the compact [`banner_info_line`]
+/// instead of the phone's [`ActionDescriptor::sublabel`] while enabled.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct BannerActionRow;
+
+/// Marker on one banner group's header text, carrying its category so tests
+/// can assert the §3 decision order without matching on Romanian strings.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct BannerGroupHeader(pub ActionCategory);
+
+/// The small square mark at the tail of a banner strike row, shown only
+/// while the strike is reach-disabled: a miniature echo of the arena's
+/// ground distance chip (same dim [`TEXT_DISABLED`] tone), tying the row's
+/// "Prea departe" reason to the on-stage gap readout. Hovering the row
+/// additionally pulses the chip itself — see
+/// [`pulse_distance_chip_on_reach_hover`].
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ReachDistanceMark;
+
+/// Handles to the generated action pictograms
+/// (`assets/ui/pictograms/<pictogram_id>.png`, `scripts/generate-pictograms.py`),
+/// keyed by [`ActionDescriptor::pictogram_id`] — the exact string contract
+/// [`super::actions::ActionId`]'s docs promised for #122. Loaded once at
+/// startup; empty when no `AssetServer` exists (headless tests), in which
+/// case every tile falls back to its ASCII [`glyph_for`] well.
+#[derive(Resource, Debug, Clone, Default)]
+pub(super) struct ActionPictograms(HashMap<ActionId, Handle<Image>>);
+
+impl ActionPictograms {
+    fn handle(&self, pictogram_id: ActionId) -> Option<Handle<Image>> {
+        self.0.get(pictogram_id).cloned()
+    }
+}
+
+/// Loads the eight real actions' pictograms. A descriptor registered via
+/// [`ExtraDescriptors`] has no entry here and renders the ASCII fallback,
+/// exactly like a missing file would.
+pub(super) fn load_action_pictograms(
+    mut icons: ResMut<ActionPictograms>,
+    asset_server: Option<Res<AssetServer>>,
+) {
+    let Some(asset_server) = asset_server else {
+        return;
+    };
+    for action in super::actions::ALL_ACTIONS {
+        let id = action_id(action);
+        icons
+            .0
+            .insert(id, asset_server.load(format!("ui/pictograms/{id}.png")));
+    }
+}
+
+/// The desktop banner's §3 decision order — strikes, movement, defense,
+/// recovery — deliberately different from phone's
+/// [`super::actions::CATEGORY_ORDER`]: the banner reads top-to-bottom as
+/// "what do I want to do this turn", while the phone's category strip keeps
+/// its established attack-first disclosure order.
+const BANNER_CATEGORY_ORDER: [ActionCategory; 5] = [
+    ActionCategory::Strikes,
+    ActionCategory::Movement,
+    ActionCategory::Defense,
+    ActionCategory::Utility,
+    ActionCategory::Special,
+];
+
+/// The banner's Romanian group headers (§3). "Lovituri" (strikes as a
+/// group of blows), not the phone's "Atac" — the proposal names the groups
+/// explicitly.
+fn banner_category_label(category: ActionCategory) -> &'static str {
+    match category {
+        ActionCategory::Strikes => "Lovituri",
+        ActionCategory::Movement => "Mișcare",
+        ActionCategory::Defense => "Apărare",
+        ActionCategory::Utility => "Refacere",
+        ActionCategory::Special => "Special",
+    }
+}
+
+/// Groups `descriptors` in [`BANNER_CATEGORY_ORDER`], skipping empty
+/// categories — same membership rule as
+/// [`super::actions::group_by_category`] (always
+/// [`ActionDescriptor::category`], so a test-registered descriptor lands in
+/// its declared group automatically), only the display order differs.
+fn banner_groups(descriptors: &[ActionDescriptor]) -> Vec<(ActionCategory, Vec<ActionDescriptor>)> {
+    BANNER_CATEGORY_ORDER
+        .into_iter()
+        .filter_map(|category| {
+            let members: Vec<ActionDescriptor> = descriptors
+                .iter()
+                .filter(|d| d.category == category)
+                .cloned()
+                .collect();
+            (!members.is_empty()).then_some((category, members))
+        })
+        .collect()
+}
+
+/// A banner row's compact info line while enabled (§3): strikes show
+/// `"70% · -9"`, block `"-3"`, rest `"+20"`, movement a direction arrow
+/// with its band shift. Every number comes from the descriptor's own
+/// structured fields ([`ActionDescriptor::hit_chance`]/
+/// [`ActionDescriptor::cost`]); only the movement arrow is an id-keyed
+/// cosmetic, like [`glyph_for`].
+fn banner_info_line(descriptor: &ActionDescriptor) -> String {
+    match descriptor.hit_chance {
+        Some(chance) => format!("{chance}% · {}", banner_cost_line(descriptor)),
+        None => banner_cost_line(descriptor),
+    }
+}
+
+/// The chance-free part of [`banner_info_line`] — also the spawn-time text,
+/// for the same reason [`spawn_action_bar`]'s placeholder spawn shows cost
+/// only: the hit chance depends on both fighters' real `Attributes`.
+fn banner_cost_line(descriptor: &ActionDescriptor) -> String {
+    match descriptor.cost {
+        ActionCost::Stamina(n) => format!("-{n}"),
+        ActionCost::Restore(n) => format!("+{n}"),
+        ActionCost::None => movement_hint(descriptor.pictogram_id).to_string(),
+        other => other.display_text(),
+    }
+}
+
+/// Direction arrow + band shift for a movement row's info line. Id-keyed
+/// cosmetic text (fallback for unknown ids), mirroring [`glyph_for`].
+fn movement_hint(pictogram_id: ActionId) -> &'static str {
+    match pictogram_id {
+        "step-forward" => "-> o bandă",
+        "leap-forward" => ">> două benzi",
+        "step-back" => "<- o bandă",
+        _ => "poziție",
+    }
+}
+
+/// The action palette: desktop's vertical command banner on the stage's
+/// left edge (combat redesign §3) or phone's category-disclosure stack
+/// (#199, see [`spawn_phone_action_bar`]). Both iterate
+/// [`generate_action_descriptors`] plus [`ExtraDescriptors`] — never a
+/// hard-coded button list — so a later registered action renders here with
+/// no edits to this function.
 ///
 /// Spawned with [`DescriptorContext::spawn_placeholder`] (see its docs):
 /// `CombatTurn` does not exist yet at this point in the `OnEnter(Fight)`
@@ -222,33 +377,53 @@ pub(crate) struct ActionCostOrReason;
 /// regardless (closed by default), so this placeholder-vs-real distinction
 /// only matters for desktop's/the category row's *cosmetic* fields (label,
 /// cost text, glyph) — never an enabled/disabled claim.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_action_bar(
     parent: &mut ChildSpawnerCommands,
     ui_font: &UiFont,
     panel_texture: &PanelTexture,
     is_mobile: bool,
     extra: &ExtraDescriptors,
+    icons: &ActionPictograms,
     viewport: &ViewportInfo,
     letterbox: &LetterboxRect,
 ) {
     if is_mobile {
+        // The phone bar itself holds only text category buttons; its action
+        // rows (and their pictogram tiles) spawn later, on category open —
+        // see `sync_phone_open_category`.
         spawn_phone_action_bar(parent, ui_font, extra, viewport, letterbox);
         return;
     }
+    spawn_desktop_banner(parent, ui_font, panel_texture, extra, icons);
+}
 
+/// §3's desktop command banner: a ~200px embroidered-linen column anchored
+/// to the stage's lower-left corner (`left`/`bottom` [`BANNER_MARGIN`],
+/// capped at [`BANNER_MAX_HEIGHT_PERCENT`] of the letterboxed stage the HUD
+/// root is sized to), holding the four labeled groups of
+/// [`BANNER_CATEGORY_ORDER`] in decision order, one [`spawn_banner_row`]
+/// per descriptor. The staging clamp (`arena::staging::STAGE_MIN_X`)
+/// guarantees fighters never walk more than a sliver behind it.
+///
+/// Tab order (#213): the single [`TabGroup`] walks the tree in spawn order,
+/// so keyboard focus follows the same group-by-group decision order the eye
+/// does.
+fn spawn_desktop_banner(
+    parent: &mut ChildSpawnerCommands,
+    ui_font: &UiFont,
+    panel_texture: &PanelTexture,
+    extra: &ExtraDescriptors,
+    icons: &ActionPictograms,
+) {
     let node = Node {
         position_type: PositionType::Absolute,
-        bottom: Val::Px(12.0),
-        // 0, not `ACTION_BAR_DESKTOP_INSET`: the rendered pre-#199 value --
-        // see that constant's doc comment for why the insets never actually
-        // painted.
-        left: Val::Px(0.0),
-        right: Val::Px(0.0),
-        flex_direction: FlexDirection::Row,
-        flex_wrap: FlexWrap::NoWrap,
-        justify_content: JustifyContent::Center,
-        row_gap: Val::Px(0.0),
-        column_gap: Val::Px(ACTION_BAR_DESKTOP_GAP),
+        left: Val::Px(BANNER_MARGIN),
+        bottom: Val::Px(BANNER_MARGIN),
+        width: Val::Px(BANNER_WIDTH),
+        max_height: Val::Percent(BANNER_MAX_HEIGHT_PERCENT),
+        flex_direction: FlexDirection::Column,
+        row_gap: Val::Px(BANNER_GROUP_GAP),
         padding: UiRect::all(Val::Px(ACTION_BAR_PADDING)),
         ..default()
     };
@@ -261,14 +436,116 @@ pub(super) fn spawn_action_bar(
             panel_bundle(panel_texture, node),
             BackgroundColor(PANEL_LINEN),
             ActionBarRoot,
-            // #213: one shared focus region for the whole bar — see
+            // #213: one shared focus region for the whole banner — see
             // `crate::ui_widgets::focus`'s registration API.
             TabGroup::new(0),
         ))
-        .with_children(|bar| {
-            for descriptor in &descriptors {
-                spawn_action_button(bar, descriptor, ui_font);
+        .with_children(|banner| {
+            for (category, members) in banner_groups(&descriptors) {
+                banner
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(BANNER_ROW_GAP),
+                        ..default()
+                    })
+                    .with_children(|group| {
+                        group
+                            .spawn(Node {
+                                height: Val::Px(BANNER_HEADER_HEIGHT),
+                                align_items: AlignItems::Center,
+                                ..default()
+                            })
+                            .with_children(|header| {
+                                header.spawn((
+                                    Text::new(banner_category_label(category)),
+                                    ui_font.text_font_bold(11.0),
+                                    TextColor(GOLD),
+                                    BannerGroupHeader(category),
+                                ));
+                            });
+                        for descriptor in &members {
+                            spawn_banner_row(group, descriptor, ui_font, icons);
+                        }
+                    });
             }
+        });
+}
+
+/// One banner action row (§3): pictogram tile, then the Romanian label over
+/// its compact info line, then the (hidden by default) reach mark. The row
+/// is the [`ActionButton`]; [`update_action_buttons`] drives its
+/// enabled/dimmed state and swaps the info line for the descriptor's
+/// [`ActionDescriptor::disabled_reason`] exactly like every other palette
+/// button.
+fn spawn_banner_row(
+    parent: &mut ChildSpawnerCommands,
+    descriptor: &ActionDescriptor,
+    ui_font: &UiFont,
+    icons: &ActionPictograms,
+) {
+    parent
+        .spawn((
+            Button,
+            ActionButton {
+                id: descriptor.id,
+                intent: descriptor.intent,
+            },
+            BannerActionRow,
+            Node {
+                width: Val::Percent(100.0),
+                min_height: Val::Px(BANNER_ROW_HEIGHT),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(6.0),
+                padding: UiRect::horizontal(Val::Px(2.0)),
+                ..default()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+            // #213: disabled actions stay focusable so their reason is
+            // reachable — see `crate::ui_widgets::focus`'s registration API.
+            Focusable,
+            TabIndex(0),
+        ))
+        .with_children(|row| {
+            spawn_pictogram_tile(
+                row,
+                descriptor.pictogram_id,
+                icons,
+                ui_font,
+                BANNER_TILE_SIZE,
+            );
+            row.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                flex_grow: 1.0,
+                ..default()
+            })
+            .with_children(|text_column| {
+                text_column.spawn((
+                    Text::new(descriptor.label),
+                    ui_font.text_font(12.0),
+                    TextColor(CREAM),
+                ));
+                // Cost only at spawn (placeholder attributes, see
+                // `banner_cost_line`); `update_action_buttons` swaps in the
+                // full `banner_info_line` the same frame.
+                text_column.spawn((
+                    Text::new(banner_cost_line(descriptor)),
+                    ui_font.text_font(10.0),
+                    TextColor(CREAM),
+                    ActionCostOrReason,
+                ));
+            });
+            row.spawn((
+                Node {
+                    width: Val::Px(REACH_MARK_SIZE),
+                    height: Val::Px(REACH_MARK_SIZE),
+                    flex_shrink: 0.0,
+                    ..default()
+                },
+                BackgroundColor(TEXT_DISABLED.with_alpha(GROUND_CHIP_ALPHA)),
+                Visibility::Hidden,
+                ReachDistanceMark,
+            ));
         });
 }
 
@@ -394,87 +671,44 @@ fn spawn_category_button(
         });
 }
 
-/// The small carved-wood glyph well shared by every action tile — factored
-/// out of [`spawn_action_button`]/[`spawn_phone_action_button`] so desktop
-/// and phone action buttons can never drift on how they render an action's
-/// icon.
-fn spawn_glyph_well(parent: &mut ChildSpawnerCommands, pictogram_id: ActionId, ui_font: &UiFont) {
+/// The square pictogram tile shared by every action row — banner
+/// ([`BANNER_TILE_SIZE`]) and phone ([`PHONE_TILE_SIZE`]) alike, so the two
+/// layouts can never drift on how they render an action's icon. Renders the
+/// generated pictogram when [`ActionPictograms`] has a handle for
+/// `pictogram_id`, and falls back to the carved-wood ASCII [`glyph_for`]
+/// well otherwise (headless tests without an `AssetServer`, or a descriptor
+/// registered without art).
+fn spawn_pictogram_tile(
+    parent: &mut ChildSpawnerCommands,
+    pictogram_id: ActionId,
+    icons: &ActionPictograms,
+    ui_font: &UiFont,
+    size: f32,
+) {
+    let node = Node {
+        width: Val::Px(size),
+        height: Val::Px(size),
+        flex_shrink: 0.0,
+        justify_content: JustifyContent::Center,
+        align_items: AlignItems::Center,
+        ..default()
+    };
+    if let Some(handle) = icons.handle(pictogram_id) {
+        parent.spawn((node, ImageNode::new(handle), ActionGlyph));
+        return;
+    }
     parent
         .spawn((
-            Node {
-                width: Val::Px(34.0),
-                height: Val::Px(20.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
+            node,
             BackgroundColor(WALNUT),
             BorderColor::all(GOLD),
+            ActionGlyph,
         ))
         .with_children(|well| {
             well.spawn((
                 Text::new(glyph_for(pictogram_id)),
-                ui_font.text_font_bold(14.0),
+                ui_font.text_font_bold(12.0),
                 TextColor(GOLD),
-                ActionGlyph,
-            ));
-        });
-}
-
-/// One desktop action button: the Romanian label over its cost/disabled-
-/// reason line, in a fixed-size tile. Unchanged by #199 — phone action
-/// buttons are [`spawn_phone_action_button`] instead, a structurally
-/// different (row-flexed, real-enabled-state-at-spawn) tile.
-fn spawn_action_button(
-    parent: &mut ChildSpawnerCommands,
-    descriptor: &ActionDescriptor,
-    ui_font: &UiFont,
-) {
-    let node = Node {
-        width: Val::Px(ACTION_BUTTON_WIDTH),
-        height: Val::Px(ACTION_BUTTON_HEIGHT),
-        flex_direction: FlexDirection::Column,
-        justify_content: JustifyContent::Center,
-        align_items: AlignItems::Center,
-        row_gap: Val::Px(2.0),
-        ..default()
-    };
-
-    parent
-        .spawn((
-            Button,
-            ActionButton {
-                id: descriptor.id,
-                intent: descriptor.intent,
-            },
-            node,
-            BackgroundColor(BUTTON_NORMAL),
-            // #213: disabled actions stay focusable so their reason is
-            // reachable — see `crate::ui_widgets::focus`'s registration API.
-            Focusable,
-            TabIndex(0),
-        ))
-        .with_children(|button| {
-            spawn_glyph_well(button, descriptor.pictogram_id, ui_font);
-            button.spawn((
-                Text::new(descriptor.label),
-                ui_font.text_font(15.0),
-                TextColor(CREAM),
-            ));
-            // #124: `descriptor.cost.display_text()`, not `sublabel()` —
-            // this spawn runs from `DescriptorContext::spawn_placeholder()`
-            // (see `spawn_action_bar`), whose `Attributes` are both defaults,
-            // not the real fighters', so a hit chance computed from it here
-            // would be wrong. The cost text alone is safe: it depends only
-            // on the fixed action, never on placeholder data.
-            // `update_action_buttons` resyncs this text (including the real
-            // hit chance) the moment real duel state exists, later in this
-            // same `OnEnter` frame and before anything renders.
-            button.spawn((
-                Text::new(descriptor.cost.display_text()),
-                ui_font.text_font(11.0),
-                TextColor(CREAM),
-                ActionCostOrReason,
             ));
         });
 }
@@ -490,6 +724,7 @@ fn spawn_phone_action_button(
     parent: &mut ChildSpawnerCommands,
     descriptor: &ActionDescriptor,
     ui_font: &UiFont,
+    icons: &ActionPictograms,
     enabled: bool,
 ) {
     let (background, text_color) = if enabled {
@@ -539,7 +774,13 @@ fn spawn_phone_action_button(
         button.insert(DisabledButton);
     }
     button.with_children(|button| {
-        spawn_glyph_well(button, descriptor.pictogram_id, ui_font);
+        spawn_pictogram_tile(
+            button,
+            descriptor.pictogram_id,
+            icons,
+            ui_font,
+            PHONE_TILE_SIZE,
+        );
         button.spawn((
             Text::new(descriptor.label),
             ui_font.text_font(15.0),
@@ -563,6 +804,7 @@ fn spawn_phone_action_button(
 fn glyph_for(pictogram_id: ActionId) -> &'static str {
     match pictogram_id {
         "quick-strike" => ">>",
+        "normal-strike" => "=>",
         "heavy-strike" => "**",
         "block" => "[]",
         "rest" => "++",
@@ -666,6 +908,7 @@ type AvailabilityControlled = (
     Entity,
     &'static ActionButton,
     Has<DisabledButton>,
+    Has<BannerActionRow>,
     &'static mut BackgroundColor,
     &'static Children,
 );
@@ -722,7 +965,7 @@ fn live_descriptors(
 /// swap below only touches buttons whose enabled state actually flipped, so
 /// it does not fight the hover-feedback system — the exact cadence the
 /// pre-#189 HUD already used for color alone. Applies identically to
-/// desktop's seven buttons and phone's (0–3) open action-row buttons — both
+/// desktop's eight buttons and phone's (0–3) open action-row buttons — both
 /// carry the same [`ActionButton`] component.
 ///
 /// The cost-or-reason *text* itself is resynced every call regardless of
@@ -746,6 +989,9 @@ pub(super) fn update_action_buttons(
     enemy: EnemyStats,
     mut buttons: Query<AvailabilityControlled, With<Button>>,
     mut text_nodes: Query<(&mut TextColor, Option<&mut Text>, Has<ActionCostOrReason>)>,
+    mut reach_marks: Query<&mut Visibility, With<ReachDistanceMark>>,
+    glyph_tiles: Query<(), With<ActionGlyph>>,
+    child_children: Query<&Children>,
 ) {
     let has_turn = turn.is_some();
     let presentation_busy = presentation
@@ -753,7 +999,7 @@ pub(super) fn update_action_buttons(
         .is_some_and(CombatPresentation::is_busy);
     let descriptors = live_descriptors(turn.as_deref(), presentation_busy, &player, &enemy, &extra);
 
-    for (entity, button, was_disabled, mut background, children) in &mut buttons {
+    for (entity, button, was_disabled, is_banner_row, mut background, children) in &mut buttons {
         let Some(descriptor) = descriptors.iter().find(|d| d.id == button.id) else {
             continue;
         };
@@ -774,26 +1020,141 @@ pub(super) fn update_action_buttons(
             }
         }
         let text_color = if enabled { CREAM } else { TEXT_DISABLED };
-        let cost_or_reason_text = if enabled {
-            descriptor.sublabel()
-        } else {
+        let cost_or_reason_text = if !enabled {
             descriptor
                 .disabled_reason
                 .clone()
                 .unwrap_or_else(|| "Lupta nu a început încă.".to_string())
+        } else if is_banner_row {
+            banner_info_line(descriptor)
+        } else {
+            descriptor.sublabel()
+        };
+        // §3: a reach-disabled strike additionally shows the small distance
+        // mark tying its reason to the arena's ground gap chip — keyed off
+        // the descriptor's own `position_legal`, never a re-derived rule.
+        let mark_visibility = if descriptor.hit_chance.is_some() && !descriptor.position_legal {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
         };
         for child in children.iter() {
-            if let Ok((mut color, text, is_cost_or_reason)) = text_nodes.get_mut(child) {
-                if color.0 != text_color {
-                    color.0 = text_color;
-                }
-                if is_cost_or_reason
-                    && let Some(mut text) = text
-                    && text.0 != cost_or_reason_text
-                {
-                    text.0 = cost_or_reason_text.clone();
+            if let Ok(mut mark) = reach_marks.get_mut(child) {
+                mark.set_if_neq(mark_visibility);
+            }
+            apply_row_text(child, text_color, &cost_or_reason_text, &mut text_nodes);
+            // The banner row nests its label/info texts one level down, in
+            // a column beside the pictogram tile — restyle those too. The
+            // tile itself is skipped so its fallback ASCII glyph keeps its
+            // carved-gold tone, exactly like the pre-banner glyph well.
+            if glyph_tiles.contains(child) {
+                continue;
+            }
+            if let Ok(grandchildren) = child_children.get(child) {
+                for grandchild in grandchildren.iter() {
+                    apply_row_text(
+                        grandchild,
+                        text_color,
+                        &cost_or_reason_text,
+                        &mut text_nodes,
+                    );
                 }
             }
+        }
+    }
+}
+
+/// Restyles one (grand)child text node of an action button: the shared
+/// enabled/disabled color, plus the cost-or-reason swap on the
+/// [`ActionCostOrReason`] node. No-op for non-text entities.
+fn apply_row_text(
+    entity: Entity,
+    text_color: Color,
+    cost_or_reason_text: &str,
+    text_nodes: &mut Query<(&mut TextColor, Option<&mut Text>, Has<ActionCostOrReason>)>,
+) {
+    if let Ok((mut color, text, is_cost_or_reason)) = text_nodes.get_mut(entity) {
+        if color.0 != text_color {
+            color.0 = text_color;
+        }
+        if is_cost_or_reason
+            && let Some(mut text) = text
+            && text.0 != cost_or_reason_text
+        {
+            text.0 = cost_or_reason_text.to_string();
+        }
+    }
+}
+
+/// Cycle frequency of the ground-chip reach pulse, in hertz.
+const CHIP_PULSE_HZ: f32 = 1.6;
+/// Alpha the pulse adds to [`GROUND_CHIP_ALPHA`]: a guaranteed floor lift
+/// plus the oscillating half, so the chip is always visibly brighter while
+/// linked — never coincidentally at its resting value mid-wave.
+const CHIP_PULSE_ALPHA_FLOOR: f32 = 0.15;
+const CHIP_PULSE_ALPHA_WAVE: f32 = 0.15;
+/// Scale the pulse adds to the chip's resting 1.0, same floor+wave split.
+const CHIP_PULSE_SCALE_FLOOR: f32 = 0.03;
+const CHIP_PULSE_SCALE_WAVE: f32 = 0.04;
+
+/// §3's hover link: while a reach-disabled strike row is hovered, the
+/// arena's ground distance chip ([`GroundDistanceChip`]) pulses subtly —
+/// a small alpha/scale breath — so the player's eye is led from the greyed
+/// row to the on-stage gap readout explaining it. Keyed off the live
+/// descriptor's `hit_chance`/`position_legal` (the same
+/// [`live_descriptors`] every palette system reads), never a second copy of
+/// the reach rule. Under reduced motion the chip holds a static highlight
+/// (alpha floor only, no oscillation or scaling) instead of animating.
+/// Purely presentational: touches only the chip's `TextColor`/`Transform`,
+/// never duel state or the combat RNG.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn pulse_distance_chip_on_reach_hover(
+    time: Res<Time>,
+    accessibility: Option<Res<AccessibilityPreferences>>,
+    turn: Option<Res<CombatTurn>>,
+    presentation: Option<Res<CombatPresentation>>,
+    extra: Res<ExtraDescriptors>,
+    player: PlayerStats,
+    enemy: EnemyStats,
+    buttons: Query<(&Interaction, &ActionButton)>,
+    mut chips: Query<(&mut TextColor, &mut Transform), With<GroundDistanceChip>>,
+) {
+    let hovered: Vec<ActionId> = buttons
+        .iter()
+        .filter(|(interaction, _)| **interaction == Interaction::Hovered)
+        .map(|(_, button)| button.id)
+        .collect();
+    let linked = !hovered.is_empty() && {
+        let presentation_busy = presentation
+            .as_deref()
+            .is_some_and(CombatPresentation::is_busy);
+        live_descriptors(turn.as_deref(), presentation_busy, &player, &enemy, &extra)
+            .iter()
+            .any(|d| hovered.contains(&d.id) && d.hit_chance.is_some() && !d.position_legal)
+    };
+
+    let (alpha, scale) = if linked {
+        let reduced_motion = accessibility.as_deref().is_some_and(|a| a.reduced_motion);
+        if reduced_motion {
+            (GROUND_CHIP_ALPHA + CHIP_PULSE_ALPHA_FLOOR, 1.0)
+        } else {
+            let wave =
+                0.5 + 0.5 * (time.elapsed_secs() * CHIP_PULSE_HZ * std::f32::consts::TAU).sin();
+            (
+                GROUND_CHIP_ALPHA + CHIP_PULSE_ALPHA_FLOOR + CHIP_PULSE_ALPHA_WAVE * wave,
+                1.0 + CHIP_PULSE_SCALE_FLOOR + CHIP_PULSE_SCALE_WAVE * wave,
+            )
+        }
+    } else {
+        (GROUND_CHIP_ALPHA, 1.0)
+    };
+    for (mut color, mut transform) in &mut chips {
+        let target = TEXT_DISABLED.with_alpha(alpha);
+        if color.0 != target {
+            color.0 = target;
+        }
+        if transform.scale != Vec3::splat(scale) {
+            transform.scale = Vec3::splat(scale);
         }
     }
 }
@@ -822,6 +1183,7 @@ pub(super) fn sync_phone_open_category(
     mut commands: Commands,
     state: Res<PhonePaletteState>,
     ui_font: Res<UiFont>,
+    icons: Res<ActionPictograms>,
     turn: Option<Res<CombatTurn>>,
     presentation: Option<Res<CombatPresentation>>,
     extra: Res<ExtraDescriptors>,
@@ -870,7 +1232,7 @@ pub(super) fn sync_phone_open_category(
     commands.entity(row_entity).with_children(|row| {
         for descriptor in &members {
             let enabled = has_turn && descriptor.enabled;
-            spawn_phone_action_button(row, descriptor, &ui_font, enabled);
+            spawn_phone_action_button(row, descriptor, &ui_font, &icons, enabled);
         }
     });
 }
@@ -889,7 +1251,7 @@ pub(super) fn sync_phone_open_category(
 /// #213: also clears [`InputFocus`] on an actual rebuild. Unlike the phone
 /// palette's own category open/close (a documented safe neighbor always
 /// exists — see [`sync_phone_open_category`]), a breakpoint crossing
-/// replaces the *entire* layout (seven flat buttons versus category
+/// replaces the *entire* layout (eight flat buttons versus category
 /// disclosure), so there is no single control on the new layout that is the
 /// "same" one focus was on; clearing is the documented safe fallback here,
 /// and the next Tab press lands on the new layout's first control (the same
@@ -903,6 +1265,7 @@ pub(super) fn rebuild_action_bar_on_breakpoint_change(
     ui_font: Res<UiFont>,
     panel_texture: Res<PanelTexture>,
     extra: Res<ExtraDescriptors>,
+    icons: Res<ActionPictograms>,
     mut phone_state: ResMut<PhonePaletteState>,
     mut input_focus: ResMut<InputFocus>,
     hud_root: Query<Entity, With<HudScreen>>,
@@ -940,31 +1303,38 @@ pub(super) fn rebuild_action_bar_on_breakpoint_change(
             &panel_texture,
             viewport.is_mobile,
             &extra,
+            &icons,
             &viewport,
             &letterbox,
         );
     });
 }
 
-/// The action bar's actual rendered padding after `panel_bundle` merges
+/// The banner's actual rendered padding after `panel_bundle` merges
 /// `ACTION_BAR_PADDING` with the border inset (#120) — whichever is larger,
-/// per side. Kept in sync with `merge_panel_padding`'s per-side rule so this
-/// fit check reflects reality instead of the pre-merge constant.
+/// per side. Kept in sync with `merge_panel_padding`'s per-side rule so the
+/// height budget below reflects reality instead of the pre-merge constant.
 #[cfg(test)]
-fn desktop_action_strip_effective_padding() -> f32 {
+fn banner_effective_padding() -> f32 {
     ACTION_BAR_PADDING.max(PANEL_BORDER_INSET)
 }
 
+/// The banner's nominal occupied height for the eight real actions in four
+/// groups, as a pure function of the layout constants: rows, headers, the
+/// row gap after each header/between rows, the inter-group gaps, and the
+/// merged panel padding. The geometry test proves this stays within
+/// [`BANNER_MAX_HEIGHT_PERCENT`] of the 600px design stage.
 #[cfg(test)]
-fn desktop_action_strip_occupied_width() -> f32 {
-    ACTION_BUTTON_WIDTH * ACTION_BUTTON_COUNT
-        + ACTION_BAR_DESKTOP_GAP * (ACTION_BUTTON_COUNT - 1.0)
-        + desktop_action_strip_effective_padding() * 2.0
-}
-
-#[cfg(test)]
-fn desktop_action_strip_available_width() -> f32 {
-    HUD_TARGET_WIDTH - ACTION_BAR_DESKTOP_INSET * 2.0
+fn banner_occupied_height() -> f32 {
+    let rows = 8.0;
+    let groups = 4.0;
+    rows * BANNER_ROW_HEIGHT
+        + groups * BANNER_HEADER_HEIGHT
+        // Each group is a column with `BANNER_ROW_GAP` between its header
+        // and every row: one gap per row.
+        + rows * BANNER_ROW_GAP
+        + (groups - 1.0) * BANNER_GROUP_GAP
+        + banner_effective_padding() * 2.0
 }
 
 #[cfg(test)]
@@ -1175,15 +1545,15 @@ mod tests {
     // --- pure descriptor generation used by the palette ---
 
     #[test]
-    fn spawn_placeholder_produces_all_seven_actions_with_no_disabled_reason() {
+    fn spawn_placeholder_produces_all_eight_actions_with_no_disabled_reason() {
         let descriptors = generate_action_descriptors(&DescriptorContext::spawn_placeholder());
-        assert_eq!(descriptors.len(), 7);
+        assert_eq!(descriptors.len(), 8);
     }
 
     // --- headless screen behavior (moved from the pre-#189 hud.rs) ---
 
     #[test]
-    fn entering_fight_spawns_all_seven_action_buttons() {
+    fn entering_fight_spawns_all_eight_action_buttons() {
         let mut app = test_app();
         let buttons = app
             .world_mut()
@@ -1191,13 +1561,13 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(
-            buttons, 7,
-            "four combat buttons plus three movement buttons"
+            buttons, 8,
+            "five combat buttons plus three movement buttons"
         );
     }
 
     #[test]
-    fn action_tiles_are_icon_led_and_fit_the_desktop_strip() {
+    fn banner_rows_are_icon_led_and_the_banner_is_anchored_left() {
         let mut app = test_app();
 
         let glyphs = app
@@ -1205,18 +1575,213 @@ mod tests {
             .query::<&ActionGlyph>()
             .iter(app.world())
             .count();
-        assert_eq!(glyphs, 7, "every action button has a glyph marker");
+        assert_eq!(glyphs, 8, "every action row has a pictogram tile");
 
-        let mut buttons = app
+        let node = app
             .world_mut()
-            .query_filtered::<&Node, With<ActionButton>>();
-        for node in buttons.iter(app.world()) {
-            assert_eq!(node.width, Val::Px(ACTION_BUTTON_WIDTH));
-            assert_eq!(node.height, Val::Px(ACTION_BUTTON_HEIGHT));
-        }
+            .query_filtered::<&Node, With<ActionBarRoot>>()
+            .single(app.world())
+            .expect("one banner root");
+        assert_eq!(node.left, Val::Px(BANNER_MARGIN), "anchored left:16");
+        assert_eq!(node.bottom, Val::Px(BANNER_MARGIN), "anchored bottom:16");
+        assert_eq!(node.width, Val::Px(BANNER_WIDTH), "~200px wide column");
+        assert_eq!(
+            node.max_height,
+            Val::Percent(BANNER_MAX_HEIGHT_PERCENT),
+            "hard-capped at ~65% of the letterboxed stage"
+        );
+        assert_eq!(node.flex_direction, FlexDirection::Column);
+    }
+
+    /// §3's height budget, as pure geometry: the eight rows across four
+    /// labeled groups — including headers, gaps, and the embroidered
+    /// panel's merged padding — fit within 65% of the 600px design stage,
+    /// so the `max_height` cap above never actually truncates the nominal
+    /// content.
+    #[test]
+    fn banner_nominal_content_fits_the_65_percent_stage_height_budget() {
+        const STAGE_DESIGN_HEIGHT: f32 = 600.0;
         assert!(
-            desktop_action_strip_occupied_width() <= desktop_action_strip_available_width(),
-            "desktop action strip must fit the 800px target viewport"
+            banner_occupied_height() <= STAGE_DESIGN_HEIGHT * BANNER_MAX_HEIGHT_PERCENT / 100.0,
+            "banner content ({}) must fit {}% of the {STAGE_DESIGN_HEIGHT}px stage",
+            banner_occupied_height(),
+            BANNER_MAX_HEIGHT_PERCENT
+        );
+    }
+
+    /// Walks the banner subtree in tree order and returns what it renders:
+    /// each group header's category followed by that group's action button
+    /// ids — the exact §3 decision-order contract.
+    fn banner_sequence(app: &mut App) -> Vec<String> {
+        fn walk(app: &App, entity: Entity, out: &mut Vec<String>) {
+            if let Some(header) = app.world().get::<BannerGroupHeader>(entity) {
+                out.push(format!("header:{:?}", header.0));
+            }
+            if let Some(button) = app.world().get::<ActionButton>(entity) {
+                out.push(button.id.to_string());
+            }
+            if let Some(children) = app.world().get::<Children>(entity) {
+                for child in children.iter() {
+                    walk(app, child, out);
+                }
+            }
+        }
+        let root = app
+            .world_mut()
+            .query_filtered::<Entity, With<ActionBarRoot>>()
+            .single(app.world())
+            .expect("one banner root");
+        let mut out = Vec::new();
+        walk(app, root, &mut out);
+        out
+    }
+
+    #[test]
+    fn banner_groups_render_in_decision_order_with_their_rows() {
+        let mut app = test_app();
+        assert_eq!(
+            banner_sequence(&mut app),
+            vec![
+                "header:Strikes",
+                "quick-strike",
+                "normal-strike",
+                "heavy-strike",
+                "header:Movement",
+                "step-forward",
+                "leap-forward",
+                "step-back",
+                "header:Defense",
+                "block",
+                "header:Utility",
+                "rest",
+            ],
+            "groups follow §3's decision order, rows follow ALL_ACTIONS' relative order"
+        );
+    }
+
+    #[test]
+    fn banner_strike_rows_show_the_compact_info_line_when_enabled() {
+        let mut app = test_app();
+        let quick = find_button(&mut app, "quick-strike");
+        let text = find_cost_or_reason_text(&mut app, quick);
+        assert!(
+            text.ends_with("% · -5") || text.contains("% · -5"),
+            "banner quick-strike info line {text:?} must be the compact \"<hit>% · -5\" form"
+        );
+        let rest = find_button(&mut app, "rest");
+        assert_eq!(find_cost_or_reason_text(&mut app, rest), "+20");
+        let block = find_button(&mut app, "block");
+        assert_eq!(find_cost_or_reason_text(&mut app, block), "-3");
+        // Step-back is the movement action that is *enabled* at the
+        // starting close range; the disabled advances show their reasons.
+        let step_back = find_button(&mut app, "step-back");
+        assert_eq!(find_cost_or_reason_text(&mut app, step_back), "<- o bandă");
+    }
+
+    /// Finds the [`ReachDistanceMark`] child of `button`.
+    fn find_reach_mark(app: &mut App, button: Entity) -> Entity {
+        let children = app
+            .world()
+            .get::<Children>(button)
+            .expect("button has children")
+            .to_vec();
+        children
+            .into_iter()
+            .find(|&child| app.world().get::<ReachDistanceMark>(child).is_some())
+            .expect("banner row has a reach mark child")
+    }
+
+    #[test]
+    fn reach_disabled_strikes_show_the_distance_mark_and_reason() {
+        let mut app = test_app();
+        app.world_mut().resource_mut::<CombatTurn>().distance = crate::combat::DuelDistance::FAR;
+        app.update();
+
+        let quick = find_button(&mut app, "quick-strike");
+        let mark = find_reach_mark(&mut app, quick);
+        assert_eq!(
+            app.world().get::<Visibility>(mark),
+            Some(&Visibility::Inherited),
+            "an out-of-reach strike shows its distance mark"
+        );
+        assert_eq!(
+            find_cost_or_reason_text(&mut app, quick),
+            "Prea departe pentru lovitură."
+        );
+
+        // Non-strike rows never show the mark, even out of reach.
+        let rest = find_button(&mut app, "rest");
+        let rest_mark = find_reach_mark(&mut app, rest);
+        assert_eq!(
+            app.world().get::<Visibility>(rest_mark),
+            Some(&Visibility::Hidden)
+        );
+
+        // Back in reach, the mark hides again.
+        app.world_mut().resource_mut::<CombatTurn>().distance = crate::combat::DuelDistance::CLOSE;
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(mark),
+            Some(&Visibility::Hidden),
+            "the mark hides once the strike is back in reach"
+        );
+    }
+
+    /// The chip's current `(alpha, scale_x)`.
+    fn chip_state(app: &mut App) -> (f32, f32) {
+        let (color, transform) = app
+            .world_mut()
+            .query_filtered::<(&TextColor, &Transform), With<GroundDistanceChip>>()
+            .single(app.world())
+            .expect("one ground distance chip");
+        (color.0.alpha(), transform.scale.x)
+    }
+
+    #[test]
+    fn hovering_a_reach_disabled_strike_pulses_the_ground_distance_chip() {
+        let mut app = test_app();
+        app.world_mut().resource_mut::<CombatTurn>().distance = crate::combat::DuelDistance::FAR;
+        app.update();
+        assert_eq!(
+            chip_state(&mut app),
+            (crate::arena::GROUND_CHIP_ALPHA, 1.0),
+            "unhovered, the chip rests at its etched baseline"
+        );
+
+        let quick = find_button(&mut app, "quick-strike");
+        app.world_mut()
+            .entity_mut(quick)
+            .insert(Interaction::Hovered);
+        app.update();
+        let (alpha, scale) = chip_state(&mut app);
+        assert!(
+            alpha > crate::arena::GROUND_CHIP_ALPHA,
+            "hovering the reach-disabled strike lifts the chip's alpha ({alpha})"
+        );
+        assert!(
+            scale > 1.0,
+            "hovering the reach-disabled strike scales the chip up subtly ({scale})"
+        );
+
+        app.world_mut().entity_mut(quick).insert(Interaction::None);
+        app.update();
+        assert_eq!(
+            chip_state(&mut app),
+            (crate::arena::GROUND_CHIP_ALPHA, 1.0),
+            "unhovering restores the resting look exactly"
+        );
+
+        // Back in melee reach the strike is position-legal again: hovering
+        // it must not pulse anything.
+        app.world_mut().resource_mut::<CombatTurn>().distance = crate::combat::DuelDistance::CLOSE;
+        app.world_mut()
+            .entity_mut(quick)
+            .insert(Interaction::Hovered);
+        app.update();
+        assert_eq!(
+            chip_state(&mut app),
+            (crate::arena::GROUND_CHIP_ALPHA, 1.0),
+            "an in-reach strike's hover never pulses the chip"
         );
     }
 
@@ -1274,22 +1839,22 @@ mod tests {
     }
 
     fn find_cost_or_reason_text(app: &mut App, button: Entity) -> String {
-        let children = app
-            .world()
-            .get::<Children>(button)
-            .expect("button has children")
-            .to_vec();
-        for child in children {
-            if app.world().get::<ActionCostOrReason>(child).is_some() {
-                return app
-                    .world()
-                    .get::<Text>(child)
-                    .expect("cost/reason node has Text")
-                    .0
-                    .clone();
+        // Depth-first: the banner row nests its texts in a column beside
+        // the pictogram tile, phone rows keep them as direct children.
+        fn search(app: &App, entity: Entity) -> Option<String> {
+            if app.world().get::<ActionCostOrReason>(entity).is_some() {
+                return Some(
+                    app.world()
+                        .get::<Text>(entity)
+                        .expect("cost/reason node has Text")
+                        .0
+                        .clone(),
+                );
             }
+            let children = app.world().get::<Children>(entity)?.to_vec();
+            children.into_iter().find_map(|child| search(app, child))
         }
-        panic!("no ActionCostOrReason child found");
+        search(app, button).unwrap_or_else(|| panic!("no ActionCostOrReason child found"))
     }
 
     #[test]
@@ -1312,6 +1877,7 @@ mod tests {
         assert!(player_pools(&mut app).0 > 0, "player survives");
         for id in [
             "quick-strike",
+            "normal-strike",
             "heavy-strike",
             "block",
             "rest",
@@ -1351,7 +1917,7 @@ mod tests {
     // --- extensibility seam (#189 acceptance criterion) ---
 
     #[test]
-    fn a_test_registered_eighth_descriptor_renders_and_emits_with_no_layout_edits() {
+    fn a_test_registered_extra_descriptor_renders_and_emits_with_no_layout_edits() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, CorePlugin, FlowPlugin));
         app.add_plugins((ArenaPlugin, CombatPlugin));
@@ -1396,8 +1962,8 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(
-            buttons, 8,
-            "seven real descriptors plus the test-registered eighth"
+            buttons, 9,
+            "eight real descriptors plus the test-registered ninth"
         );
 
         let extra_button = find_button(&mut app, "test-extra-action");
@@ -1410,7 +1976,7 @@ mod tests {
 
         // Pressing it emits the existing PlayerActionEvent(Rest) command --
         // proof that a registered descriptor emits through the same path as
-        // the seven real ones, with zero edits to this module's layout code.
+        // the eight real ones, with zero edits to this module's layout code.
         drain_enemy_stamina(&mut app);
         press_button(&mut app, extra_button);
         advance_presentation(&mut app);
@@ -1428,14 +1994,14 @@ mod tests {
     }
 
     #[test]
-    fn without_a_test_registration_the_palette_stays_at_seven_buttons() {
+    fn without_a_test_registration_the_palette_stays_at_eight_buttons() {
         let mut app = test_app();
         let buttons = app
             .world_mut()
             .query_filtered::<(), (With<ActionButton>, With<Button>)>()
             .iter(app.world())
             .count();
-        assert_eq!(buttons, 7, "ExtraDescriptors defaults to empty");
+        assert_eq!(buttons, 8, "ExtraDescriptors defaults to empty");
     }
 
     // --- phone category disclosure (#199) ---
@@ -1483,7 +2049,7 @@ mod tests {
             assert_eq!(
                 categories.len(),
                 4,
-                "the seven real actions span exactly four categories today"
+                "the eight real actions span exactly four categories today"
             );
 
             for entity in categories {
@@ -1512,8 +2078,8 @@ mod tests {
             let ids = action_button_ids(&mut app);
             assert_eq!(
                 ids,
-                vec!["heavy-strike", "quick-strike"],
-                "only the Strikes category's two registered actions appear"
+                vec!["heavy-strike", "normal-strike", "quick-strike"],
+                "only the Strikes category's three registered actions appear"
             );
 
             for entity in app
@@ -1550,7 +2116,7 @@ mod tests {
             press_button(&mut app, strikes_button);
             assert_eq!(
                 action_button_ids(&mut app),
-                vec!["heavy-strike", "quick-strike"]
+                vec!["heavy-strike", "normal-strike", "quick-strike"]
             );
 
             let defense_button = find_category_button(&mut app, ActionCategory::Defense);
@@ -1668,7 +2234,7 @@ mod tests {
         #[test]
         fn crossing_into_mobile_at_runtime_rebuilds_categories_from_the_flat_row() {
             let mut app = test_app();
-            assert_eq!(action_button_ids(&mut app).len(), 7, "starts desktop-flat");
+            assert_eq!(action_button_ids(&mut app).len(), 8, "starts desktop-flat");
 
             app.world_mut()
                 .resource_mut::<ViewportInfo>()
@@ -1694,11 +2260,11 @@ mod tests {
         }
 
         #[test]
-        fn crossing_back_to_desktop_at_runtime_restores_the_flat_seven_button_row() {
+        fn crossing_back_to_desktop_at_runtime_restores_the_flat_eight_button_row() {
             let mut app = mobile_test_app();
             let strikes_button = find_category_button(&mut app, ActionCategory::Strikes);
             press_button(&mut app, strikes_button);
-            assert_eq!(action_button_ids(&mut app).len(), 2, "opened on phone");
+            assert_eq!(action_button_ids(&mut app).len(), 3, "opened on phone");
 
             app.world_mut()
                 .resource_mut::<ViewportInfo>()
@@ -1707,7 +2273,7 @@ mod tests {
 
             assert_eq!(
                 action_button_ids(&mut app).len(),
-                7,
+                8,
                 "back to the full desktop row"
             );
             let categories = app
@@ -1937,7 +2503,7 @@ mod tests {
         }
 
         #[test]
-        fn desktop_tab_order_matches_the_seven_visible_buttons_left_to_right() {
+        fn desktop_tab_order_matches_the_eight_visible_buttons_left_to_right() {
             let mut app = test_app();
 
             // #216: the HUD's ⏸ button is its own `TabGroup::new(-1)`,
@@ -1951,12 +2517,13 @@ mod tests {
 
             let expected = [
                 "quick-strike",
+                "normal-strike",
                 "heavy-strike",
+                "step-forward",
+                "leap-forward",
+                "step-back",
                 "block",
                 "rest",
-                "step-forward",
-                "step-back",
-                "leap-forward",
             ];
             let mut seen = Vec::new();
             for _ in 0..expected.len() {
@@ -1965,7 +2532,7 @@ mod tests {
             }
             assert_eq!(
                 seen, expected,
-                "tab order follows ALL_ACTIONS' visual order"
+                "tab order follows the banner's group-by-group decision order"
             );
 
             // The next Tab wraps back to the ⏸ button.
@@ -2019,7 +2586,7 @@ mod tests {
             press_key_and_settle(&mut app, KeyCode::Tab);
             assert!(focused_is_pause_button(&mut app));
 
-            let expected_actions = ["quick-strike", "heavy-strike"];
+            let expected_actions = ["quick-strike", "normal-strike", "heavy-strike"];
             let expected_categories = [
                 ActionCategory::Strikes,
                 ActionCategory::Defense,
@@ -2147,7 +2714,7 @@ mod tests {
 
             assert_eq!(
                 action_button_ids(&mut app),
-                vec!["heavy-strike", "quick-strike"],
+                vec!["heavy-strike", "normal-strike", "quick-strike"],
                 "gamepad South on the focused Strikes button opens it, same as a tap"
             );
         }
@@ -2214,10 +2781,10 @@ mod tests {
             // `0`), so a blind walk must tolerate landing on it (no
             // `ActionButton`, so `focused_action_id` is `None` there)
             // instead of assuming every stop is an action button.
-            for _ in 0..9 {
+            for _ in 0..10 {
                 press_key_and_settle(&mut app, KeyCode::Tab);
             }
-            let visited: Vec<ActionId> = (0..9)
+            let visited: Vec<ActionId> = (0..10)
                 .filter_map(|_| {
                     press_key_and_settle(&mut app, KeyCode::Tab);
                     focused_action_id(&mut app)

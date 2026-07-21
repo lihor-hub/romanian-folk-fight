@@ -360,15 +360,49 @@ def mountains_foreground():
     return c
 
 
+# --- Mid-ground restraint (combat redesign §6, fighter primacy) -----------
+#
+# The parallax layers behind the fighter zone are slightly desaturated and
+# dimmed so the fighters (cream shirts, crisp outlines) own the frame; the
+# stage-lip foreground keeps its full saturation since it frames rather
+# than competes. Restrained and uniform per layer (no regional masks) so
+# no banding edges appear behind either fighter at any staged position.
+
+# Fraction each channel moves toward its luma (0 = untouched).
+FAR_DESATURATE, NEAR_DESATURATE = 0.12, 0.22
+# Brightness multiplier applied after desaturation.
+FAR_DIM, NEAR_DIM = 0.95, 0.90
+
+
+def restrain_mid_ground(canvas, desaturate, dim):
+    """Desaturates toward luma and dims every opaque pixel in place."""
+    for row in canvas.px:
+        for x, (r, g, b, a) in enumerate(row):
+            if a == 0:
+                continue
+            luma = 0.299 * r + 0.587 * g + 0.114 * b
+            row[x] = (
+                int((r + (luma - r) * desaturate) * dim),
+                int((g + (luma - g) * desaturate) * dim),
+                int((b + (luma - b) * desaturate) * dim),
+                a,
+            )
+    return canvas
+
+
+def restrained(build, desaturate, dim):
+    return lambda: restrain_mid_ground(build(), desaturate, dim)
+
+
 LAYERS = {
-    "village_far": village_far,
-    "village_near": village_near,
+    "village_far": restrained(village_far, FAR_DESATURATE, FAR_DIM),
+    "village_near": restrained(village_near, NEAR_DESATURATE, NEAR_DIM),
     "village_foreground": village_foreground,
-    "forest_far": forest_far,
-    "forest_near": forest_near,
+    "forest_far": restrained(forest_far, FAR_DESATURATE, FAR_DIM),
+    "forest_near": restrained(forest_near, NEAR_DESATURATE, NEAR_DIM),
     "forest_foreground": forest_foreground,
-    "mountains_far": mountains_far,
-    "mountains_near": mountains_near,
+    "mountains_far": restrained(mountains_far, FAR_DESATURATE, FAR_DIM),
+    "mountains_near": restrained(mountains_near, NEAR_DESATURATE, NEAR_DIM),
     "mountains_foreground": mountains_foreground,
 }
 

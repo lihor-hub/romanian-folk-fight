@@ -239,6 +239,7 @@ pub fn human_template() -> CutoutRigTemplate {
 pub fn human_template_for(appearance: PlayerAppearance) -> CutoutRigTemplate {
     let mut parts = human_parts(1.0);
     apply_player_appearance(&mut parts, appearance);
+    apply_folk_proportions(&mut parts);
     CutoutRigTemplate {
         template: CutoutTemplate::Human,
         parts,
@@ -251,6 +252,7 @@ pub fn human_template_for(appearance: PlayerAppearance) -> CutoutRigTemplate {
 pub fn catalog_human_template(appearance: PlayerAppearance) -> CutoutRigTemplate {
     let mut parts = human_parts(1.0);
     apply_palette_colors(&mut parts, appearance);
+    apply_folk_proportions(&mut parts);
     CutoutRigTemplate {
         template: CutoutTemplate::Human,
         parts,
@@ -394,6 +396,7 @@ fn align_rig_joint_offsets(parts: &mut [CutoutPart]) {
 /// slightly taller proportions to prove non-player use of the path.
 pub fn enemy_template() -> CutoutRigTemplate {
     let mut parts: Vec<CutoutPart> = human_parts(1.0).into_iter().map(strigoi_part).collect();
+    apply_folk_proportions(&mut parts);
     align_rig_joint_offsets(&mut parts);
     CutoutRigTemplate {
         template: CutoutTemplate::Enemy,
@@ -1378,6 +1381,74 @@ fn apply_build(part: &mut CutoutPart, build: BodyBuild) {
     }
 }
 
+/// Head upscale for the friendly-folk silhouette (proposal §5).
+const FOLK_HEAD_SCALE: f32 = 1.18;
+/// Lift keeping the larger head growing upward instead of burying the chin.
+const FOLK_HEAD_LIFT: f32 = 2.0;
+/// Hair follows the taller crown of the scaled head.
+const FOLK_HAIR_LIFT: f32 = 5.0;
+/// Hand upscale keeping strikes readable (proposal §5).
+const FOLK_HAND_SCALE: f32 = 1.25;
+/// Slightly broader chest for the wider stance.
+const FOLK_TORSO_WIDTH_SCALE: f32 = 1.06;
+/// Shoulder sockets follow the broader chest.
+const FOLK_ARM_OFFSET_SCALE: f32 = 1.05;
+/// Hip sockets spread for the planted, wider stance.
+const FOLK_STANCE_SCALE: f32 = 1.16;
+/// Knee/ankle joints pull in: marginally shorter legs (proposal §5).
+const FOLK_LEG_LENGTH_SCALE: f32 = 0.94;
+/// Leg part height shrinks less than the joint chain, deepening knee/ankle
+/// overlap so rotated joints keep hiding the seam.
+const FOLK_LEG_SIZE_SCALE: f32 = 0.97;
+/// Forearms lengthen a touch past both joints: deeper elbow overlap under
+/// rotation, with the wrist end hidden by the larger hand.
+const FOLK_ELBOW_OVERLAP_SCALE: f32 = 1.06;
+
+/// Phase-4 friendly-folk proportion pass (docs/combat-redesign-proposal.md
+/// §5), shared by the human and strigoi templates; [`boss_template`]
+/// deliberately skips it so the zmeu silhouette is untouched. It runs after
+/// appearance (hair-style geometry, build scaling) and after the strigoi's
+/// own silhouette factors, so the exaggeration composes multiplicatively
+/// with every existing customization instead of replacing it. Joint pivots
+/// change here, so the pass realigns every chained child offset itself.
+fn apply_folk_proportions(parts: &mut [CutoutPart]) {
+    for part in parts.iter_mut() {
+        match part.kind {
+            CutoutPartKind::Head => {
+                part.size *= FOLK_HEAD_SCALE;
+                part.offset.y += FOLK_HEAD_LIFT;
+            }
+            CutoutPartKind::Hair => {
+                part.size *= FOLK_HEAD_SCALE;
+                part.offset.y += FOLK_HAIR_LIFT;
+            }
+            CutoutPartKind::HandBack | CutoutPartKind::HandFront => {
+                part.size *= FOLK_HAND_SCALE;
+            }
+            CutoutPartKind::Torso => {
+                part.size.x *= FOLK_TORSO_WIDTH_SCALE;
+            }
+            CutoutPartKind::UpperArmBack | CutoutPartKind::UpperArmFront => {
+                part.offset.x *= FOLK_ARM_OFFSET_SCALE;
+            }
+            CutoutPartKind::ForearmBack | CutoutPartKind::ForearmFront => {
+                part.size.y *= FOLK_ELBOW_OVERLAP_SCALE;
+            }
+            CutoutPartKind::ThighBack | CutoutPartKind::ThighFront => {
+                part.offset.x *= FOLK_STANCE_SCALE;
+                part.size.y *= FOLK_LEG_SIZE_SCALE;
+                part.pivot.y *= FOLK_LEG_LENGTH_SCALE;
+            }
+            CutoutPartKind::ShinBack | CutoutPartKind::ShinFront => {
+                part.size.y *= FOLK_LEG_SIZE_SCALE;
+                part.pivot.y *= FOLK_LEG_LENGTH_SCALE;
+            }
+            CutoutPartKind::FootBack | CutoutPartKind::FootFront => {}
+        }
+    }
+    align_rig_joint_offsets(parts);
+}
+
 fn skin_color(tone: SkinTone) -> Color {
     match tone {
         SkinTone::Fair => Color::srgb(0.92, 0.79, 0.66),
@@ -1546,6 +1617,70 @@ mod tests {
                 (kind, (marker.source_id.clone(), rest, flip_x))
             })
             .collect()
+    }
+
+    /// Ignored art-iteration helper: dumps resolved template geometry as
+    /// JSON so external compositor tooling can render the full rig from the
+    /// real runtime part art while tuning proportions. Run with:
+    /// `CUTOUT_DUMP_DIR=/tmp/dump cargo test --lib cutout::tests::dump_template_geometry -- --ignored`
+    #[test]
+    #[ignore]
+    fn dump_template_geometry() {
+        let Ok(dir) = std::env::var("CUTOUT_DUMP_DIR") else {
+            return;
+        };
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cases: Vec<(String, CutoutRigTemplate)> = vec![
+            ("human_default".into(), human_template()),
+            ("enemy".into(), enemy_template()),
+            ("boss".into(), boss_template()),
+            (
+                "catalog_known_good".into(),
+                rig_template_for(&resolved_human(PlayerAppearance::default())),
+            ),
+        ];
+        for build in [BodyBuild::Lean, BodyBuild::Sturdy, BodyBuild::Powerful] {
+            cases.push((
+                format!("human_{build:?}").to_lowercase(),
+                human_template_for(PlayerAppearance {
+                    build,
+                    ..PlayerAppearance::default()
+                }),
+            ));
+        }
+        for hair in [HairStyle::Long, HairStyle::Short, HairStyle::Tied] {
+            cases.push((
+                format!("human_hair_{hair:?}").to_lowercase(),
+                human_template_for(PlayerAppearance {
+                    hair,
+                    ..PlayerAppearance::default()
+                }),
+            ));
+        }
+        for (name, template) in cases {
+            let parts: Vec<serde_json::Value> = template
+                .parts
+                .iter()
+                .map(|part| {
+                    serde_json::json!({
+                        "kind": format!("{:?}", part.kind),
+                        "parent": parent_kind(part.kind).map(|k| format!("{k:?}")),
+                        "offset": [part.offset.x, part.offset.y],
+                        "pivot": [part.pivot.x, part.pivot.y],
+                        "size": [part.size.x, part.size.y],
+                        "rotation": part.rotation,
+                        "z_offset": part.z_offset,
+                        "asset_path": part.asset_path,
+                        "color": part.color.to_srgba().to_f32_array(),
+                    })
+                })
+                .collect();
+            std::fs::write(
+                format!("{dir}/{name}.json"),
+                serde_json::to_string_pretty(&parts).unwrap(),
+            )
+            .unwrap();
+        }
     }
 
     #[test]
