@@ -56,7 +56,7 @@ use crate::menu::DisabledButton;
 use crate::settings::AccessibilityPreferences;
 use crate::theme::{
     ACTION_BUTTON_TOUCH_TARGET, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED,
-    CREAM, GOLD, PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
+    CREAM, GOLD, MIN_TOUCH_TARGET, PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
 };
 use crate::ui_widgets::focus::{Focusable, TabGroup, TabIndex, redirect_focus_if_inside};
 
@@ -79,17 +79,23 @@ const BANNER_WIDTH: f32 = 200.0;
 /// Left/bottom margin anchoring the banner to the stage's lower-left corner.
 const BANNER_MARGIN: f32 = 16.0;
 /// Hard cap on the banner's height, as a percentage of the letterboxed
-/// stage (§3: "height to ~65% of stage"); `banner_occupied_height`'s test
-/// proves the nominal eight-row content stays inside it.
-const BANNER_MAX_HEIGHT_PERCENT: f32 = 65.0;
+/// stage. §3 sketched "~65%", but eight rows at the [`MIN_TOUCH_TARGET`]
+/// accessibility floor plus four group headers cannot physically fit 65% of
+/// the 600px design stage, so the cap yields to the floor (the touch-targets
+/// web-smoke scenario gates it): 85% never truncates the nominal content
+/// (`banner_occupied_height`'s test), and on a real >=720px desktop stage
+/// the content-sized banner still occupies only ~69%.
+const BANNER_MAX_HEIGHT_PERCENT: f32 = 85.0;
 /// Side of a banner row's square pictogram tile. 28 (not the proposal's
-/// sketched ~40) so eight rows plus four group headers fit the 65% height
-/// budget inside `panel_bundle`'s 24px border inset; the 32px source
-/// pictograms downscale cleanly.
+/// sketched ~40) keeps the rows visually dense inside `panel_bundle`'s 24px
+/// border inset (the row's touch height comes from [`BANNER_ROW_HEIGHT`],
+/// not the tile); the 32px source pictograms downscale cleanly.
 const BANNER_TILE_SIZE: f32 = 28.0;
-/// Minimum height of one banner action row (the tile side: the two text
-/// lines beside it are shorter).
-const BANNER_ROW_HEIGHT: f32 = 28.0;
+/// Minimum height of one banner action row: the [`MIN_TOUCH_TARGET`]
+/// accessibility floor (the touch-targets web-smoke scenario asserts every
+/// interactive fight-screen target meets it, desktop included). The tile
+/// and text center inside the taller row.
+const BANNER_ROW_HEIGHT: f32 = MIN_TOUCH_TARGET;
 /// Gap between a group's header and its rows, and between sibling rows.
 const BANNER_ROW_GAP: f32 = 2.0;
 /// Gap between two labeled groups.
@@ -1593,13 +1599,14 @@ mod tests {
         assert_eq!(node.flex_direction, FlexDirection::Column);
     }
 
-    /// §3's height budget, as pure geometry: the eight rows across four
+    /// The height budget as pure geometry: the eight rows across four
     /// labeled groups — including headers, gaps, and the embroidered
-    /// panel's merged padding — fit within 65% of the 600px design stage,
-    /// so the `max_height` cap above never actually truncates the nominal
-    /// content.
+    /// panel's merged padding — fit within [`BANNER_MAX_HEIGHT_PERCENT`] of
+    /// the 600px design stage, so the `max_height` cap above never actually
+    /// truncates the nominal content (rows sit at the accessibility floor,
+    /// see [`BANNER_ROW_HEIGHT`]).
     #[test]
-    fn banner_nominal_content_fits_the_65_percent_stage_height_budget() {
+    fn banner_nominal_content_fits_the_stage_height_budget() {
         const STAGE_DESIGN_HEIGHT: f32 = 600.0;
         assert!(
             banner_occupied_height() <= STAGE_DESIGN_HEIGHT * BANNER_MAX_HEIGHT_PERCENT / 100.0,
@@ -1607,6 +1614,14 @@ mod tests {
             banner_occupied_height(),
             BANNER_MAX_HEIGHT_PERCENT
         );
+    }
+
+    /// Every banner action row is an interactive target, so its minimum
+    /// height must meet the accessibility floor the touch-targets web-smoke
+    /// scenario gates (44px, desktop included).
+    #[test]
+    fn banner_rows_meet_the_touch_target_floor() {
+        const { assert!(BANNER_ROW_HEIGHT >= MIN_TOUCH_TARGET) };
     }
 
     /// Walks the banner subtree in tree order and returns what it renders:
