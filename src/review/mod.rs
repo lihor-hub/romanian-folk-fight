@@ -1148,13 +1148,25 @@ fn focus_snapshot(
     action_buttons: &FocusActionButton,
     category_buttons: &Query<(Entity, &CategoryButton, Option<&Outline>)>,
     reason_texts: &Query<&Text, With<ActionCostOrReason>>,
+    children_graph: &Query<&Children>,
 ) -> Option<FocusSnapshot> {
     let focused = input_focus.get()?;
     if let Ok((_, button, disabled, children, outline)) = action_buttons.get(focused) {
-        let reason_text = children
-            .iter()
-            .find_map(|child| reason_texts.get(child).ok())
-            .map(|text| text.0.clone());
+        // Walk the button's whole subtree, not just direct children: the
+        // desktop command banner (combat redesign §3) nests the
+        // [`ActionCostOrReason`] info line inside a text column, while the
+        // phone buttons keep it a direct child.
+        let mut queue: Vec<Entity> = children.iter().collect();
+        let mut reason_text = None;
+        while let Some(entity) = queue.pop() {
+            if let Ok(text) = reason_texts.get(entity) {
+                reason_text = Some(text.0.clone());
+                break;
+            }
+            if let Ok(more) = children_graph.get(entity) {
+                queue.extend(more.iter());
+            }
+        }
         return Some(FocusSnapshot {
             focused_id: button.id.to_string(),
             focused_is_category: false,
@@ -1194,6 +1206,7 @@ fn publish_palette_state(
     focus_action_buttons: FocusActionButton,
     focus_category_buttons: Query<(Entity, &CategoryButton, Option<&Outline>)>,
     reason_texts: Query<&Text, With<ActionCostOrReason>>,
+    children_graph: Query<&Children>,
 ) {
     let Some(letterbox) = letterbox else {
         clear_palette();
@@ -1297,6 +1310,7 @@ fn publish_palette_state(
         &focus_action_buttons,
         &focus_category_buttons,
         &reason_texts,
+        &children_graph,
     );
 
     let snapshot = PaletteSnapshot {
