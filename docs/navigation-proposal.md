@@ -1,8 +1,8 @@
 # Navigation Design Proposal — Town Hub Journey
 
-Status: design only. Companion to `docs/combat-redesign-proposal.md` (phase 6
-of that plan). Nothing here is implemented in the combat-redesign phase; this
-documents the target so the follow-up work is mechanical.
+Status: implemented (#129, the town-hub follow-up to the combat redesign).
+Companion to `docs/combat-redesign-proposal.md` (phase 6 of that plan); this
+document remains the reference for the journey and the per-screen contract.
 
 ## Current journey (as shipped)
 

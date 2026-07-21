@@ -85,7 +85,7 @@ impl MusicTrack {
 /// play their stings over it). `boss_fight` overrides the arena theme.
 pub fn track_for(state: GameState, boss_fight: bool) -> Option<MusicTrack> {
     match state {
-        GameState::MainMenu | GameState::CharacterCreation | GameState::Shop => {
+        GameState::MainMenu | GameState::CharacterCreation | GameState::Town | GameState::Shop => {
             Some(MusicTrack::Menu)
         }
         GameState::Fight => Some(if boss_fight {

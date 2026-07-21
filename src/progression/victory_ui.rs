@@ -28,8 +28,9 @@ pub struct VictoryScreen;
 /// What a victory-screen button does when pressed.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VictoryAction {
-    /// **Turul 2** → [`GameState::Shop`]: the run continues into the
-    /// scaled ladder loop (the ladder already advanced past opponent 10).
+    /// **Turul 2** → [`GameState::Town`] (#129): the run continues into the
+    /// scaled ladder loop via the hub (the ladder already advanced past
+    /// opponent 10).
     NextLap,
     /// **Înapoi la menu** → [`GameState::MainMenu`]. The run is *not*
     /// reset: the save is kept and **Continuă** resumes it.
@@ -192,8 +193,8 @@ fn credits_line(label: &str, ui_font: &UiFont) -> impl Bundle {
 /// pressed: emits the matching [`FlowIntent`]. Neither path resets the run
 /// (the ladder advance/payout already landed on `OnEnter(Victory)`), so
 /// there is no domain side effect to order here: **Turul 2** heads to the
-/// shop with the ladder already on lap 2, **Înapoi la menu** leaves the save
-/// intact so **Continuă** resumes the looping run.
+/// town hub (#129) with the ladder already on lap 2, **Înapoi la menu**
+/// leaves the save intact so **Continuă** resumes the looping run.
 pub(super) fn handle_victory_actions(
     interactions: Query<(&Interaction, &VictoryAction), ChangedButton>,
     mut intents: MessageWriter<FlowIntent>,
@@ -340,7 +341,7 @@ mod tests {
     /// #216: Enter on the focused **Turul 2** button must drive the same
     /// transition a click does.
     #[test]
-    fn enter_on_the_focused_turul_2_button_leads_to_the_shop() {
+    fn enter_on_the_focused_turul_2_button_leads_to_the_town_hub() {
         let mut app = test_app();
         app.init_resource::<ButtonInput<KeyCode>>();
         set_state(&mut app, GameState::Victory);
@@ -360,17 +361,17 @@ mod tests {
         app.update();
         app.update();
 
-        assert_eq!(state(&app), GameState::Shop);
+        assert_eq!(state(&app), GameState::Town);
     }
 
     #[test]
-    fn turul_2_continues_the_run_into_the_scaled_ladder_via_the_shop() {
+    fn turul_2_continues_the_run_into_the_scaled_ladder_via_the_town_hub() {
         let mut app = test_app();
         set_state(&mut app, GameState::Victory);
 
         press_victory_button(&mut app, VictoryAction::NextLap);
 
-        assert_eq!(state(&app), GameState::Shop);
+        assert_eq!(state(&app), GameState::Town);
         let ladder = *app.world().resource::<LadderProgress>();
         assert_eq!(ladder, LadderProgress(10), "the run sits on lap 2");
         assert_eq!(ladder.lap(), 2);

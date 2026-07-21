@@ -22,6 +22,7 @@ pub mod save;
 pub mod settings;
 pub mod shop;
 pub mod theme;
+pub mod town;
 pub mod ui_widgets;
 
 use bevy::prelude::*;
@@ -47,6 +48,7 @@ impl Plugin for GamePlugin {
         app.add_plugins(save::SavePlugin);
         app.add_plugins(settings::SettingsPlugin);
         app.add_plugins(shop::ShopPlugin);
+        app.add_plugins(town::TownPlugin);
         // Review-only deterministic seam (#187): only compiled in behind the
         // `review` cargo feature (see `Cargo.toml` and `src/review/mod.rs`'s
         // module docs) -- absent entirely from the ordinary build/runtime

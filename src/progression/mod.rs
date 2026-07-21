@@ -301,19 +301,16 @@ fn tick_fight_end_delay(
 /// once per fight; the `rewarded` flag guards against a double award (or
 /// double advance) if the result screen is re-entered (e.g. via the shop)
 /// before the next fight clears the outcome. The credited run is autosaved
-/// (see [`crate::save`]) with the resume destination that matches which
-/// screen this `OnEnter` fired for (#217): [`GameState::Victory`] — the
-/// lap-1 final boss fell, and the only way onward is the shop (**Turul 2**)
-/// — resumes into [`ResumeDestination::Shop`]; every other case (a regular
-/// [`GameState::FightResult`] win) resumes into [`ResumeDestination::Fight`],
-/// matching **Lupta următoare**.
+/// (see [`crate::save`]) with [`ResumeDestination::Town`] (#129): whichever
+/// screen this `OnEnter` fired for — a regular [`GameState::FightResult`]
+/// win's **Continuă**, or [`GameState::Victory`]'s **Turul 2** — the way
+/// onward is the town hub, so that is where **Continuă** resumes.
 fn award_victory(
     mut wallet: ResMut<Wallet>,
     mut level: ResMut<Level>,
     mut earnings: ResMut<LifetimeEarnings>,
     outcome: Option<ResMut<FightOutcome>>,
     ladder: Option<ResMut<LadderProgress>>,
-    state: Res<State<GameState>>,
     mut save_requests: MessageWriter<SaveRequested>,
 ) {
     let Some(mut outcome) = outcome else {
@@ -330,12 +327,7 @@ fn award_victory(
         ladder.advance();
     }
     outcome.rewarded = true;
-    let resume_destination = if *state.get() == GameState::Victory {
-        ResumeDestination::Shop
-    } else {
-        ResumeDestination::Fight
-    };
-    save_requests.write(SaveRequested(resume_destination));
+    save_requests.write(SaveRequested(ResumeDestination::Town));
 }
 
 /// Resets every run-scoped resource so the next run starts clean: a fresh

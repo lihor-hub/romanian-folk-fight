@@ -59,8 +59,10 @@ pub enum MenuAction {
     /// Resume the saved run: restore every run resource from the save, then
     /// emit exactly one flow resume intent chosen from the save's own
     /// [`crate::save::ResumeDestination`] (#217) --
-    /// [`FlowIntent::ContinueRun`] (the arena) or [`FlowIntent::ContinueToShop`]
-    /// (the shop). Only spawned when a valid save loads.
+    /// [`FlowIntent::ContinueRun`] (the arena, legacy saves),
+    /// [`FlowIntent::ContinueToShop`] (the shop), or
+    /// [`FlowIntent::ContinueToTown`] (the town hub, #129). Only spawned
+    /// when a valid save loads.
     Continue,
     /// Clears (quarantines) the stored run snapshot after it failed to load
     /// as invalid or a newer-than-this-build version (#201) — see
@@ -394,6 +396,7 @@ fn handle_menu_actions(
                         flow_intents.write(match destination {
                             ResumeDestination::Fight => FlowIntent::ContinueRun,
                             ResumeDestination::Shop => FlowIntent::ContinueToShop,
+                            ResumeDestination::Town => FlowIntent::ContinueToTown,
                         });
                     }
                     None => warn!("Continuă pressed but no valid save loads; staying on the menu"),
@@ -967,6 +970,34 @@ mod tests {
             *app.world().resource::<Wallet>(),
             Wallet(210),
             "run resources are restored exactly like the Fight-destination case"
+        );
+    }
+
+    /// #129: a save whose stored [`ResumeDestination`] is `Town` -- the
+    /// default every non-shop checkpoint writes since the hub landed --
+    /// resumes into the town hub, restoring the run exactly like the other
+    /// destinations.
+    #[test]
+    fn pressing_continua_resumes_into_the_town_hub_when_the_saved_destination_is_town() {
+        let (mut app, _cell) = test_app_with_save(Some(&saved_run_json_with_destination(
+            ResumeDestination::Town,
+        )));
+        let button = continue_button(&mut app).expect("Continuă is enabled");
+        app.world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        app.update(); // handler restores + queues the transition
+        app.update(); // transition applies
+
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::Town,
+            "Continuă resumes into the town hub when that's the saved destination"
+        );
+        assert_eq!(
+            *app.world().resource::<Wallet>(),
+            Wallet(210),
+            "run resources are restored exactly like the other destinations"
         );
     }
 
