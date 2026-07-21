@@ -281,8 +281,9 @@ pub struct DamageText {
     timer: Timer,
 }
 
-/// Spawn height of a damage number above the defender's center.
-const DAMAGE_TEXT_OFFSET_Y: f32 = FIGHTER_SIZE.y / 2.0 + 10.0;
+/// Spawn height of a damage number above the defender's center — clear of
+/// the rig's head, which reaches ~0.68 x [`FIGHTER_SIZE`] above the root.
+const DAMAGE_TEXT_OFFSET_Y: f32 = FIGHTER_SIZE.y * 0.75;
 
 fn spawn_damage_text(
     commands: &mut Commands,

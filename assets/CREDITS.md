@@ -235,6 +235,7 @@ pending replacement by bespoke final art.
 | `sprites/balaur.png` | Balaur cu trei capete | self-generated | CC0 1.0 |
 | `sprites/zmeu.png` | Zmeu | self-generated | CC0 1.0 |
 | `sprites/zmeul_zmeilor.png` | Zmeul Zmeilor | self-generated | CC0 1.0 |
+| `sprites/contact_shadow.png` | Soft ground contact shadow ellipse (arena FX, `scripts/generate-fx-sprites.py`) | self-generated | CC0 1.0 |
 
 ## UI panel border (`assets/ui/`)
 
