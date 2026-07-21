@@ -413,9 +413,17 @@ fn run_viewport(
                 &checkpoint,
                 |payload| send_command(&checkpoint, payload),
                 || {
+                    // #129: confirm lands on the town hub; enter the arena
+                    // via its primary action (state transitions don't need
+                    // the frozen virtual clock).
                     send_command(
                         &checkpoint,
                         serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
+                    )?;
+                    wait_for_screen(&checkpoint, "Town", false)?;
+                    send_command(
+                        &checkpoint,
+                        serde_json::json!({"cmd": "pressButton", "button": "TownArena"}),
                     )
                 },
             )?;
@@ -423,6 +431,12 @@ fn run_viewport(
             send_command(
                 &checkpoint,
                 serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
+            )?;
+            // #129: the town hub sits between creation and the fight.
+            wait_for_screen(&checkpoint, "Town", false)?;
+            send_command(
+                &checkpoint,
+                serde_json::json!({"cmd": "pressButton", "button": "TownArena"}),
             )?;
             send_command(
                 &checkpoint,

@@ -304,6 +304,13 @@ fn run_journey(
             &checkpoint,
             serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
         )?;
+        // #129: confirming the hero lands on the town hub; enter the arena
+        // via its primary action.
+        wait_for_screen(&checkpoint, "Town", false)?;
+        send_command(
+            &checkpoint,
+            serde_json::json!({"cmd": "pressButton", "button": "TownArena"}),
+        )?;
         // Freeze the clock for the whole capture sequence: category
         // disclosure is input-driven (never time-driven), so open/close
         // still works while idle animation (parallax drift, sprite bob)

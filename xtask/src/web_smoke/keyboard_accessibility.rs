@@ -478,8 +478,15 @@ fn run_journey(
 
     // Confirm the hero via the real focused Confirm button, keyboard-only --
     // the whole point of this scenario, rather than the `pressButton` shim
-    // every other journey scenario uses for navigation.
-    navigate_and_activate(&checkpoint, "Începe lupta", |checkpoint, _before| {
+    // every other journey scenario uses for navigation. Since #129 this
+    // lands on the town hub.
+    navigate_and_activate(&checkpoint, "Începe", |checkpoint, _before| {
+        wait_for_screen(checkpoint, "Town", false)
+    })?;
+    exercise_town(&checkpoint, &mut notes)?;
+
+    // Enter the arena via the hub's real focused primary action.
+    navigate_and_activate(&checkpoint, "Luptă în arenă", |checkpoint, _before| {
         wait_for_screen(checkpoint, "Fight", false)
     })?;
     // The fight screen animates continuously (parallax drift, idle sprite
@@ -517,7 +524,12 @@ fn run_journey(
         serde_json::json!({"cmd": "setTimePaused", "paused": false}),
     )?;
 
-    navigate_and_activate(&checkpoint, "La prăvălie", |checkpoint, _before| {
+    // #129: the shop is reached through the hub -- result Continuă -> Town
+    // -> Prăvălie, each via the real focused button.
+    navigate_and_activate(&checkpoint, "Continuă", |checkpoint, _before| {
+        wait_for_screen(checkpoint, "Town", false)
+    })?;
+    navigate_and_activate(&checkpoint, "Prăvălie", |checkpoint, _before| {
         wait_for_screen(checkpoint, "Shop", false)
     })?;
     // The shop's cutout preview rig idles too -- same freeze.
@@ -1025,11 +1037,73 @@ fn exercise_creation(checkpoint: &Checkpoint, notes: &mut Vec<String>) -> Result
     assert_labels_present(
         "CharacterCreation",
         &lap,
-        &["Personalizat", "Începe lupta", "Înapoi"],
+        &["Personalizat", "Începe", "Înapoi"],
     )?;
     notes.push(format!(
         "CharacterCreation: {} controls, all keyboard-reachable with a visible marker",
         lap.len()
+    ));
+    Ok(())
+}
+
+/// The town hub (#129): the dominant **Luptă în arenă** primary action, the
+/// **Prăvălie**/**Personaj** destination cards, and **Înapoi** must all be
+/// reachable; **Personaj** must open the read-only character view
+/// keyboard-only (its own back returning to the hub), and the hub's back
+/// action must raise the leave-confirm overlay whose **Rămâi în sat**
+/// keeps the run on the hub.
+fn exercise_town(checkpoint: &Checkpoint, notes: &mut Vec<String>) -> Result<(), String> {
+    let lap = walk_full_lap(checkpoint, MAX_LAP_PRESSES)?;
+    assert_full_coverage("Town", &lap)?;
+    assert_labels_present(
+        "Town",
+        &lap,
+        &["Luptă în arenă", "Prăvălie", "Personaj", "Înapoi"],
+    )?;
+    notes.push(format!(
+        "Town: {} controls, all keyboard-reachable with a visible marker",
+        lap.len()
+    ));
+
+    // The read-only character view, opened and closed keyboard-only. Its
+    // cutout preview idles continuously -- irrelevant here, since the lap
+    // walk keys on accessibility snapshots, not frame stability.
+    navigate_and_activate(checkpoint, "Personaj", |checkpoint, before| {
+        wait_for_focus_to_move_off(checkpoint, before)
+    })?;
+    let view_lap = walk_full_lap(checkpoint, MAX_LAP_PRESSES)?;
+    assert_full_coverage("Town character view", &view_lap)?;
+    assert_labels_present("Town character view", &view_lap, &["Înapoi"])?;
+    navigate_and_activate(checkpoint, "Înapoi", |checkpoint, before| {
+        wait_for_focus_to_move_off(checkpoint, before)
+    })?;
+    notes.push(format!(
+        "Town character view: {} controls, opened and closed keyboard-only",
+        view_lap.len()
+    ));
+
+    // The leave-confirm overlay (a modal, like pause): open it via the
+    // hub's back action, prove both choices are reachable, then stay.
+    open_overlay_from(checkpoint, "Înapoi", "Rămâi în sat", "Town")?;
+    let confirm_lap = walk_full_lap(checkpoint, MAX_LAP_PRESSES)?;
+    assert_full_coverage("Town leave-confirm", &confirm_lap)?;
+    assert_labels_present(
+        "Town leave-confirm",
+        &confirm_lap,
+        &["Rămâi în sat", "La meniu"],
+    )?;
+    navigate_and_activate(checkpoint, "Rămâi în sat", |checkpoint, before| {
+        wait_for_focus_to_move_off(checkpoint, before)
+    })?;
+    let screen = read_screen(checkpoint)?;
+    if screen.as_deref() != Some("Town") {
+        return Err(format!(
+            "staying must keep the Town screen, observed {screen:?}"
+        ));
+    }
+    notes.push(format!(
+        "Town leave-confirm: {} controls, canceled keyboard-only",
+        confirm_lap.len()
     ));
     Ok(())
 }
@@ -1093,12 +1167,12 @@ fn exercise_fight(checkpoint: &Checkpoint, notes: &mut Vec<String>) -> Result<()
     Ok(())
 }
 
-/// The fight result screen: **La prăvălie** and **Lupta următoare** (plus
-/// any level-up allocation row) must be reachable.
+/// The fight result screen: the single **Continuă** primary action (#129,
+/// plus any level-up allocation row) must be reachable.
 fn exercise_result(checkpoint: &Checkpoint, notes: &mut Vec<String>) -> Result<(), String> {
     let lap = walk_full_lap(checkpoint, MAX_LAP_PRESSES)?;
     assert_full_coverage("FightResult", &lap)?;
-    assert_labels_present("FightResult", &lap, &["La prăvălie", "Lupta următoare"])?;
+    assert_labels_present("FightResult", &lap, &["Continuă"])?;
     notes.push(format!(
         "FightResult: {} controls, all keyboard-reachable with a visible marker",
         lap.len()
@@ -1106,16 +1180,16 @@ fn exercise_result(checkpoint: &Checkpoint, notes: &mut Vec<String>) -> Result<(
     Ok(())
 }
 
-/// The shop: every catalog buy/equip button and **Înapoi în arenă** must be
-/// reachable, and Enter on a focused buy button must debit/equip like a
-/// click (proven headlessly already by
+/// The shop: every catalog buy/equip button and **Înapoi** (#129: back to
+/// the town hub) must be reachable, and Enter on a focused buy button must
+/// debit/equip like a click (proven headlessly already by
 /// `shop::tests::enter_on_a_focused_buy_button_debits_and_equips_like_a_click`;
 /// this is the real-browser plausibility check that the same key press
 /// actually reaches the shop's own handler).
 fn exercise_shop(checkpoint: &Checkpoint, notes: &mut Vec<String>) -> Result<(), String> {
     let lap = walk_full_lap(checkpoint, MAX_LAP_PRESSES)?;
     assert_full_coverage("Shop", &lap)?;
-    assert_labels_present("Shop", &lap, &["Înapoi în arenă"])?;
+    assert_labels_present("Shop", &lap, &["Înapoi"])?;
     notes.push(format!(
         "Shop: {} controls, all keyboard-reachable with a visible marker",
         lap.len()

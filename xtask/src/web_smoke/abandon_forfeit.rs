@@ -188,6 +188,13 @@ fn run_checks(server: &StaticServer) -> Result<(), String> {
         &checkpoint,
         serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
     )?;
+    // #129: confirming the hero lands on the town hub; enter the arena via
+    // its primary action.
+    wait_for_screen(&checkpoint, "Town", false)?;
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "pressButton", "button": "TownArena"}),
+    )?;
     wait_for_screen(&checkpoint, "Fight", false)?;
 
     if read_local_storage_item(&checkpoint, SAVE_STORAGE_KEY)?.is_none() {

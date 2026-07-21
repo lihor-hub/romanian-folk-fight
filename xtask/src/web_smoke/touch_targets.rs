@@ -407,9 +407,29 @@ fn run_checks(
         serde_json::json!({"cmd": "setTimePaused", "paused": false}),
     )?;
 
+    // #129: confirming the hero lands on the town hub; its three destination
+    // cards and back action must meet the touch floor too.
     send_command(
         &checkpoint,
         serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
+    )?;
+    wait_for_screen(&checkpoint, "Town", false)?;
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "setTimePaused", "paused": true}),
+    )?;
+    wait_for_stable_frames(&checkpoint, viewport.width, viewport.height)?;
+    assert_targets_meet_floor(&checkpoint, "Town")?;
+    let town_shot = checkpoint.screenshot_png(viewport.width, viewport.height)?;
+    let _ = artifacts::write_artifact(dir, "4-town.png", &town_shot);
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "setTimePaused", "paused": false}),
+    )?;
+
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "pressButton", "button": "TownArena"}),
     )?;
     wait_for_screen(&checkpoint, "Fight", false)?;
     send_command(
@@ -419,7 +439,7 @@ fn run_checks(
     wait_for_stable_frames(&checkpoint, viewport.width, viewport.height)?;
     assert_targets_meet_floor(&checkpoint, "Fight")?;
     let fight_shot = checkpoint.screenshot_png(viewport.width, viewport.height)?;
-    let _ = artifacts::write_artifact(dir, "4-fight.png", &fight_shot);
+    let _ = artifacts::write_artifact(dir, "5-fight.png", &fight_shot);
     // Unpause: autoplay (and the fight-end delay after it) need the clock.
     send_command(
         &checkpoint,
@@ -438,15 +458,22 @@ fn run_checks(
     wait_for_stable_frames(&checkpoint, viewport.width, viewport.height)?;
     assert_targets_meet_floor(&checkpoint, "FightResult")?;
     let result_shot = checkpoint.screenshot_png(viewport.width, viewport.height)?;
-    let _ = artifacts::write_artifact(dir, "5-fight-result.png", &result_shot);
+    let _ = artifacts::write_artifact(dir, "6-fight-result.png", &result_shot);
     send_command(
         &checkpoint,
         serde_json::json!({"cmd": "setTimePaused", "paused": false}),
     )?;
 
+    // #129: the shop is reached through the hub now -- result Continuă ->
+    // Town -> Prăvălie.
     send_command(
         &checkpoint,
-        serde_json::json!({"cmd": "pressButton", "button": "GoToShop"}),
+        serde_json::json!({"cmd": "pressButton", "button": "ResultContinue"}),
+    )?;
+    wait_for_screen(&checkpoint, "Town", false)?;
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "pressButton", "button": "TownShop"}),
     )?;
     wait_for_screen(&checkpoint, "Shop", false)?;
     send_command(
@@ -456,7 +483,7 @@ fn run_checks(
     wait_for_stable_frames(&checkpoint, viewport.width, viewport.height)?;
     assert_targets_meet_floor(&checkpoint, "Shop")?;
     let shop_shot = checkpoint.screenshot_png(viewport.width, viewport.height)?;
-    let _ = artifacts::write_artifact(dir, "6-shop.png", &shop_shot);
+    let _ = artifacts::write_artifact(dir, "7-shop.png", &shop_shot);
     let _ = send_command(
         &checkpoint,
         serde_json::json!({"cmd": "setTimePaused", "paused": false}),

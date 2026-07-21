@@ -369,9 +369,17 @@ fn run_viewport(
                 &checkpoint,
                 |payload| send_command(&checkpoint, payload),
                 || {
+                    // #129: confirm lands on the town hub; enter the arena
+                    // via its primary action (state transitions don't need
+                    // the frozen virtual clock).
                     send_command(
                         &checkpoint,
                         serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
+                    )?;
+                    wait_for_screen(&checkpoint, "Town")?;
+                    send_command(
+                        &checkpoint,
+                        serde_json::json!({"cmd": "pressButton", "button": "TownArena"}),
                     )
                 },
             )
@@ -381,6 +389,14 @@ fn run_viewport(
             send_command(
                 &checkpoint,
                 serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
+            )
+        })?;
+        // #129: the town hub sits between creation and the fight.
+        wait_for_screen_step(&checkpoint, viewport, "Town")?;
+        step(viewport, || {
+            send_command(
+                &checkpoint,
+                serde_json::json!({"cmd": "pressButton", "button": "TownArena"}),
             )
         })?;
     }
@@ -426,24 +442,29 @@ fn wait_for_screen_step(
     viewport: &ViewportSpec,
     expected: &str,
 ) -> Result<(), SmokeError> {
-    step(viewport, || {
-        let start = Instant::now();
-        let mut last_screen: Option<String> = None;
-        for _ in 0..900 {
-            if start.elapsed() > Duration::from_secs(60) {
-                break;
-            }
-            checkpoint.wait_for_frame()?;
-            let screen = read_screen(checkpoint)?;
-            last_screen = screen.clone();
-            if screen.as_deref() == Some(expected) {
-                return Ok(());
-            }
+    step(viewport, || wait_for_screen(checkpoint, expected))
+}
+
+/// The raw (String-erroring) wait behind [`wait_for_screen_step`], callable
+/// from closures that must return `Result<(), String>` (the
+/// `desktop_fight_freeze::freeze` enter-fight closure).
+fn wait_for_screen(checkpoint: &Checkpoint, expected: &str) -> Result<(), String> {
+    let start = Instant::now();
+    let mut last_screen: Option<String> = None;
+    for _ in 0..900 {
+        if start.elapsed() > Duration::from_secs(60) {
+            break;
         }
-        Err(format!(
-            "never observed screen `{expected}` within 60s/900 frames (last seen: {last_screen:?})"
-        ))
-    })
+        checkpoint.wait_for_frame()?;
+        let screen = read_screen(checkpoint)?;
+        last_screen = screen.clone();
+        if screen.as_deref() == Some(expected) {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "never observed screen `{expected}` within 60s/900 frames (last seen: {last_screen:?})"
+    ))
 }
 
 /// One captured checkpoint: reach the expected screen, freeze

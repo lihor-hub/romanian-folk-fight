@@ -273,9 +273,10 @@ fn run_check_attempt(server: &StaticServer, checkpoint_name: &str) -> Result<(),
         let url = format!("{}/", server.base_url());
         checkpoint.navigate(&url)?;
 
-        // menu -> creation -> fight: seed the duel, start a new game, pick the
-        // preset, confirm the hero (autosaves the hero-confirmation checkpoint,
-        // resume_destination "fight").
+        // menu -> creation -> town -> fight: seed the duel, start a new
+        // game, pick the preset, confirm the hero (autosaves the
+        // hero-confirmation checkpoint, resume_destination "town" -- #129),
+        // then enter the arena through the hub's primary action.
         let (status, _shot) = wait_for_screen(&checkpoint, "MainMenu", true)?;
         check_no_console_or_page_errors(&status, "initial load")?;
 
@@ -296,16 +297,22 @@ fn run_check_attempt(server: &StaticServer, checkpoint_name: &str) -> Result<(),
             &checkpoint,
             serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
         )?;
-        wait_for_screen(&checkpoint, "Fight", false)?;
+        wait_for_screen(&checkpoint, "Town", false)?;
 
         let hero_confirm_save = read_saved_run(&checkpoint)?
             .ok_or("no run snapshot after hero confirmation -- the checkpoint never autosaved")?;
-        if hero_confirm_save.resume_destination != "fight" {
+        if hero_confirm_save.resume_destination != "town" {
             return Err(format!(
-                "hero confirmation must resume into the arena, saw {:?}",
+                "hero confirmation must resume into the town hub (#129), saw {:?}",
                 hero_confirm_save.resume_destination
             ));
         }
+
+        send_command(
+            &checkpoint,
+            serde_json::json!({"cmd": "pressButton", "button": "TownArena"}),
+        )?;
+        wait_for_screen(&checkpoint, "Fight", false)?;
 
         // fight -> fight-result: autoplay resolves the pinned, winnable duel.
         send_command(
@@ -325,19 +332,25 @@ fn run_check_attempt(server: &StaticServer, checkpoint_name: &str) -> Result<(),
                 STARTING_GALBENI + FIRST_FIGHT_REWARD
             ));
         }
-        if result_save.resume_destination != "fight" {
+        if result_save.resume_destination != "town" {
             return Err(format!(
-                "the result/reward checkpoint must resume into the arena (matching Lupta \
-             următoare), saw {:?}",
+                "the result/reward checkpoint must resume into the town hub (#129), saw {:?}",
                 result_save.resume_destination
             ));
         }
 
-        // result -> shop: the shop-entry checkpoint autosaves immediately,
-        // switching the resume destination to the shop even before any purchase.
+        // result -> town -> shop (#129): the shop is an optional detour off
+        // the hub now; its entry checkpoint still autosaves immediately,
+        // switching the resume destination to the shop even before any
+        // purchase.
         send_command(
             &checkpoint,
-            serde_json::json!({"cmd": "pressButton", "button": "GoToShop"}),
+            serde_json::json!({"cmd": "pressButton", "button": "ResultContinue"}),
+        )?;
+        wait_for_screen(&checkpoint, "Town", false)?;
+        send_command(
+            &checkpoint,
+            serde_json::json!({"cmd": "pressButton", "button": "TownShop"}),
         )?;
         wait_for_screen(&checkpoint, "Shop", false)?;
 

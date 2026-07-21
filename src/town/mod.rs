@@ -546,6 +546,12 @@ type ChangedButton = (Changed<Interaction>, With<Button>);
 /// no state change. Leaving to the menu never resets the run or clears the
 /// save — the hub-entry checkpoint already persisted it, so **Continuă**
 /// resumes right back here.
+///
+/// Every arm that despawns the currently focused control (the view swaps and
+/// the overlay close) also clears [`InputFocus`], mirroring
+/// [`despawn_screen`]'s #216 contract — a state change is not involved here,
+/// so nothing else would clear the stale, despawned focus entity before the
+/// next keyboard `Tab`.
 // A Bevy system: each parameter is a distinct ECS handle the sub-view
 // spawns need (player data, fonts, panel art, the live view roots).
 #[allow(clippy::too_many_arguments)]
@@ -562,6 +568,7 @@ fn handle_town_actions(
     character_views: Query<Entity, With<TownCharacterView>>,
     previews: Query<Entity, With<TownCharacterPreview>>,
     confirms: Query<Entity, With<TownLeaveConfirm>>,
+    mut focus: Option<ResMut<InputFocus>>,
     mut intents: MessageWriter<FlowIntent>,
 ) {
     for (interaction, action) in &interactions {
@@ -583,6 +590,9 @@ fn handle_town_actions(
                 for hub in &hub_views {
                     commands.entity(hub).despawn();
                 }
+                if let Some(focus) = focus.as_mut() {
+                    focus.clear();
+                }
                 let level = level.as_deref().copied().unwrap_or_default();
                 spawn_character_view(
                     &mut commands,
@@ -600,6 +610,9 @@ fn handle_town_actions(
                 }
                 for preview in &previews {
                     commands.entity(preview).despawn();
+                }
+                if let Some(focus) = focus.as_mut() {
+                    focus.clear();
                 }
                 spawn_hub_view(&mut commands, &ui_font, &panel_texture);
             }
@@ -621,6 +634,9 @@ fn handle_town_actions(
             TownAction::CancelLeave => {
                 for confirm in &confirms {
                     commands.entity(confirm).despawn();
+                }
+                if let Some(focus) = focus.as_mut() {
+                    focus.clear();
                 }
             }
         }
