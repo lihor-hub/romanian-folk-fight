@@ -657,10 +657,13 @@ fn animate_combat_events(
 /// state; this only clears jointed body poses. A holding envelope
 /// (Knockdown) keeps both its pose and its finished envelope so the fighter
 /// stays on the ground.
+/// A hit-stopped fighter (`fx::HitStop`, ~70 ms) freezes its pose envelope,
+/// sprite frames, and footwork mid-flight; the `Without` filters below
+/// simply skip ticking it. The opponent and the turn engine never freeze.
 fn tick_pose_envelopes(
     time: Res<Time>,
     mut commands: Commands,
-    mut query: Query<(Entity, &mut CutoutPose, &mut PoseEnvelope)>,
+    mut query: Query<(Entity, &mut CutoutPose, &mut PoseEnvelope), Without<super::fx::HitStop>>,
 ) {
     for (entity, mut pose, mut envelope) in &mut query {
         envelope.timer.tick(time.delta());
@@ -675,7 +678,7 @@ fn tick_pose_envelopes(
 /// sprite's atlas index.
 fn advance_animations(
     time: Res<Time>,
-    mut query: Query<(&mut SpriteAnimation, Option<&mut Sprite>)>,
+    mut query: Query<(&mut SpriteAnimation, Option<&mut Sprite>), Without<super::fx::HitStop>>,
 ) {
     for (mut anim, sprite) in &mut query {
         if let Some(mut sprite) = sprite
@@ -706,6 +709,16 @@ fn return_to_idle(mut query: Query<(&mut FighterClip, &mut SpriteAnimation, Opti
     }
 }
 
+/// Query data alias for the fighter-root state [`apply_cutout_poses`] reads:
+/// the pose, its envelope (if any), the rig (for mirroring), and whether the
+/// fighter is currently hit-stopped.
+type PosedFighter = (
+    &'static CutoutPose,
+    Option<&'static PoseEnvelope>,
+    Option<&'static CutoutRig>,
+    Has<super::fx::HitStop>,
+);
+
 /// Applies the current jointed pose to every body-part child, rebuilding from
 /// the part's neutral transform so gear parented beneath hands/arms/shields
 /// inherits the same motion without independent drift.
@@ -717,7 +730,7 @@ fn return_to_idle(mut query: Query<(&mut FighterClip, &mut SpriteAnimation, Opti
 fn apply_cutout_poses(
     time: Res<Time>,
     accessibility: Res<AccessibilityPreferences>,
-    fighters: Query<(&CutoutPose, Option<&PoseEnvelope>, Option<&CutoutRig>)>,
+    fighters: Query<PosedFighter>,
     ancestry: Query<&ChildOf, With<CutoutPartMarker>>,
     mut parts: Query<(
         &CutoutPartMarker,
@@ -735,9 +748,11 @@ fn apply_cutout_poses(
         let root = cutout_rig_owner(child_of.parent(), |entity| {
             ancestry.get(entity).ok().map(|child_of| child_of.parent())
         });
-        let Ok((pose, envelope, rig)) = fighters.get(root) else {
+        let Ok((pose, envelope, rig, hit_stopped)) = fighters.get(root) else {
             continue;
         };
+        // A hit-stopped fighter is fully frozen: no breathing sway either.
+        let breath_phase = if hit_stopped { None } else { breath_phase };
         // Reduced motion (#200) pins the pose at the full main keyframe for
         // the envelope's whole duration — the pre-envelope treatment: state
         // is readable immediately, no blended in-between frames. Timing is
@@ -1068,7 +1083,7 @@ fn apply_footwork(
     time: Res<Time>,
     mut commands: Commands,
     accessibility: Res<AccessibilityPreferences>,
-    mut query: Query<(Entity, &mut FootworkStep, &mut Transform)>,
+    mut query: Query<(Entity, &mut FootworkStep, &mut Transform), Without<super::fx::HitStop>>,
 ) {
     for (entity, mut footwork, mut transform) in &mut query {
         footwork.timer.tick(time.delta());
@@ -1596,6 +1611,10 @@ mod tests {
             .x;
         write_event(&mut app, CombatSide::Enemy, CombatEvent::Hit { dmg: 4 });
 
+        // The landed hit first freezes the defender for the hit-stop
+        // window; the recoil envelope only starts ticking once it lifts.
+        advance(&mut app, crate::arena::fx::HIT_STOP_SECONDS);
+        advance(&mut app, 0.001);
         advance(&mut app, HURT_ANTICIPATION_SECONDS);
         let overshoot_x = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso)
             .translation
@@ -1609,6 +1628,49 @@ mod tests {
             "the recoil snaps past the held key then eases back onto it: \
              overshoot {overshoot_x}, settled {settled_x}, rest {rest_x}"
         );
+    }
+
+    #[test]
+    fn a_landed_hit_freezes_only_the_struck_fighters_presentation_briefly() {
+        let mut app = test_app();
+        write_event(&mut app, CombatSide::Enemy, CombatEvent::Hit { dmg: 4 });
+
+        // Inside the hit-stop window: the struck player's reaction pose is
+        // frozen at rest while the attacking enemy's envelope advances.
+        advance(&mut app, 0.03);
+        let frozen_a = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso);
+        let attacker_a = part_transform::<EnemyFighter>(&mut app, CutoutPartKind::HandFront);
+        advance(&mut app, 0.03);
+        let frozen_b = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso);
+        let attacker_b = part_transform::<EnemyFighter>(&mut app, CutoutPartKind::HandFront);
+        assert_eq!(
+            frozen_a, frozen_b,
+            "the struck fighter's pose does not progress during the hit-stop"
+        );
+        assert_ne!(
+            attacker_a, attacker_b,
+            "the attacker's envelope keeps playing through the defender's hit-stop"
+        );
+
+        // After the window the freeze lifts and the recoil plays.
+        advance(&mut app, crate::arena::fx::HIT_STOP_SECONDS);
+        advance(&mut app, 0.05);
+        let recoiling = part_transform::<PlayerFighter>(&mut app, CutoutPartKind::Torso);
+        assert_ne!(frozen_b, recoiling, "the recoil starts once the stop ends");
+    }
+
+    #[test]
+    fn misses_and_blocks_do_not_hit_stop_the_defender() {
+        for event in [CombatEvent::Missed, CombatEvent::Blocked { dmg: 2 }] {
+            let mut app = test_app();
+            write_event(&mut app, CombatSide::Enemy, event);
+            let stopped = app
+                .world_mut()
+                .query_filtered::<(), (With<crate::arena::fx::HitStop>, With<PlayerFighter>)>()
+                .iter(app.world())
+                .count();
+            assert_eq!(stopped, 0, "{event:?} must not freeze the defender");
+        }
     }
 
     #[test]
