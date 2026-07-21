@@ -90,7 +90,7 @@ const MIN_TOUCH_TARGET: f32 = 44.0;
 /// controls at once.
 const MAX_CATEGORY_CONTROLS: usize = 4;
 
-/// Every category the seven current actions span, in
+/// Every category the eight current actions span, in
 /// `combat::actions::CATEGORY_ORDER` order, with the exact sorted action ids
 /// its disclosure must reveal (`combat::actions::action_category`'s
 /// membership). A future action added to `combat::actions::ALL_ACTIONS`
@@ -98,7 +98,10 @@ const MAX_CATEGORY_CONTROLS: usize = 4;
 /// under-testing the palette — the same pinning convention
 /// `fight_palette_desktop::EXPECTED_BUTTON_COUNT` uses.
 const EXPECTED_CATEGORIES: &[(&str, &[&str])] = &[
-    ("strikes", &["heavy-strike", "quick-strike"]),
+    (
+        "strikes",
+        &["heavy-strike", "normal-strike", "quick-strike"],
+    ),
     ("defense", &["block"]),
     ("movement", &["leap-forward", "step-back", "step-forward"]),
     ("utility", &["rest"]),
@@ -850,7 +853,7 @@ fn check_palette(
     }
     if phone.visible_category_count != EXPECTED_CATEGORIES.len() {
         problems.push(format!(
-            "expected exactly {} category controls (the seven current actions span exactly \
+            "expected exactly {} category controls (the eight current actions span exactly \
              that many categories), the snapshot reports {} -- either a category failed to \
              render or `combat::actions` changed without updating this scenario's \
              EXPECTED_CATEGORIES",

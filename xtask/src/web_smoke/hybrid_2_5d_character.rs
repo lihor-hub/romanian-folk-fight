@@ -26,15 +26,15 @@ const REVIEW_HYBRID_CHARACTER_KEY: &str = "rff_review_hybrid_character_v1";
 const REPRESENTATIVE_PRESET: &str = "Ucenicul Solomonar";
 const COMBAT_SEED: u64 = 20;
 const EXPECTED_STABLE_IDS: &[&str] = &[
-    "human.body.foundation.v1",
-    "human.face.default.v1",
-    "human.hair.braided.v1",
-    "human.torso.linen.v1",
-    "human.legs.itari.v1",
+    "human.body.ucenic_solomonar.v1",
+    "human.face.ucenic_solomonar.v1",
+    "human.hair.ucenic_ciuf.v1",
+    "human.torso.suman_de_ucenic.v1",
+    "human.legs.cioareci_de_ucenic.v1",
     "human.feet.opinci.v1",
 ];
 const EXPECTED_PART_COUNT: usize = 15;
-const EXPECTED_MATERIAL_PART_COUNT: usize = 6;
+const EXPECTED_MATERIAL_PART_COUNT: usize = 15;
 
 const MAX_FRAMES: usize = 3600;
 const MAX_WALL_CLOCK: Duration = Duration::from_secs(180);
@@ -198,19 +198,30 @@ fn start_server(dist_dir: &Path, phase: &str) -> Result<StaticServer, SmokeError
 /// Trunk output. Albedos and source assets remain untouched; every failed
 /// channel load therefore exercises production's pending-sprite fallback.
 fn disable_optional_material_inputs(dist_dir: &Path) -> Result<(), String> {
+    // Walk the runtime tree recursively: since #327 the preset-flavored
+    // material channels live in per-preset subdirectories
+    // (`runtime/{cioban,haiduc,shared,ucenic_solomonar,voinic}/`), not just
+    // the flat #322-era top level.
     let runtime = dist_dir.join("assets/fighters/human/runtime");
-    let entries = std::fs::read_dir(&runtime)
-        .map_err(|error| format!("could not read {}: {error}", runtime.display()))?;
+    let mut pending = vec![runtime.clone()];
     let mut removed = 0usize;
-    for entry in entries {
-        let path = entry.map_err(|error| error.to_string())?.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if is_optional_material_channel(name) {
-            std::fs::remove_file(&path)
-                .map_err(|error| format!("could not remove {}: {error}", path.display()))?;
-            removed += 1;
+    while let Some(dir) = pending.pop() {
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|error| format!("could not read {}: {error}", dir.display()))?;
+        for entry in entries {
+            let path = entry.map_err(|error| error.to_string())?.path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if is_optional_material_channel(name) {
+                std::fs::remove_file(&path)
+                    .map_err(|error| format!("could not remove {}: {error}", path.display()))?;
+                removed += 1;
+            }
         }
     }
     if removed == 0 {
@@ -636,10 +647,13 @@ fn is_expected_missing_material_channel_error(line: &str) -> bool {
     let Some((_, remainder)) = line.split_once(PREFIX) else {
         return false;
     };
-    let Some(file_name) = remainder.split_whitespace().next() else {
+    let Some(path) = remainder.split_whitespace().next() else {
         return false;
     };
-    !file_name.contains('/') && is_optional_material_channel(file_name)
+    // Since #327 the withheld channels live in per-preset subdirectories
+    // (`cioban/hair_mask.png`, ...), so match on the final path segment.
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+    is_optional_material_channel(file_name)
 }
 
 fn write_artifacts(
@@ -854,6 +868,7 @@ mod tests {
         let expected = vec![
             "log: %cERROR%c bevy_asset Path not found: assets/fighters/human/runtime/torso_mask.png color: red".to_owned(),
             "log: %cERROR%c bevy_asset Path not found: assets/fighters/human/runtime/head_normal.png color: red".to_owned(),
+            "log: %cERROR%c bevy_asset Path not found: assets/fighters/human/runtime/cioban/hair_shadow.png color: red".to_owned(),
         ];
         assert!(unexpected_console_errors(&expected, ExpectedRenderPath::Fallback).is_empty());
 

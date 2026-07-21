@@ -1,9 +1,9 @@
 //! The `fight-palette-desktop` scenario (#189, a child of #143): drives to a
 //! real fight through the #187 review seam (`src/review/mod.rs`) and proves
-//! the desktop action palette — the seven current combat actions, now
+//! the desktop action palette — the eight current combat actions, now
 //! rendered entirely from [`crate::combat`]'s action-descriptor contract
 //! (`combat::actions`/`combat::action_palette`) instead of a hard-coded
-//! seven-button HUD — paints without overflow or clipping at a real desktop
+//! eight-button HUD — paints without overflow or clipping at a real desktop
 //! viewport. Extends #168's harness per the documented extension pattern
 //! (see `web_smoke::mod`'s module docs): a new module here plus one match
 //! arm in `web_smoke::run_scenario`, reusing the review seam exactly the way
@@ -18,7 +18,7 @@
 //!
 //! 1. The **actual measured layout** — real font metrics, a real
 //!    `taffy`/`bevy_ui` flex pass, a real winit window at a real desktop
-//!    size — places every one of the seven action buttons entirely inside
+//!    size — places every one of the eight action buttons entirely inside
 //!    the letterboxed stage rect, not just the arithmetic estimate
 //!    `action_palette::tests::action_tiles_are_icon_led_and_fit_the_desktop_strip`
 //!    already pins headlessly.
@@ -39,7 +39,7 @@
 //! convention `REVIEW_COMMAND_KEY`/`REVIEW_SCREEN_KEY` already use) —
 //! computed once, in native Bevy UI space, from the *real* `ComputedNode`/
 //! `UiGlobalTransform` of every `ActionButton` entity against the real
-//! `LetterboxRect` — and asserts directly: exactly seven buttons exist, and
+//! `LetterboxRect` — and asserts directly: exactly eight buttons exist, and
 //! every one of them fits entirely inside the stage rect (`fits == true`).
 //! The captured screenshot is still baselined (`--update-baselines`) for
 //! human review, but the hard pass/fail gate is the exact telemetry fact,
@@ -84,11 +84,11 @@ const FIGHT_PALETTE_SEED: u64 = 20;
 /// `HeroPreset::Voinicul`'s exact display name (see `creation::draft::HeroPreset::name`).
 const FIGHT_PALETTE_PRESET: &str = "Voinicul";
 
-/// The seven current combat actions (`combat::actions::ALL_ACTIONS`); this
+/// The eight current combat actions (`combat::actions::ALL_ACTIONS`); this
 /// scenario asserts exactly this many buttons render, so a future action
 /// added to that array (without also updating this constant) fails loudly
 /// here instead of silently under-testing the palette.
-const EXPECTED_BUTTON_COUNT: usize = 7;
+const EXPECTED_BUTTON_COUNT: usize = 8;
 
 const BASE_REQUIRED_ASSETS: &[(&str, &str)] = &[
     (
@@ -138,7 +138,7 @@ pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError
         Ok(()) if missing_baseline => {
             println!(
                 "\n{SCENARIO}: no accepted baseline existed yet -- the non-screenshot \
-                 assertions above (seven buttons, all fitting inside the stage rect) still ran \
+                 assertions above (eight buttons, all fitting inside the stage rect) still ran \
                  and passed. Re-run with --update-baselines once you've reviewed the captured \
                  screenshot to accept it."
             );

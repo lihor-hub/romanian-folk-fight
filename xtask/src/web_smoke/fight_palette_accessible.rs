@@ -94,20 +94,23 @@ const FIGHT_PALETTE_SEED: u64 = 20;
 /// `HeroPreset::Voinicul`'s exact display name (see `creation::draft::HeroPreset::name`).
 const FIGHT_PALETTE_PRESET: &str = "Voinicul";
 
-/// The seven current combat actions in `combat::actions::ALL_ACTIONS`'s
-/// order — the exact keyboard tab order the desktop bar must produce. A
-/// future action added to that array (without also updating this constant)
+/// The eight current combat actions in the desktop command banner's group
+/// order (`combat::action_palette::BANNER_CATEGORY_ORDER`, combat redesign
+/// §3: strikes, movement, defense, recovery) — the exact keyboard tab order
+/// the desktop banner must produce. A future action added to
+/// `combat::actions::ALL_ACTIONS` (without also updating this constant)
 /// fails loudly here instead of silently under-testing the palette, the same
 /// pinning convention `fight_palette_desktop::EXPECTED_BUTTON_COUNT` and
 /// `fight_palette_phone::EXPECTED_CATEGORIES` use.
 const EXPECTED_DESKTOP_TAB_ORDER: &[&str] = &[
     "quick-strike",
+    "normal-strike",
     "heavy-strike",
+    "step-forward",
+    "leap-forward",
+    "step-back",
     "block",
     "rest",
-    "step-forward",
-    "step-back",
-    "leap-forward",
 ];
 
 /// The naturally-disabled desktop button this scenario checks a reason
@@ -608,10 +611,18 @@ fn exercise_desktop_focus(
         ));
     }
 
-    // Focus is on `quick-strike` (index 0) again after the wrap. Advance
-    // three more times to `rest` (index 3), then once more to `step-forward`
-    // (index 4) to check its disabled reason.
-    for _ in 0..3 {
+    // Focus is on `quick-strike` (index 0) again after the wrap. Advance to
+    // [`DISABLED_ACTION_ID`]'s position in the pinned tab order (one press
+    // per index step) to check its disabled reason -- derived from the pin
+    // rather than hardcoded so a reordered banner can't silently desync
+    // this walk from the order assertion above.
+    let disabled_index = EXPECTED_DESKTOP_TAB_ORDER
+        .iter()
+        .position(|id| *id == DISABLED_ACTION_ID)
+        .ok_or_else(|| {
+            format!("{DISABLED_ACTION_ID:?} is missing from EXPECTED_DESKTOP_TAB_ORDER")
+        })?;
+    for _ in 0..disabled_index.saturating_sub(1) {
         press_key_and_wait_for_change(checkpoint, "ArrowRight")?;
     }
     let disabled_snapshot = press_key_and_wait_for_change(checkpoint, "ArrowRight")?;
