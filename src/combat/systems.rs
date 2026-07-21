@@ -177,6 +177,7 @@ impl Plugin for CombatPlugin {
                         hud::update_labels,
                         hud::update_log_text,
                         hud::sync_hud_palette,
+                        hud::sync_hud_panel_alpha,
                     ),
                 )
                     .chain()

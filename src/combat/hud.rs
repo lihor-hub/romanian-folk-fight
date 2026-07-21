@@ -22,7 +22,10 @@ use crate::character::{EnemyFighter, FighterName, Health, PlayerFighter, Stamina
 use crate::core::{LetterboxRect, UiFont, ViewportInfo};
 use crate::progression::Level;
 use crate::roster::Boss;
-use crate::theme::{BUTTON_NORMAL, CREAM, MOBILE_LOG_LINES, Palette, PanelTexture, panel_bundle};
+use crate::settings::AccessibilityPreferences;
+use crate::theme::{
+    BUTTON_NORMAL, CREAM, MOBILE_LOG_LINES, Palette, PanelTexture, panel_bundle_with_alpha,
+};
 use crate::ui_widgets::focus::{Focusable, TabGroup, TabIndex};
 // Only used by the desktop-strip fit check and its test (#120): the runtime
 // paths never need to reason about the border inset directly.
@@ -34,11 +37,24 @@ use super::actions::ExtraDescriptors;
 use super::engine::{CombatEvent, DuelDistance};
 use super::systems::{CombatLogEvent, CombatSide};
 
-/// How many log lines the combat log keeps and shows.
+/// How many log lines the combat log resource keeps (scrollback for the
+/// display caps below).
 pub const LOG_CAPACITY: usize = 8;
 
-const PANEL_WIDTH: f32 = 240.0;
-const BAR_HEIGHT: f32 = 16.0;
+/// How many kept lines the desktop log panel *displays* (combat redesign
+/// §6: a 4-line, lower-opacity log competes less with the fighters). The
+/// phone HUD keeps its own [`MOBILE_LOG_LINES`] cap.
+pub const DESKTOP_LOG_LINES: usize = 4;
+
+/// Panel-art alpha of the two fighter status panels in normal mode; high
+/// contrast (#214) restores full opacity (see [`sync_hud_panel_alpha`]).
+const FIGHTER_PANEL_ALPHA: f32 = 0.92;
+/// Panel-art alpha of the combat-log panel in normal mode — the log is
+/// reference, not focus, so it recedes furthest.
+const LOG_PANEL_ALPHA: f32 = 0.78;
+
+const PANEL_WIDTH: f32 = 220.0;
+const BAR_HEIGHT: f32 = 12.0;
 
 /// Marker for the HUD root; everything under it despawns on
 /// `OnExit(GameState::Fight)`.
@@ -196,9 +212,11 @@ pub(super) fn spawn_hud(
     extra_descriptors: Res<ExtraDescriptors>,
     action_pictograms: Res<action_palette::ActionPictograms>,
     palette: Res<Palette>,
+    accessibility: Res<AccessibilityPreferences>,
 ) {
     commands.insert_resource(CombatLog::default());
     let is_mobile = viewport.is_mobile;
+    let high_contrast = accessibility.high_contrast;
     commands
         .spawn((
             HudScreen,
@@ -209,17 +227,25 @@ pub(super) fn spawn_hud(
                     &ui_font,
                     &panel_texture,
                     is_mobile,
-                    &palette
+                    &palette,
+                    panel_alpha(high_contrast, FIGHTER_PANEL_ALPHA),
                 ),
                 fighter_panel(
                     CombatSide::Enemy,
                     &ui_font,
                     &panel_texture,
                     is_mobile,
-                    &palette
+                    &palette,
+                    panel_alpha(high_contrast, FIGHTER_PANEL_ALPHA),
                 ),
                 pause_button(&ui_font),
-                log_panel(&ui_font, &panel_texture, is_mobile, &palette),
+                log_panel(
+                    &ui_font,
+                    &panel_texture,
+                    is_mobile,
+                    &palette,
+                    panel_alpha(high_contrast, LOG_PANEL_ALPHA),
+                ),
             ],
         ))
         .with_children(|parent| {
@@ -345,12 +371,19 @@ const PANEL_WIDTH_MOBILE: f32 = 150.0;
 /// hardcoded, so a fight entered while high contrast is already on renders
 /// correctly from the first frame; [`sync_hud_palette`] keeps them in sync
 /// if the preference flips while the panel is already alive.
+/// The non-high-contrast panel alpha, or full opacity under #214's
+/// high-contrast mode (translucency would cost panel/arena contrast).
+fn panel_alpha(high_contrast: bool, alpha: f32) -> f32 {
+    if high_contrast { 1.0 } else { alpha }
+}
+
 fn fighter_panel(
     side: CombatSide,
     ui_font: &UiFont,
     panel_texture: &PanelTexture,
     is_mobile: bool,
     palette: &Palette,
+    alpha: f32,
 ) -> impl Bundle {
     let width = if is_mobile {
         PANEL_WIDTH_MOBILE
@@ -362,7 +395,7 @@ fn fighter_panel(
         top: Val::Px(12.0),
         width: Val::Px(width),
         flex_direction: FlexDirection::Column,
-        row_gap: Val::Px(6.0),
+        row_gap: Val::Px(4.0),
         padding: UiRect::all(Val::Px(10.0)),
         ..default()
     };
@@ -371,12 +404,12 @@ fn fighter_panel(
         CombatSide::Enemy => node.right = Val::Px(12.0),
     }
     (
-        panel_bundle(panel_texture, node),
+        panel_bundle_with_alpha(panel_texture, node, alpha),
         FighterPanelRoot,
         children![
             (
                 Text::new(""),
-                ui_font.text_font(20.0),
+                ui_font.text_font(18.0),
                 TextColor(palette.text_primary),
                 HudLabel::Name(side),
             ),
@@ -452,6 +485,7 @@ fn log_panel(
     panel_texture: &PanelTexture,
     is_mobile: bool,
     palette: &Palette,
+    alpha: f32,
 ) -> impl Bundle {
     let node = if is_mobile {
         Node {
@@ -473,7 +507,7 @@ fn log_panel(
         }
     };
     (
-        panel_bundle(panel_texture, node),
+        panel_bundle_with_alpha(panel_texture, node, alpha),
         LogPanelRoot,
         children![(
             Text::new(""),
@@ -608,8 +642,9 @@ pub(super) fn collect_log_lines(
     }
 }
 
-/// Rewrites the log text node whenever the [`CombatLog`] changed, capping it
-/// to the last [`MOBILE_LOG_LINES`] under the mobile breakpoint (#31), and
+/// Rewrites the log text node whenever the [`CombatLog`] changed, capping
+/// the display to the last [`MOBILE_LOG_LINES`] under the mobile breakpoint
+/// (#31) and to [`DESKTOP_LOG_LINES`] otherwise (combat redesign §6), and
 /// keeps its color in sync with `palette.combat_log_text` (#214).
 pub(super) fn update_log_text(
     log: Res<CombatLog>,
@@ -621,7 +656,7 @@ pub(super) fn update_log_text(
         let value = if viewport.is_mobile {
             log.to_text_capped(MOBILE_LOG_LINES)
         } else {
-            log.to_text()
+            log.to_text_capped(DESKTOP_LOG_LINES)
         };
         if text.0 != value {
             text.0 = value;
@@ -654,6 +689,27 @@ pub(super) fn sync_hud_palette(
             Pool::Health => palette.hp_fill,
             Pool::Stamina => palette.stamina_fill,
         };
+    }
+}
+
+/// Keeps the fight panels' translucency in sync with the high-contrast
+/// preference (#214): normal mode uses the slim-HUD alphas
+/// ([`FIGHTER_PANEL_ALPHA`]/[`LOG_PANEL_ALPHA`], combat redesign §6), high
+/// contrast restores full opacity so panel-over-arena contrast never drops.
+pub(super) fn sync_hud_panel_alpha(
+    accessibility: Res<AccessibilityPreferences>,
+    mut panels: Query<&mut ImageNode, (With<FighterPanelRoot>, Without<LogPanelRoot>)>,
+    mut logs: Query<&mut ImageNode, (With<LogPanelRoot>, Without<FighterPanelRoot>)>,
+) {
+    if !accessibility.is_changed() {
+        return;
+    }
+    let high_contrast = accessibility.high_contrast;
+    for mut image in &mut panels {
+        image.color = Color::WHITE.with_alpha(panel_alpha(high_contrast, FIGHTER_PANEL_ALPHA));
+    }
+    for mut image in &mut logs {
+        image.color = Color::WHITE.with_alpha(panel_alpha(high_contrast, LOG_PANEL_ALPHA));
     }
 }
 
@@ -1297,7 +1353,7 @@ mod tests {
     }
 
     #[test]
-    fn the_log_text_shows_the_last_eight_events_newest_at_the_bottom() {
+    fn the_desktop_log_text_shows_the_last_four_events_newest_at_the_bottom() {
         let mut app = test_app();
         for dmg in 1..=10 {
             app.world_mut().write_message(CombatLogEvent {
@@ -1307,10 +1363,53 @@ mod tests {
             });
         }
         app.update();
-        let expected: Vec<String> = (3..=10)
+        // The resource keeps LOG_CAPACITY lines of scrollback; the desktop
+        // panel displays only the last DESKTOP_LOG_LINES of them (§6).
+        let expected: Vec<String> = (7..=10)
             .map(|dmg| format!("Făt-Frumos lovește pentru {dmg}!"))
             .collect();
+        assert_eq!(expected.len(), DESKTOP_LOG_LINES);
         assert_eq!(log_text(&mut app), expected.join("\n"));
+        assert_eq!(
+            app.world().resource::<CombatLog>().lines().count(),
+            LOG_CAPACITY,
+            "the resource itself still keeps the full scrollback"
+        );
+    }
+
+    #[test]
+    fn fight_panels_are_translucent_normally_and_opaque_under_high_contrast() {
+        let mut app = test_app();
+        let alphas = |app: &mut App| -> Vec<(bool, f32)> {
+            let world = app.world_mut();
+            let mut panels: Vec<(bool, f32)> = world
+                .query_filtered::<(&ImageNode, Has<LogPanelRoot>), Or<(With<FighterPanelRoot>, With<LogPanelRoot>)>>()
+                .iter(world)
+                .map(|(image, is_log)| (is_log, image.color.alpha()))
+                .collect();
+            panels.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            panels
+        };
+        assert_eq!(
+            alphas(&mut app),
+            vec![
+                (false, FIGHTER_PANEL_ALPHA),
+                (false, FIGHTER_PANEL_ALPHA),
+                (true, LOG_PANEL_ALPHA),
+            ],
+            "normal mode: slimmer translucent panels, the log most recessed"
+        );
+
+        app.insert_resource(AccessibilityPreferences {
+            reduced_motion: false,
+            high_contrast: true,
+        });
+        app.update();
+        assert_eq!(
+            alphas(&mut app),
+            vec![(false, 1.0), (false, 1.0), (true, 1.0)],
+            "high contrast restores fully opaque panels (#214)"
+        );
     }
 
     // Button-disable/reason coverage and the full mouse-only playthrough
