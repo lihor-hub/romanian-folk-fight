@@ -564,7 +564,10 @@ fn spawn_control_deck(
             })
             .with_children(|actions| {
                 actions.spawn((
-                    button_bundle("Începe lupta", Val::Px(174.0), Val::Px(52.0), 20.0, ui_font),
+                    // #129: "Începe" (not "Începe lupta") — confirming the
+                    // hero now leads to the town hub, not straight into the
+                    // arena.
+                    button_bundle("Începe", Val::Px(174.0), Val::Px(52.0), 20.0, ui_font),
                     CreationAction::Confirm,
                 ));
                 actions.spawn((
@@ -846,7 +849,9 @@ fn handle_creation_actions(
                         draft.starter_items().iter().copied().collect(),
                     ));
                     commands.insert_resource(PlayerEquipment(equipment));
-                    save_requests.write(SaveRequested(ResumeDestination::Fight));
+                    // #129: a fresh run starts at the town hub, so its very
+                    // first checkpoint resumes there too.
+                    save_requests.write(SaveRequested(ResumeDestination::Town));
                     if let Err(error) = draft.reset(&catalog) {
                         error!("creator failed to reset after confirmation: {error}");
                     }
@@ -1888,7 +1893,7 @@ mod tests {
     }
 
     #[test]
-    fn preset_confirm_stores_player_character_loadout_and_starts_the_fight() {
+    fn preset_confirm_stores_player_character_loadout_and_enters_the_town_hub() {
         let mut app = test_app();
         press(
             &mut app,
@@ -1932,7 +1937,8 @@ mod tests {
         assert!(owned.0.contains(&ItemId::ScutDeLemn));
         assert_eq!(
             *app.world().resource::<State<GameState>>().get(),
-            GameState::Fight
+            GameState::Town,
+            "a confirmed hero starts the run at the town hub (#129)"
         );
         assert_eq!(*draft(&app), CharacterDraft::default());
     }
@@ -1966,8 +1972,8 @@ mod tests {
         );
         assert_eq!(
             save.resume_destination(),
-            crate::save::ResumeDestination::Fight,
-            "hero confirmation resumes straight into the arena (#217)"
+            crate::save::ResumeDestination::Town,
+            "hero confirmation resumes into the town hub (#129)"
         );
     }
 
@@ -2021,7 +2027,7 @@ mod tests {
     // writing NextState directly. ---
 
     #[test]
-    fn menu_new_game_through_creation_confirm_reaches_fight() {
+    fn menu_new_game_through_creation_confirm_reaches_the_town_hub() {
         let mut app = test_app_with_menu();
         assert_eq!(
             *app.world().resource::<State<GameState>>().get(),
@@ -2045,8 +2051,8 @@ mod tests {
 
         assert_eq!(
             *app.world().resource::<State<GameState>>().get(),
-            GameState::Fight,
-            "confirming the hero routes creation -> fight through the flow table"
+            GameState::Town,
+            "confirming the hero routes creation -> town through the flow table (#129)"
         );
         let player = app
             .world()

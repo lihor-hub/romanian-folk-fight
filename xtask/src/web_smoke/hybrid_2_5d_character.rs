@@ -306,6 +306,15 @@ fn run_journey(
         serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
     )
     .map_err(|error| smoke(viewport, "confirm representative", error, &phase_dir))?;
+    // #129: confirming the hero lands on the town hub; enter the arena via
+    // its primary action.
+    wait_for_screen(&checkpoint, "Town")
+        .map_err(|error| smoke(viewport, "town hub", error, &phase_dir))?;
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "pressButton", "button": "TownArena"}),
+    )
+    .map_err(|error| smoke(viewport, "enter arena", error, &phase_dir))?;
     wait_for_screen(&checkpoint, "Fight")
         .map_err(|error| smoke(viewport, "first fight", error, &phase_dir))?;
     let first_combat = wait_for_snapshot(
@@ -337,9 +346,18 @@ fn run_journey(
     .map_err(|error| smoke(viewport, "enable autoplay", error, &phase_dir))?;
     wait_for_screen(&checkpoint, "FightResult")
         .map_err(|error| smoke(viewport, "first fight result", error, &phase_dir))?;
+    // #129: the shop is reached through the town hub -- result Continuă ->
+    // Town -> Prăvălie.
     send_command(
         &checkpoint,
-        serde_json::json!({"cmd": "pressButton", "button": "GoToShop"}),
+        serde_json::json!({"cmd": "pressButton", "button": "ResultContinue"}),
+    )
+    .map_err(|error| smoke(viewport, "continue to town", error, &phase_dir))?;
+    wait_for_screen(&checkpoint, "Town")
+        .map_err(|error| smoke(viewport, "town hub", error, &phase_dir))?;
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "pressButton", "button": "TownShop"}),
     )
     .map_err(|error| smoke(viewport, "go to shop", error, &phase_dir))?;
 
@@ -357,11 +375,20 @@ fn run_journey(
         serde_json::json!({"cmd": "setAutoplay", "enabled": false}),
     )
     .map_err(|error| smoke(viewport, "disable autoplay", error, &phase_dir))?;
+    // #129: leaving the shop returns to the hub; the arena is entered from
+    // there.
     send_command(
         &checkpoint,
-        serde_json::json!({"cmd": "pressButton", "button": "BackToArena"}),
+        serde_json::json!({"cmd": "pressButton", "button": "ShopBackToTown"}),
     )
     .map_err(|error| smoke(viewport, "leave shop", error, &phase_dir))?;
+    wait_for_screen(&checkpoint, "Town")
+        .map_err(|error| smoke(viewport, "town after shop", error, &phase_dir))?;
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "pressButton", "button": "TownArena"}),
+    )
+    .map_err(|error| smoke(viewport, "enter arena", error, &phase_dir))?;
 
     wait_for_screen(&checkpoint, "Fight")
         .map_err(|error| smoke(viewport, "combat screen", error, &phase_dir))?;

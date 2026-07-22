@@ -25,18 +25,29 @@
 //! | `MainMenu` | `StartNewGame` | `CharacterCreation` | #155 | button |
 //! | `MainMenu` | `ContinueRun` | `Fight` | #155 | button |
 //! | `MainMenu` | `ContinueToShop` | `Shop` | #217 | button |
-//! | `CharacterCreation` | `ConfirmHero` | `Fight` | #155 | button |
+//! | `MainMenu` | `ContinueToTown` | `Town` | #129 | button |
+//! | `CharacterCreation` | `ConfirmHero` | `Town` | #155, retargeted by #129 | button |
 //! | `CharacterCreation` | `BackToMenu` | `MainMenu` | #155 | button |
-//! | `FightResult` | `GoToShop` | `Shop` | #164 | button |
-//! | `FightResult` | `NextFight` | `Fight` | #164 | button |
-//! | `Shop` | `BackToArena` | `Fight` | #164 | button |
-//! | `Victory` | `NextLap` | `Shop` | #164 | button |
+//! | `Town` | `EnterArena` | `Fight` | #129 | button |
+//! | `Town` | `GoToShop` | `Shop` | #129 | button |
+//! | `Town` | `BackToMenu` | `MainMenu` | #129 | button |
+//! | `FightResult` | `GoToTown` | `Town` | #129 | button |
+//! | `Shop` | `GoToTown` | `Town` | #129 | button |
+//! | `Victory` | `NextLap` | `Town` | #164, retargeted by #129 | button |
 //! | `Victory` | `BackToMenu` | `MainMenu` | #164 | button |
 //! | `GameOver` | `BackToMenu` | `MainMenu` | #164 | button |
 //! | `Fight` | `AbandonFight` | `MainMenu` | #164 | button (paused) |
 //! | `Fight` | `ResolveVictory` | `FightResult` | #166 | automated (fight-end delay) |
 //! | `Fight` | `ResolveDefeat` | `GameOver` | #166 | automated (fight-end delay) |
 //! | `Fight` | `RunWon` | `Victory` | #166 | automated (fight-end delay) |
+//!
+//! #129 (the Town hub, `docs/navigation-proposal.md`) reshaped the loop from
+//! `Fight → FightResult → Shop → Fight` into
+//! `Town → Fight → FightResult → Town`: the shop became an optional
+//! detour off the hub, so the old `FightResult → Shop` (`GoToShop`),
+//! `FightResult → Fight` (`NextFight`), and `Shop → Fight` (`BackToArena`)
+//! rows are gone — every post-fight and post-shop route funnels back
+//! through `Town`.
 //!
 //! # Extending the table (procedure for #146 and future campaign issues)
 //!
@@ -86,29 +97,39 @@ pub enum FlowIntent {
     ContinueRun,
     /// Menu → Shop: resume a restored save whose stored
     /// [`crate::save::ResumeDestination`] is `Shop` (the shop-entry and
-    /// purchase/equip checkpoints, and the victory/lap checkpoint, all
-    /// resume here) (#217). The save must already be restored into the run
-    /// resources.
+    /// purchase/equip checkpoints resume here) (#217). The save must already
+    /// be restored into the run resources.
     ContinueToShop,
-    /// Creation → Fight: the hero/loadout is confirmed and stored.
+    /// Menu → Town: resume a restored save whose stored
+    /// [`crate::save::ResumeDestination`] is `Town` — the default
+    /// destination every non-shop checkpoint writes since #129. The save
+    /// must already be restored into the run resources.
+    ContinueToTown,
+    /// Creation → Town: the hero/loadout is confirmed and stored; the run
+    /// starts at the hub (#129).
     ConfirmHero,
-    /// Creation → menu, game-over → menu (with the run reset), or victory →
-    /// menu (with the looping run's save kept): every "back to the main
-    /// menu" button shares this intent since the table only routes state —
-    /// the emitting screen already applied whatever domain effect (or none)
-    /// its own destination implies.
+    /// Creation → menu, game-over → menu (with the run reset), victory →
+    /// menu (with the looping run's save kept), or town → menu (with the
+    /// save kept, #129): every "back to the main menu" button shares this
+    /// intent since the table only routes state — the emitting screen
+    /// already applied whatever domain effect (or none) its own destination
+    /// implies.
     BackToMenu,
-    /// FightResult → Shop: spend the payout (**La prăvălie**). The reward
-    /// was already credited on `OnEnter(FightResult)`.
+    /// Town → Shop: visit the shop (**Prăvălie**, #129). No domain side
+    /// effect — the shop autosaves on entry.
     GoToShop,
-    /// FightResult → Fight: straight into the next duel (**Lupta
-    /// următoare**).
-    NextFight,
-    /// Shop → Fight: leave the shop (**Înapoi în arenă**). Purchases/equips
-    /// already applied as they were pressed.
-    BackToArena,
-    /// Victory → Shop: continue the looping run into lap 2 (**Turul 2**).
-    /// The ladder already advanced past the last lap-1 opponent.
+    /// Town → Fight: start the next ladder fight (**Luptă în arenă**, the
+    /// hub's dominant primary action, #129).
+    EnterArena,
+    /// FightResult → Town (**Continuă**; the reward was already credited on
+    /// `OnEnter(FightResult)`) and Shop → Town (**Înapoi**; purchases/equips
+    /// already applied as they were pressed): every "back to the hub" button
+    /// shares this intent, mirroring [`FlowIntent::BackToMenu`]'s reuse
+    /// rationale (#129).
+    GoToTown,
+    /// Victory → Town: continue the looping run into lap 2 (**Turul 2**,
+    /// retargeted from the shop by #129). The ladder already advanced past
+    /// the last lap-1 opponent.
     NextLap,
     /// Paused Fight → menu: **Abandonează**. Not a defeat, but a forfeit
     /// (#217): the run snapshot is already cleared and every run-scoped
@@ -162,12 +183,15 @@ fn transition_for(from: GameState, intent: FlowIntent) -> Option<GameState> {
         (MainMenu, StartNewGame) => Some(CharacterCreation),
         (MainMenu, ContinueRun) => Some(Fight),
         (MainMenu, ContinueToShop) => Some(Shop),
-        (CharacterCreation, ConfirmHero) => Some(Fight),
+        (MainMenu, ContinueToTown) => Some(Town),
+        (CharacterCreation, ConfirmHero) => Some(Town),
         (CharacterCreation, BackToMenu) => Some(MainMenu),
-        (FightResult, GoToShop) => Some(Shop),
-        (FightResult, NextFight) => Some(Fight),
-        (Shop, BackToArena) => Some(Fight),
-        (Victory, NextLap) => Some(Shop),
+        (Town, EnterArena) => Some(Fight),
+        (Town, GoToShop) => Some(Shop),
+        (Town, BackToMenu) => Some(MainMenu),
+        (FightResult, GoToTown) => Some(Town),
+        (Shop, GoToTown) => Some(Town),
+        (Victory, NextLap) => Some(Town),
         (Victory, BackToMenu) => Some(MainMenu),
         (GameOver, BackToMenu) => Some(MainMenu),
         (Fight, AbandonFight) => Some(MainMenu),
@@ -333,11 +357,23 @@ mod tests {
         );
     }
 
+    /// #129: a save whose stored resume destination is the town hub (the
+    /// default for every non-shop checkpoint) routes **Continuă** there.
     #[test]
-    fn creation_confirm_hero_routes_to_fight() {
+    fn menu_continue_to_town_routes_to_town() {
+        assert_eq!(
+            transition_for(GameState::MainMenu, FlowIntent::ContinueToTown),
+            Some(GameState::Town)
+        );
+    }
+
+    /// #129: a confirmed hero starts the run at the town hub, not straight
+    /// in the arena.
+    #[test]
+    fn creation_confirm_hero_routes_to_town() {
         assert_eq!(
             transition_for(GameState::CharacterCreation, FlowIntent::ConfirmHero),
-            Some(GameState::Fight)
+            Some(GameState::Town)
         );
     }
 
@@ -349,35 +385,58 @@ mod tests {
         );
     }
 
+    /// #129: the hub's dominant primary action starts the next ladder fight.
     #[test]
-    fn fight_result_go_to_shop_routes_to_shop() {
+    fn town_enter_arena_routes_to_fight() {
         assert_eq!(
-            transition_for(GameState::FightResult, FlowIntent::GoToShop),
+            transition_for(GameState::Town, FlowIntent::EnterArena),
+            Some(GameState::Fight)
+        );
+    }
+
+    /// #129: the shop is an optional detour off the hub.
+    #[test]
+    fn town_go_to_shop_routes_to_shop() {
+        assert_eq!(
+            transition_for(GameState::Town, FlowIntent::GoToShop),
             Some(GameState::Shop)
         );
     }
 
+    /// #129: the hub's back action returns to the main menu (the save is
+    /// kept — the emitting screen owns that domain decision, not the table).
     #[test]
-    fn fight_result_next_fight_routes_to_fight() {
+    fn town_back_to_menu_routes_to_main_menu() {
         assert_eq!(
-            transition_for(GameState::FightResult, FlowIntent::NextFight),
-            Some(GameState::Fight)
+            transition_for(GameState::Town, FlowIntent::BackToMenu),
+            Some(GameState::MainMenu)
         );
     }
 
+    /// #129: the result screen's single **Continuă** returns to the hub.
     #[test]
-    fn shop_back_to_arena_routes_to_fight() {
+    fn fight_result_go_to_town_routes_to_town() {
         assert_eq!(
-            transition_for(GameState::Shop, FlowIntent::BackToArena),
-            Some(GameState::Fight)
+            transition_for(GameState::FightResult, FlowIntent::GoToTown),
+            Some(GameState::Town)
         );
     }
 
+    /// #129: leaving the shop returns to the hub, not the arena.
     #[test]
-    fn victory_next_lap_routes_to_shop() {
+    fn shop_go_to_town_routes_to_town() {
+        assert_eq!(
+            transition_for(GameState::Shop, FlowIntent::GoToTown),
+            Some(GameState::Town)
+        );
+    }
+
+    /// #129: the next lap loops through the hub (the shop is optional now).
+    #[test]
+    fn victory_next_lap_routes_to_town() {
         assert_eq!(
             transition_for(GameState::Victory, FlowIntent::NextLap),
-            Some(GameState::Shop)
+            Some(GameState::Town)
         );
     }
 
@@ -438,11 +497,14 @@ mod tests {
             (GameState::MainMenu, FlowIntent::StartNewGame),
             (GameState::MainMenu, FlowIntent::ContinueRun),
             (GameState::MainMenu, FlowIntent::ContinueToShop),
+            (GameState::MainMenu, FlowIntent::ContinueToTown),
             (GameState::CharacterCreation, FlowIntent::ConfirmHero),
             (GameState::CharacterCreation, FlowIntent::BackToMenu),
-            (GameState::FightResult, FlowIntent::GoToShop),
-            (GameState::FightResult, FlowIntent::NextFight),
-            (GameState::Shop, FlowIntent::BackToArena),
+            (GameState::Town, FlowIntent::EnterArena),
+            (GameState::Town, FlowIntent::GoToShop),
+            (GameState::Town, FlowIntent::BackToMenu),
+            (GameState::FightResult, FlowIntent::GoToTown),
+            (GameState::Shop, FlowIntent::GoToTown),
             (GameState::Victory, FlowIntent::NextLap),
             (GameState::Victory, FlowIntent::BackToMenu),
             (GameState::GameOver, FlowIntent::BackToMenu),
@@ -455,6 +517,7 @@ mod tests {
             GameState::Loading,
             GameState::MainMenu,
             GameState::CharacterCreation,
+            GameState::Town,
             GameState::Shop,
             GameState::Fight,
             GameState::FightResult,
@@ -465,11 +528,12 @@ mod tests {
             FlowIntent::StartNewGame,
             FlowIntent::ContinueRun,
             FlowIntent::ContinueToShop,
+            FlowIntent::ContinueToTown,
             FlowIntent::ConfirmHero,
             FlowIntent::BackToMenu,
             FlowIntent::GoToShop,
-            FlowIntent::NextFight,
-            FlowIntent::BackToArena,
+            FlowIntent::EnterArena,
+            FlowIntent::GoToTown,
             FlowIntent::NextLap,
             FlowIntent::AbandonFight,
             FlowIntent::ResolveVictory,
@@ -578,25 +642,25 @@ mod tests {
     fn duplicate_post_fight_intents_in_the_same_frame_apply_once_and_reject_the_rest() {
         let mut app = test_app();
         set_state(&mut app, GameState::FightResult);
-        write_intent(&mut app, FlowIntent::GoToShop);
-        write_intent(&mut app, FlowIntent::GoToShop);
+        write_intent(&mut app, FlowIntent::GoToTown);
+        write_intent(&mut app, FlowIntent::GoToTown);
         app.update();
 
         assert!(
-            next_state_is_pending(&app, GameState::Shop),
+            next_state_is_pending(&app, GameState::Town),
             "exactly one transition is queued"
         );
         assert_eq!(
             results(&mut app),
             vec![
                 TransitionResult::Applied {
-                    intent: FlowIntent::GoToShop,
+                    intent: FlowIntent::GoToTown,
                     from: GameState::FightResult,
-                    to: GameState::Shop,
+                    to: GameState::Town,
                 },
                 TransitionResult::Rejected {
-                    intent: FlowIntent::GoToShop,
-                    from: GameState::Shop,
+                    intent: FlowIntent::GoToTown,
+                    from: GameState::Town,
                 },
             ]
         );
@@ -727,36 +791,62 @@ mod tests {
     // `progression::result_ui`/`victory_ui`/`mod`, `shop`, `combat::pause` —
     // this module only asserts the *routing* holds across a whole journey.
 
-    /// menu -> creation -> fight -> result -> shop -> next fight: the
-    /// complete first-lap loop a fresh run takes when every fight is won.
+    /// menu -> creation -> town -> fight -> result -> town -> next fight:
+    /// the complete first-lap loop a fresh run takes when every fight is won
+    /// (#129: the town hub sits between every fight, and the shop is an
+    /// optional detour exercised in the next journey).
     #[test]
-    fn journey_menu_to_creation_to_fight_to_result_to_shop_to_next_fight() {
+    fn journey_menu_to_creation_to_town_to_fight_to_result_to_town_to_next_fight() {
         let mut app = test_app();
         assert_eq!(current_state(&app), GameState::MainMenu);
         assert_eq!(
             step(&mut app, FlowIntent::StartNewGame),
             GameState::CharacterCreation
         );
-        assert_eq!(step(&mut app, FlowIntent::ConfirmHero), GameState::Fight);
+        assert_eq!(
+            step(&mut app, FlowIntent::ConfirmHero),
+            GameState::Town,
+            "a confirmed hero starts the run at the hub"
+        );
+        assert_eq!(step(&mut app, FlowIntent::EnterArena), GameState::Fight);
         assert_eq!(
             step(&mut app, FlowIntent::ResolveVictory),
             GameState::FightResult,
             "the automated fight-end delay routes a non-final win to the result screen"
         );
-        assert_eq!(step(&mut app, FlowIntent::GoToShop), GameState::Shop);
         assert_eq!(
-            step(&mut app, FlowIntent::BackToArena),
+            step(&mut app, FlowIntent::GoToTown),
+            GameState::Town,
+            "the result screen's Continuă returns to the hub"
+        );
+        assert_eq!(
+            step(&mut app, FlowIntent::EnterArena),
             GameState::Fight,
-            "leaving the shop starts the next fight"
+            "the hub starts the next fight"
         );
     }
 
-    /// menu -> shop -> arena: #217's other **Continuă** destination. A save
-    /// captured at a shop checkpoint resumes straight into the shop instead
-    /// of the arena, and from there the run continues exactly like any other
-    /// shop visit.
+    /// town -> shop -> town -> fight: #129's optional shop detour. The shop
+    /// is entered from the hub and leaving it lands back on the hub, never
+    /// straight in the arena.
     #[test]
-    fn journey_menu_continue_to_shop_then_back_to_arena() {
+    fn journey_town_shop_detour_returns_to_town() {
+        let mut app = test_app();
+        set_state(&mut app, GameState::Town);
+        assert_eq!(step(&mut app, FlowIntent::GoToShop), GameState::Shop);
+        assert_eq!(
+            step(&mut app, FlowIntent::GoToTown),
+            GameState::Town,
+            "leaving the shop returns to the hub"
+        );
+        assert_eq!(step(&mut app, FlowIntent::EnterArena), GameState::Fight);
+    }
+
+    /// menu -> shop -> town: #217's other **Continuă** destination. A save
+    /// captured at a shop checkpoint resumes straight into the shop, and
+    /// leaving it continues through the hub like any other shop visit.
+    #[test]
+    fn journey_menu_continue_to_shop_then_back_to_town() {
         let mut app = test_app();
         assert_eq!(
             step(&mut app, FlowIntent::ContinueToShop),
@@ -764,10 +854,25 @@ mod tests {
             "Continuă resumes into the shop when that's the saved destination"
         );
         assert_eq!(
-            step(&mut app, FlowIntent::BackToArena),
-            GameState::Fight,
-            "leaving the shop starts the fight, same as any other shop visit"
+            step(&mut app, FlowIntent::GoToTown),
+            GameState::Town,
+            "leaving the shop returns to the hub, same as any other shop visit"
         );
+    }
+
+    /// menu -> town -> menu: #129's **Continuă** default. A save captured at
+    /// any non-shop checkpoint resumes into the hub, and the hub's back
+    /// action returns to the menu with the save kept (the table only routes;
+    /// the emitting screen owns the confirm overlay and keeps the save).
+    #[test]
+    fn journey_menu_continue_to_town_and_back() {
+        let mut app = test_app();
+        assert_eq!(
+            step(&mut app, FlowIntent::ContinueToTown),
+            GameState::Town,
+            "Continuă resumes into the hub when that's the saved destination"
+        );
+        assert_eq!(step(&mut app, FlowIntent::BackToMenu), GameState::MainMenu);
     }
 
     /// defeat -> game over -> reset: a loss ends the run and the game-over
@@ -791,7 +896,7 @@ mod tests {
     }
 
     /// victory -> next lap: winning the lap-1 final boss ends the run in
-    /// victory, and continuing loops into lap 2 via the shop.
+    /// victory, and continuing loops into lap 2 via the town hub (#129).
     #[test]
     fn journey_victory_to_next_lap() {
         let mut app = test_app();
@@ -803,8 +908,8 @@ mod tests {
         );
         assert_eq!(
             step(&mut app, FlowIntent::NextLap),
-            GameState::Shop,
-            "continuing the run loops into lap 2 via the shop"
+            GameState::Town,
+            "continuing the run loops into lap 2 via the hub"
         );
     }
 

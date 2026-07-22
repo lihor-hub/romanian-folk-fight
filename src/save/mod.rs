@@ -448,6 +448,7 @@ mod journeys {
     use crate::progression::{FightOutcome, Level, ProgressionPlugin};
     use crate::roster::{LadderProgress, RosterPlugin};
     use crate::shop::{OwnedItems, PlayerEquipment, ShopAction, ShopPlugin};
+    use crate::town::{TownAction, TownPlugin};
 
     /// Every plugin a full menu -> creation -> fight (-> shop) journey
     /// touches, headless: `ArenaPlugin`/`CombatPlugin` (the fight screen and
@@ -476,6 +477,7 @@ mod journeys {
             CombatPlugin,
             RosterPlugin,
             ProgressionPlugin,
+            TownPlugin,
             ShopPlugin,
             SavePlugin,
         ));
@@ -539,10 +541,11 @@ mod journeys {
         app.update();
     }
 
-    /// Drives menu -> creation -> a confirmed hero -> `GameState::Fight`,
-    /// exactly as a player would (through the real `NewGame`/`SelectChoice`/
-    /// `Confirm` button handlers) -- the shared first half of both journeys
-    /// below.
+    /// Drives menu -> creation -> a confirmed hero -> `GameState::Town` ->
+    /// `GameState::Fight`, exactly as a player would (through the real
+    /// `NewGame`/`SelectChoice`/`Confirm`/`EnterArena` button handlers) --
+    /// the shared first half of both journeys below (#129: the run starts at
+    /// the hub and the arena is entered from there).
     fn start_new_run_into_fight(app: &mut App, preset: HeroPreset) {
         let new_game = find_button(app, MenuAction::NewGame);
         press_and_transition(app, new_game);
@@ -555,6 +558,10 @@ mod journeys {
         press_in_screen(app, select_preset);
         let confirm = find_button(app, CreationAction::Confirm);
         press_and_transition(app, confirm);
+        assert_eq!(current_state(app), GameState::Town);
+
+        let enter_arena = find_button(app, TownAction::EnterArena);
+        press_and_transition(app, enter_arena);
         assert_eq!(current_state(app), GameState::Fight);
     }
 
@@ -577,8 +584,8 @@ mod journeys {
             .expect("hero confirmation autosaves a run -- something exists to forfeit");
         assert_eq!(
             hero_confirm_save.resume_destination(),
-            ResumeDestination::Fight,
-            "the hero-confirmation checkpoint resumes into the arena"
+            ResumeDestination::Town,
+            "the hero-confirmation checkpoint resumes into the town hub (#129)"
         );
 
         // Open the pause overlay -- a `PauseState` substate change with no
@@ -673,11 +680,16 @@ mod journeys {
         let result_save = stored_save(cell).expect("the result/reward checkpoint autosaves");
         assert_eq!(
             result_save.resume_destination(),
-            ResumeDestination::Fight,
-            "the result/reward checkpoint resumes into the arena, matching Lupta următoare"
+            ResumeDestination::Town,
+            "the result/reward checkpoint resumes into the town hub (#129)"
         );
 
-        let go_to_shop = find_button(app, ResultAction::GoToShop);
+        // #129: the shop is reached through the hub -- result Continuă ->
+        // Town -> Prăvălie -> Shop, all via the real production buttons.
+        let continue_button = find_button(app, ResultAction::Continue);
+        press_and_transition(app, continue_button);
+        assert_eq!(current_state(app), GameState::Town);
+        let go_to_shop = find_button(app, TownAction::GoToShop);
         press_and_transition(app, go_to_shop);
         assert_eq!(current_state(app), GameState::Shop);
 

@@ -37,6 +37,10 @@ pub enum GameState {
     Loading,
     MainMenu,
     CharacterCreation,
+    /// The between-fights hub (#129, `docs/navigation-proposal.md`): one
+    /// dominant "Luptă în arenă" action plus the optional shop and the
+    /// read-only character view.
+    Town,
     Shop,
     Fight,
     FightResult,

@@ -216,30 +216,42 @@ fn parse_item(name: &str) -> Option<ItemId> {
 /// [`SaveGame::restore`] does not insert it as one -- it is only ever read
 /// off the still-serialized [`SaveGame`] by `crate::menu`'s **Continuă**
 /// handler (#217), which turns it into exactly one
-/// [`crate::flow::FlowIntent::ContinueRun`]/[`crate::flow::FlowIntent::ContinueToShop`]
-/// (never interpreted as a raw field by any other screen -- see
-/// `crate::flow`'s ownership-boundary docs).
+/// [`crate::flow::FlowIntent::ContinueRun`]/[`crate::flow::FlowIntent::ContinueToShop`]/
+/// [`crate::flow::FlowIntent::ContinueToTown`] (never interpreted as a raw
+/// field by any other screen -- see `crate::flow`'s ownership-boundary
+/// docs).
 ///
 /// #217 wires every safe checkpoint (hero confirmation, the result/reward
 /// autosave, shop entry/purchases/equips, and the victory/lap autosave) to
 /// pass the destination that actually matches where **Continuă** should
 /// land, via [`SaveGame::capture`]'s explicit parameter -- there is no
 /// implicit/default destination for a fresh capture, precisely so a new
-/// checkpoint can never forget to pick one. A future safe destination (a
-/// child of #133/#137/#140) adds a new variant here plus a new arm wherever
-/// `crate::menu` maps [`ResumeDestination`] to a `FlowIntent` -- see that
-/// module's doc comment for the exact extension steps.
+/// checkpoint can never forget to pick one. #129 (the town hub) followed
+/// exactly that recipe for [`ResumeDestination::Town`]: a new variant here
+/// plus a new arm wherever `crate::menu` maps [`ResumeDestination`] to a
+/// `FlowIntent` -- a future safe destination (a child of #133/#137/#140)
+/// repeats it; see that module's doc comment for the exact extension steps.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ResumeDestination {
-    /// Resume straight into the next fight -- the destination for the hero-
-    /// confirmation and result/reward checkpoints.
+    /// Resume straight into the next fight. Since #129 no checkpoint writes
+    /// this anymore (the hero-confirmation and result/reward checkpoints
+    /// moved to [`ResumeDestination::Town`]), but it stays the `#[default]`
+    /// deliberately: it is the serde fallback for pre-#217 saves whose
+    /// payload has no `resume_destination` field at all, and those must keep
+    /// resuming into the arena exactly as they always have.
     #[default]
     Fight,
-    /// Resume into the shop -- the destination for shop entry (whether
-    /// reached from the result screen or from victory's next-lap), and every
-    /// shop purchase/equip autosave (#217).
+    /// Resume into the shop -- the destination for shop entry and every shop
+    /// purchase/equip autosave (#217).
     Shop,
+    /// Resume into the town hub (#129) -- the destination every non-shop
+    /// checkpoint writes since the hub landed: hero confirmation, the
+    /// result/reward and level-up autosaves, the victory/lap autosave, and
+    /// the hub's own entry autosave. Additive: pre-#129 saves storing
+    /// `"fight"`/`"shop"` keep resuming exactly where they said, and only
+    /// saves newly written by a #129 build carry `"town"`.
+    Town,
 }
 
 /// Just enough of a stored payload to read which version it claims to be,
@@ -981,6 +993,55 @@ pub(crate) mod tests {
             restored.resume_destination(),
             ResumeDestination::Shop,
             "the shop destination round-trips through JSON"
+        );
+    }
+
+    /// #129: the town-hub destination round-trips the same way, and it is a
+    /// purely additive variant -- it serializes as `"town"` without touching
+    /// the save version.
+    #[test]
+    fn capture_stores_the_town_resume_destination_when_given_it() {
+        let save = sample_save_with_destination(ResumeDestination::Town);
+        assert_eq!(save.resume_destination, ResumeDestination::Town);
+        assert_eq!(save.version, CURRENT_VERSION, "no version bump needed");
+        let json = save.to_json().expect("plain data serializes");
+        assert!(
+            json.contains("\"resume_destination\":\"town\""),
+            "additive snake_case wire value: {json}"
+        );
+        let restored = SaveGame::from_json(&json).expect("own JSON loads");
+        assert_eq!(restored.resume_destination(), ResumeDestination::Town);
+    }
+
+    /// #129 compat proof: pre-town saves keep resuming exactly where they
+    /// said. A stored `"fight"`/`"shop"` parses to its own variant, and a
+    /// pre-#217 payload with no `resume_destination` field at all still
+    /// falls back to `Fight` via `#[serde(default)]`.
+    #[test]
+    fn legacy_resume_destinations_still_parse_to_their_own_variants() {
+        for (wire, expected) in [
+            ("fight", ResumeDestination::Fight),
+            ("shop", ResumeDestination::Shop),
+            ("town", ResumeDestination::Town),
+        ] {
+            let mut json = sample_save().to_json().expect("plain data serializes");
+            json = json.replace(
+                "\"resume_destination\":\"fight\"",
+                &format!("\"resume_destination\":\"{wire}\""),
+            );
+            let restored = SaveGame::from_json(&json).expect("stored payload loads");
+            assert_eq!(restored.resume_destination(), expected, "{wire}");
+        }
+
+        let json = sample_save().to_json().expect("plain data serializes");
+        let without_field = json.replace(",\"resume_destination\":\"fight\"", "");
+        assert_ne!(json, without_field, "the field was present to remove");
+        let restored =
+            SaveGame::from_json(&without_field).expect("a payload missing the field still loads");
+        assert_eq!(
+            restored.resume_destination(),
+            ResumeDestination::Fight,
+            "missing field defaults to the pre-#217 arena resume"
         );
     }
 

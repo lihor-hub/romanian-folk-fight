@@ -274,6 +274,13 @@ fn run_checks(
         &checkpoint,
         serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
     )?;
+    // #129: confirming the hero lands on the town hub; enter the arena via
+    // its primary action.
+    wait_for_screen(&checkpoint, "Town", false)?;
+    send_command(
+        &checkpoint,
+        serde_json::json!({"cmd": "pressButton", "button": "TownArena"}),
+    )?;
     let (fight_status, fight_shot) = wait_for_screen(&checkpoint, "Fight", false)?;
     check_no_console_or_page_errors(&fight_status, "fight start")?;
     let _ = artifacts::write_artifact(dir, "2-fight-start.png", &fight_shot);

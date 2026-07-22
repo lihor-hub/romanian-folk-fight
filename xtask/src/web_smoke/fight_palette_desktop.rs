@@ -264,6 +264,13 @@ fn run_checkpoint(
             &checkpoint,
             serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
         )?;
+        // #129: confirming the hero lands on the town hub; enter the arena
+        // via its primary action.
+        wait_for_screen(&checkpoint, "Town", false)?;
+        send_command(
+            &checkpoint,
+            serde_json::json!({"cmd": "pressButton", "button": "TownArena"}),
+        )?;
 
         // Freeze the clock before the capture so the fight screen's
         // continuous idle animation (parallax drift, sprite bob) can't

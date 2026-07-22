@@ -122,8 +122,10 @@ enum ShopLayoutRole {
 pub enum ShopAction {
     /// Buy or equip the catalog item, depending on its current state.
     Item(ItemId),
-    /// **Înapoi în arenă** → [`GameState::Fight`].
-    BackToArena,
+    /// **Înapoi** → [`GameState::Town`] (#129): the shop is an optional
+    /// detour off the town hub, so its back action returns there — never
+    /// straight into the arena.
+    BackToTown,
 }
 
 /// Which live piece of the shop screen a text label displays.
@@ -584,10 +586,7 @@ fn spawn_shop_screen(
                         spawn_shop_preview_stage(body, &equipment, &attributes, ui_font, icons);
                     }
                 });
-            parent.spawn((
-                wide_button("Înapoi în arenă", ui_font),
-                ShopAction::BackToArena,
-            ));
+            parent.spawn((wide_button("Înapoi", ui_font), ShopAction::BackToTown));
         });
     spawn_shop_preview(
         &mut commands,
@@ -1082,7 +1081,7 @@ fn autosave_on_shop_entry(mut save_requests: MessageWriter<SaveRequested>) {
 
 /// Runs the [`ShopAction`] of whichever shop button was pressed: buys (via
 /// [`try_buy`]) and auto-equips, equips owned items, or emits
-/// [`FlowIntent::BackToArena`] to leave for the fight. State is re-derived
+/// [`FlowIntent::GoToTown`] to return to the hub (#129). State is re-derived
 /// from the resources on every press, so a stale-looking button can never
 /// overdraw the wallet. Every successful purchase or equip swap autosaves
 /// the run (see [`crate::save`]), tagged [`ResumeDestination::Shop`], before
@@ -1100,8 +1099,8 @@ fn handle_shop_actions(
             continue;
         }
         match *action {
-            ShopAction::BackToArena => {
-                intents.write(FlowIntent::BackToArena);
+            ShopAction::BackToTown => {
+                intents.write(FlowIntent::GoToTown);
             }
             ShopAction::Item(id) => {
                 match ItemButtonState::of(id, &wallet, &owned, &equipment) {
@@ -1558,7 +1557,7 @@ mod tests {
                 "missing empty loadout slot {slot:?}: {texts:?}"
             );
         }
-        assert!(texts.contains(&"Înapoi în arenă".to_string()), "{texts:?}");
+        assert!(texts.contains(&"Înapoi".to_string()), "{texts:?}");
         assert_eq!(
             count::<Button>(&mut app),
             CATALOG.len() + 1,
@@ -1761,7 +1760,7 @@ mod tests {
 
         let catalog = layout_role_entity(&mut app, ShopLayoutRole::CatalogColumn);
         let preview = layout_role_entity(&mut app, ShopLayoutRole::PreviewStage);
-        let back = find_button(&mut app, ShopAction::BackToArena);
+        let back = find_button(&mut app, ShopAction::BackToTown);
         let (catalog_parent, catalog_index) = sibling_position(&mut app, catalog);
         let (preview_parent, preview_index) = sibling_position(&mut app, preview);
         let (back_parent, back_index) = sibling_position(&mut app, back);
@@ -1817,7 +1816,7 @@ mod tests {
     }
 
     /// #287 defect 2, red-first: the header row and the wrapped body --
-    /// [`ShopAction::BackToArena`]'s previous siblings under the scrollable
+    /// [`ShopAction::BackToTown`]'s previous siblings under the scrollable
     /// root -- must never shrink below their natural content height. The
     /// root is a scroll container (`overflow: Overflow::scroll_y()`)
     /// specifically so content taller than the window scrolls instead of
@@ -2454,9 +2453,9 @@ mod tests {
         assert!(owned(&app).0.contains(&ItemId::CaciulaDeOaie));
     }
 
-    /// #216: every focusable catalog buy button and the **Înapoi în arenă**
-    /// button share one `TabGroup`; tabbing all the way around wraps back
-    /// to the first.
+    /// #216: every focusable catalog buy button and the **Înapoi** button
+    /// share one `TabGroup`; tabbing all the way around wraps back to the
+    /// first.
     #[test]
     fn tab_order_covers_every_buy_button_and_the_back_button() {
         let mut app = test_app();
@@ -2569,15 +2568,17 @@ mod tests {
         );
     }
 
+    /// #129: leaving the shop returns to the town hub, never straight into
+    /// the arena.
     #[test]
-    fn inapoi_in_arena_returns_to_the_fight_and_cleans_up() {
+    fn inapoi_returns_to_the_town_hub_and_cleans_up() {
         let mut app = test_app();
         set_state(&mut app, GameState::Shop);
 
-        let back = find_button(&mut app, ShopAction::BackToArena);
+        let back = find_button(&mut app, ShopAction::BackToTown);
         press(&mut app, back);
 
-        assert_eq!(state(&app), GameState::Fight);
+        assert_eq!(state(&app), GameState::Town);
         assert_eq!(count::<ShopScreen>(&mut app), 0, "root despawned");
         assert_eq!(count::<Button>(&mut app), 0, "buttons despawned");
         assert_eq!(count::<Text>(&mut app), 0, "labels despawned");

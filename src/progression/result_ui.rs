@@ -48,12 +48,10 @@ pub struct GameOverScreen;
 /// What a result-screen button does when pressed.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResultAction {
-    /// Spend the payout (**La prăvălie** → [`GameState::Shop`]).
-    GoToShop,
-    /// Straight into the next duel (**Lupta următoare** →
-    /// [`GameState::Fight`]; the arena and combat respawn via their own
-    /// `OnEnter` systems).
-    NextFight,
+    /// The screen's single primary action (**Continuă** →
+    /// [`crate::core::GameState::Town`], #129): back to the hub, where the
+    /// next fight and the (now optional) shop both live.
+    Continue,
 }
 
 /// What a game-over-screen button does when pressed.
@@ -188,14 +186,11 @@ pub(super) fn spawn_result_screen(
                             ..default()
                         })
                         .with_children(|actions| {
-                            actions.spawn((
-                                wide_button("La prăvălie", &ui_font),
-                                ResultAction::GoToShop,
-                            ));
-                            actions.spawn((
-                                wide_button("Lupta următoare", &ui_font),
-                                ResultAction::NextFight,
-                            ));
+                            // #129: one dominant primary action per the
+                            // screen contract — the shop and the next fight
+                            // are both reached through the town hub now.
+                            actions
+                                .spawn((wide_button("Continuă", &ui_font), ResultAction::Continue));
                         });
                 });
         });
@@ -403,8 +398,7 @@ pub(super) fn handle_result_actions(
             continue;
         }
         intents.write(match action {
-            ResultAction::GoToShop => FlowIntent::GoToShop,
-            ResultAction::NextFight => FlowIntent::NextFight,
+            ResultAction::Continue => FlowIntent::GoToTown,
         });
     }
 }
@@ -416,9 +410,9 @@ pub(super) fn handle_result_actions(
 /// player fighter's pools top up by exactly the vitalitate max-delta,
 /// leftover points persist on [`Level`], the panel closes, and the new
 /// build is autosaved (see [`crate::save`]) with
-/// [`ResumeDestination::Fight`] -- this panel only ever shows on the
+/// [`ResumeDestination::Town`] -- this panel only ever shows on the
 /// [`crate::core::GameState::FightResult`] screen (never victory's), so its
-/// checkpoint shares the result/reward destination.
+/// checkpoint shares the result/reward destination (#129).
 // A Bevy system: each parameter is a distinct ECS handle the confirm branch
 // needs (draft, level, player, fighter pools, panel, autosave trigger).
 #[allow(clippy::too_many_arguments)]
@@ -463,7 +457,10 @@ pub(super) fn handle_allocation_actions(
                 for panel in &panels {
                     commands.entity(panel).despawn();
                 }
-                save_requests.write(SaveRequested(ResumeDestination::Fight));
+                // #129: the post-fight checkpoints resume into the town
+                // hub, same as the result/reward autosave this panel rides
+                // on.
+                save_requests.write(SaveRequested(ResumeDestination::Town));
             }
         }
     }
@@ -677,9 +674,13 @@ mod tests {
             "the shown total already includes the reward: {texts:?}"
         );
         assert!(
-            texts.contains(&"La prăvălie".to_string())
-                && texts.contains(&"Lupta următoare".to_string()),
-            "{texts:?}"
+            texts.contains(&"Continuă".to_string()),
+            "one dominant primary action back to the hub (#129): {texts:?}"
+        );
+        assert!(
+            !texts.contains(&"La prăvălie".to_string())
+                && !texts.contains(&"Lupta următoare".to_string()),
+            "the pre-#129 shop/next-fight shortcuts are gone: {texts:?}"
         );
     }
 
@@ -913,9 +914,9 @@ mod tests {
         set_state(&mut app, GameState::FightResult);
 
         press_allocate_button(&mut app, AllocateAction::Increase(AttributeKind::Putere));
-        press_result_button(&mut app, ResultAction::GoToShop);
+        press_result_button(&mut app, ResultAction::Continue);
 
-        assert_eq!(state(&app), GameState::Shop);
+        assert_eq!(state(&app), GameState::Town);
         assert!(
             app.world().get_resource::<LevelUpDraft>().is_none(),
             "the abandoned draft is dropped"
@@ -940,13 +941,13 @@ mod tests {
         assert_eq!(draft.attributes(), Attributes::default());
     }
 
-    /// #216: Enter on the focused **La prăvălie** button must drive the same
+    /// #216: Enter on the focused **Continuă** button must drive the same
     /// transition a click does (see
-    /// `la_pravalie_leads_to_the_shop_and_the_screen_despawns` for the click
-    /// version) -- `FocusNavigationPlugin::activate_focused_control` writes
-    /// the same `Interaction::Pressed` a click produces.
+    /// `continua_leads_to_the_town_hub_and_the_screen_despawns` for the
+    /// click version) -- `FocusNavigationPlugin::activate_focused_control`
+    /// writes the same `Interaction::Pressed` a click produces.
     #[test]
-    fn enter_on_the_focused_la_pravalie_button_leads_to_the_shop() {
+    fn enter_on_the_focused_continua_button_leads_to_the_town_hub() {
         let mut app = test_app();
         app.init_resource::<ButtonInput<KeyCode>>();
         app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
@@ -956,9 +957,9 @@ mod tests {
             .world_mut()
             .query_filtered::<(Entity, &ResultAction), With<Button>>()
             .iter(app.world())
-            .find(|&(_, &a)| a == ResultAction::GoToShop)
+            .find(|&(_, &a)| a == ResultAction::Continue)
             .map(|(entity, _)| entity)
-            .expect("La prăvălie button exists");
+            .expect("Continuă button exists");
         app.world_mut()
             .insert_resource(crate::ui_widgets::focus::InputFocus::from_entity(button));
         app.world_mut()
@@ -967,18 +968,19 @@ mod tests {
         app.update();
         app.update();
 
-        assert_eq!(state(&app), GameState::Shop);
+        assert_eq!(state(&app), GameState::Town);
     }
 
+    /// #129: the result screen's single primary action returns to the hub.
     #[test]
-    fn la_pravalie_leads_to_the_shop_and_the_screen_despawns() {
+    fn continua_leads_to_the_town_hub_and_the_screen_despawns() {
         let mut app = test_app();
         app.insert_resource(FightOutcome::from_defeat(CombatSide::Player, 1, false));
         set_state(&mut app, GameState::FightResult);
 
-        press_result_button(&mut app, ResultAction::GoToShop);
+        press_result_button(&mut app, ResultAction::Continue);
 
-        assert_eq!(state(&app), GameState::Shop);
+        assert_eq!(state(&app), GameState::Town);
         assert_eq!(count::<ResultScreen>(&mut app), 0, "root despawned");
         assert_eq!(count::<Button>(&mut app), 0, "buttons despawned");
         assert_eq!(count::<Text>(&mut app), 0, "labels despawned");
@@ -1067,8 +1069,14 @@ mod tests {
         assert_eq!(count::<Button>(&mut app), 0, "buttons despawned");
     }
 
+    /// #129: the loop now runs result → Continuă → Town → Luptă în arenă →
+    /// Fight; the fresh fight must still respawn both fighters at full
+    /// pools. The Town → Fight hop is driven by writing
+    /// [`FlowIntent::EnterArena`] directly — this harness has no
+    /// `TownPlugin`, and the hub's own button is covered by `crate::town`'s
+    /// tests.
     #[test]
-    fn lupta_urmatoare_starts_a_fresh_fight_at_full_pools() {
+    fn continuing_through_the_town_hub_starts_a_fresh_fight_at_full_pools() {
         let mut app = full_app();
         set_state(&mut app, GameState::Fight);
 
@@ -1092,7 +1100,14 @@ mod tests {
         app.update();
         assert_eq!(state(&app), GameState::FightResult);
 
-        press_result_button(&mut app, ResultAction::NextFight);
+        press_result_button(&mut app, ResultAction::Continue);
+        assert_eq!(state(&app), GameState::Town);
+
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<FlowIntent>>()
+            .write(FlowIntent::EnterArena);
+        app.update();
+        app.update();
 
         assert_eq!(state(&app), GameState::Fight);
         assert!(

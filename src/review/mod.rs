@@ -125,6 +125,7 @@ use crate::roster::{CampaignSeed, PreparedEncounter, SeededOpponent};
 use crate::settings::AccessibilityPreferences;
 use crate::shop::ShopAction;
 use crate::theme::Palette;
+use crate::town::TownAction;
 use crate::ui_widgets::focus::Focusable;
 
 /// `localStorage` key the harness writes a pending [`ReviewCommand`] to.
@@ -1496,6 +1497,9 @@ fn parse_preset(name: &str) -> Option<HeroPreset> {
 enum ReviewButton {
     Menu(MenuAction),
     Creation(CreationAction),
+    /// The town hub's actions (#129): the arena/shop/character/back
+    /// navigation plus the leave-confirm overlay's own pair.
+    Town(TownAction),
     Result(ResultAction),
     GameOver(GameOverAction),
     Victory(VictoryAction),
@@ -1532,12 +1536,22 @@ fn parse_button(name: &str) -> Option<ReviewButton> {
         "ClearCorruptSave" => Some(ReviewButton::Menu(MenuAction::ClearCorruptSave)),
         "ConfirmHero" => Some(ReviewButton::Creation(CreationAction::Confirm)),
         "CreationBack" => Some(ReviewButton::Creation(CreationAction::Back)),
-        "GoToShop" => Some(ReviewButton::Result(ResultAction::GoToShop)),
-        "NextFight" => Some(ReviewButton::Result(ResultAction::NextFight)),
+        // #129: the town hub's actions.
+        "TownArena" => Some(ReviewButton::Town(TownAction::EnterArena)),
+        "TownShop" => Some(ReviewButton::Town(TownAction::GoToShop)),
+        "TownCharacter" => Some(ReviewButton::Town(TownAction::ViewCharacter)),
+        "TownCharacterBack" => Some(ReviewButton::Town(TownAction::CloseCharacter)),
+        "TownBack" => Some(ReviewButton::Town(TownAction::Back)),
+        "TownBackConfirm" => Some(ReviewButton::Town(TownAction::ConfirmLeave)),
+        "TownBackCancel" => Some(ReviewButton::Town(TownAction::CancelLeave)),
+        // #129: the result screen's single Continuă (→ Town) replaced the
+        // old GoToShop/NextFight pair, and the shop's back action returns to
+        // the town hub instead of the arena.
+        "ResultContinue" => Some(ReviewButton::Result(ResultAction::Continue)),
         "GameOverBackToMenu" => Some(ReviewButton::GameOver(GameOverAction::BackToMenu)),
         "VictoryNextLap" => Some(ReviewButton::Victory(VictoryAction::NextLap)),
         "VictoryBackToMenu" => Some(ReviewButton::Victory(VictoryAction::BackToMenu)),
-        "BackToArena" => Some(ReviewButton::Shop(ShopAction::BackToArena)),
+        "ShopBackToTown" => Some(ReviewButton::Shop(ShopAction::BackToTown)),
         // #217: the paused-fight overlay's actions -- see `ReviewButton::Pause`.
         "PauseResume" => Some(ReviewButton::Pause(PauseAction::Resume)),
         "PauseSettings" => Some(ReviewButton::Pause(PauseAction::Settings)),
@@ -1555,6 +1569,7 @@ type PressableButton = (
     Has<DisabledButton>,
     Option<&'static MenuAction>,
     Option<&'static CreationAction>,
+    Option<&'static TownAction>,
     Option<&'static ResultAction>,
     Option<&'static GameOverAction>,
     Option<&'static VictoryAction>,
@@ -1653,12 +1668,23 @@ fn press_button(
     target: ReviewButton,
     buttons: &mut Query<PressableButton, (With<Button>, Without<CategoryButton>)>,
 ) {
-    for (mut interaction, disabled, menu, creation, result, game_over, victory, shop, pause) in
-        buttons.iter_mut()
+    for (
+        mut interaction,
+        disabled,
+        menu,
+        creation,
+        town,
+        result,
+        game_over,
+        victory,
+        shop,
+        pause,
+    ) in buttons.iter_mut()
     {
         let matches = match target {
             ReviewButton::Menu(wanted) => menu == Some(&wanted),
             ReviewButton::Creation(wanted) => creation == Some(&wanted),
+            ReviewButton::Town(wanted) => town == Some(&wanted),
             ReviewButton::Result(wanted) => result == Some(&wanted),
             ReviewButton::GameOver(wanted) => game_over == Some(&wanted),
             ReviewButton::Victory(wanted) => victory == Some(&wanted),
@@ -2407,8 +2433,31 @@ mod tests {
                 ReviewButton::Creation(CreationAction::Confirm),
             ),
             ("CreationBack", ReviewButton::Creation(CreationAction::Back)),
-            ("GoToShop", ReviewButton::Result(ResultAction::GoToShop)),
-            ("NextFight", ReviewButton::Result(ResultAction::NextFight)),
+            // #129: the town hub's actions.
+            ("TownArena", ReviewButton::Town(TownAction::EnterArena)),
+            ("TownShop", ReviewButton::Town(TownAction::GoToShop)),
+            (
+                "TownCharacter",
+                ReviewButton::Town(TownAction::ViewCharacter),
+            ),
+            (
+                "TownCharacterBack",
+                ReviewButton::Town(TownAction::CloseCharacter),
+            ),
+            ("TownBack", ReviewButton::Town(TownAction::Back)),
+            (
+                "TownBackConfirm",
+                ReviewButton::Town(TownAction::ConfirmLeave),
+            ),
+            (
+                "TownBackCancel",
+                ReviewButton::Town(TownAction::CancelLeave),
+            ),
+            // #129: the result screen's single Continuă (→ Town).
+            (
+                "ResultContinue",
+                ReviewButton::Result(ResultAction::Continue),
+            ),
             (
                 "GameOverBackToMenu",
                 ReviewButton::GameOver(GameOverAction::BackToMenu),
@@ -2421,7 +2470,7 @@ mod tests {
                 "VictoryBackToMenu",
                 ReviewButton::Victory(VictoryAction::BackToMenu),
             ),
-            ("BackToArena", ReviewButton::Shop(ShopAction::BackToArena)),
+            ("ShopBackToTown", ReviewButton::Shop(ShopAction::BackToTown)),
             // #217: the paused-fight overlay's actions.
             ("PauseResume", ReviewButton::Pause(PauseAction::Resume)),
             ("PauseSettings", ReviewButton::Pause(PauseAction::Settings)),
@@ -2464,6 +2513,12 @@ mod tests {
             "BuyItem",
             "IncreasePutere",
             "NotAButton",
+            // #129 removed these routes (the town hub replaced the direct
+            // result→shop / result→fight / shop→fight shortcuts); their old
+            // names must no longer resolve.
+            "GoToShop",
+            "NextFight",
+            "BackToArena",
         ] {
             assert_eq!(parse_button(name), None, "{name} must be rejected");
         }

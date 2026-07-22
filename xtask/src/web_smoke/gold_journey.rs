@@ -1,8 +1,8 @@
 //! The `gold-journey` scenario (#187, a child of #144): drives the full
-//! menu -> creation -> first fight -> fight result -> shop loop
-//! deterministically (a "gold run": the player wins the first duel and
-//! reaches the shop) and captures a checkpoint at each screen, at both
-//! desktop and phone viewports (10 captures total). Extends #168's
+//! menu -> creation -> town -> first fight -> fight result -> town -> shop
+//! loop deterministically (a "gold run": the player wins the first duel and
+//! reaches the shop through the #129 town hub) and captures a checkpoint at
+//! each screen. Extends #168's
 //! `cold-menu` harness per its documented extension pattern (see
 //! `web_smoke::mod`'s module docs): a new module here plus one match arm in
 //! `web_smoke::run_scenario`; the shared `browser`/`server`/`artifacts`/
@@ -109,10 +109,10 @@
 //!
 //! ## Checkpoints and the DPR matrix (#198)
 //!
-//! Five semantic checkpoints -- `menu`, `creation`, `fight`, `fight-result`,
-//! `shop` -- each captured at both `desktop` (1280x800) and `phone`
-//! (390x844), at device pixel ratios 1, 2, and 3 ([`VIEWPORTS`]): 6
-//! viewport entries x 5 checkpoints = 30 captures. DPR is applied per-tab
+//! Six semantic checkpoints -- `menu`, `creation`, `town` (#129), `fight`,
+//! `fight-result`, `shop` -- each captured at both `desktop` (1280x800) and
+//! `phone` (390x844), at device pixel ratios 1, 2, and 3 ([`VIEWPORTS`]): 6
+//! viewport entries x 6 checkpoints = 36 captures. DPR is applied per-tab
 //! over CDP (`Emulation.setDeviceMetricsOverride`'s `device_scale_factor`,
 //! see `browser::launch`'s doc comment) -- the CSS-pixel viewport
 //! (`window.innerWidth/innerHeight`) stays exactly `1280x800`/`390x844` at
@@ -146,9 +146,9 @@
 //!
 //! Each viewport gets its own fresh Chrome profile (a clean, empty
 //! `localStorage`/cache -- the "clean profile" the issue asks for) and its
-//! own single, continuous browser session that walks all five checkpoints
+//! own single, continuous browser session that walks all six checkpoints
 //! in order, since the whole point is one player's journey through the
-//! screens, not five independent cold loads.
+//! screens, not six independent cold loads.
 //!
 //! ## Desktop-only default scope (#284)
 //!
@@ -156,10 +156,10 @@
 //! of which comes from walking the phone and DPR-2/3 legs of the matrix
 //! above. For current development, [`active_viewports`] defaults to a
 //! single entry -- [`ACTIVE_VIEWPORTS`], `normal-desktop` at 1440x900/DPR 1 -- so
-//! an ordinary `--scenario gold-journey` run walks exactly the five
-//! [`CHECKPOINTS`] screens (menu, creation, fight, fight-result, shop) once,
-//! at the one viewport current development cares about (5 checkpoints, not
-//! 30). Nothing about the matrix itself is deleted: [`FULL_VIEWPORTS`] is
+//! an ordinary `--scenario gold-journey` run walks exactly the six
+//! [`CHECKPOINTS`] screens (menu, creation, town, fight, fight-result, shop)
+//! once, at the one viewport current development cares about (6 checkpoints,
+//! not 36). Nothing about the matrix itself is deleted: [`FULL_VIEWPORTS`] is
 //! the exact, unchanged six-entry table documented above, still reachable
 //! by setting `XTASK_WEB_SMOKE_GOLD_JOURNEY_FULL_MATRIX=1` (or `true`,
 //! case-insensitive) in the environment before invoking the scenario --
@@ -236,7 +236,7 @@ struct ViewportSpec {
 
 /// The full #198 matrix: both base viewports (desktop 1280x800, phone
 /// 390x844) at device pixel ratios 1, 2, and 3 -- six viewport entries, each
-/// walking all five [`CHECKPOINTS`] (30 captures total).
+/// walking all six [`CHECKPOINTS`] (36 captures total).
 ///
 /// ## Checkpoint naming (#198)
 ///
@@ -296,7 +296,7 @@ const FULL_VIEWPORTS: &[ViewportSpec] = &[
 ];
 
 /// The representative normal desktop browser viewport (1440x900 @ DPR 1),
-/// covering the five [`CHECKPOINTS`] screens once in the active feedback loop.
+/// covering the six [`CHECKPOINTS`] screens once in the active feedback loop.
 /// Its distinct name keeps these baselines separate from [`FULL_VIEWPORTS`]'s
 /// preserved 1280x800 `desktop` row.
 /// See "Desktop-only default scope (#284)" in the module docs above.
@@ -353,6 +353,12 @@ const CHECKPOINTS: &[CheckpointSpec] = &[
     CheckpointSpec {
         name: "creation",
         expected_screen: "CharacterCreation",
+        extra_required_assets: &[],
+    },
+    // #129: the town hub sits between creation and every fight.
+    CheckpointSpec {
+        name: "town",
+        expected_screen: "Town",
         extra_required_assets: &[],
     },
     CheckpointSpec {
@@ -542,11 +548,11 @@ struct Readiness {
     last_screen: Option<String>,
 }
 
-/// Runs one full viewport's journey through all five checkpoints in a
+/// Runs one full viewport's journey through all six checkpoints in a
 /// single, continuous browser session (one fresh Chrome profile -- the
 /// "clean profile" the issue asks for -- shared across every checkpoint of
 /// this viewport, since it is one player's journey through the screens, not
-/// five independent cold loads).
+/// six independent cold loads).
 fn run_viewport_journey(
     viewport: &ViewportSpec,
     server: &StaticServer,
@@ -636,15 +642,35 @@ fn run_viewport_journey(
             )
         })?;
 
-    // Press the real "Începe lupta" button: its production handler stores
-    // the PlayerCharacter + starter loadout, requests the autosave, then
-    // emits ConfirmHero -- a raw flow intent would skip all of that and the
-    // arena would never spawn (`arena::mod` warns and bails without a
-    // PlayerCharacter).
+    // Press the real "Începe" button: its production handler stores the
+    // PlayerCharacter + starter loadout, requests the autosave, then emits
+    // ConfirmHero -- a raw flow intent would skip all of that and the arena
+    // would never spawn (`arena::mod` warns and bails without a
+    // PlayerCharacter). Since #129 this lands on the town hub, the new
+    // between-fights home screen.
     step(viewport, || {
         send_command(
             &checkpoint,
             serde_json::json!({"cmd": "pressButton", "button": "ConfirmHero"}),
+        )
+    })?;
+    // town: capture the hub with its three destination cards.
+    captured_checkpoint(
+        &checkpoint,
+        viewport,
+        &CHECKPOINTS[2],
+        server,
+        update_baselines,
+        strict_visual,
+        missing_baseline,
+    )?;
+
+    // Press the real "Luptă în arenă" button -- the hub's dominant primary
+    // action -- to start the seeded first fight.
+    step(viewport, || {
+        send_command(
+            &checkpoint,
+            serde_json::json!({"cmd": "pressButton", "button": "TownArena"}),
         )
     })?;
     // fight: capture the fresh fight start before autoplay drives it to a
@@ -653,7 +679,7 @@ fn run_viewport_journey(
     captured_checkpoint(
         &checkpoint,
         viewport,
-        &CHECKPOINTS[2],
+        &CHECKPOINTS[3],
         server,
         update_baselines,
         strict_visual,
@@ -712,24 +738,33 @@ fn run_viewport_journey(
     captured_checkpoint(
         &checkpoint,
         viewport,
-        &CHECKPOINTS[3],
+        &CHECKPOINTS[4],
         server,
         update_baselines,
         strict_visual,
         missing_baseline,
     )?;
 
-    // Press the real "La prăvălie" button on the result screen.
+    // Press the result screen's single "Continuă" (#129): back to the hub,
+    // then reach the shop through its "Prăvălie" card. The hub was already
+    // captured on the first visit, so this leg only waits for the screen.
     step(viewport, || {
         send_command(
             &checkpoint,
-            serde_json::json!({"cmd": "pressButton", "button": "GoToShop"}),
+            serde_json::json!({"cmd": "pressButton", "button": "ResultContinue"}),
+        )
+    })?;
+    wait_for_checkpoint(&checkpoint, &CHECKPOINTS[2], viewport)?;
+    step(viewport, || {
+        send_command(
+            &checkpoint,
+            serde_json::json!({"cmd": "pressButton", "button": "TownShop"}),
         )
     })?;
     captured_checkpoint(
         &checkpoint,
         viewport,
-        &CHECKPOINTS[4],
+        &CHECKPOINTS[5],
         server,
         update_baselines,
         strict_visual,
@@ -1356,13 +1391,14 @@ mod tests {
 
     /// Pins acceptance criterion "the current-screen gold journey remains
     /// covered": narrowing the viewport matrix must never touch which
-    /// screens this scenario visits.
+    /// screens this scenario visits (#129 added the town hub between
+    /// creation and the fight).
     #[test]
-    fn all_five_current_screens_remain_checkpoints() {
+    fn all_six_current_screens_remain_checkpoints() {
         let names: Vec<&str> = CHECKPOINTS.iter().map(|c| c.name).collect();
         assert_eq!(
             names,
-            vec!["menu", "creation", "fight", "fight-result", "shop"]
+            vec!["menu", "creation", "town", "fight", "fight-result", "shop"]
         );
     }
 
