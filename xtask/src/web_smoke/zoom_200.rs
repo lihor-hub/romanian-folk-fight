@@ -243,6 +243,17 @@ fn press_key_and_wait_for_change(
 }
 
 fn press_arrow_until_label(checkpoint: &Checkpoint, label: &str) -> Result<(), String> {
+    // Focus can already sit on the requested control (see
+    // `keyboard_accessibility::press_arrow_until_label`'s #129 note) -- an
+    // ArrowRight there can wrap onto the same entity, which
+    // `press_key_and_wait_for_change` would never observe as a change.
+    if read_accessibility(checkpoint)?
+        .as_ref()
+        .and_then(|s| s.focused_label.as_deref())
+        == Some(label)
+    {
+        return Ok(());
+    }
     for _ in 0..64 {
         let snapshot = press_key_and_wait_for_change(checkpoint, "ArrowRight")?;
         if snapshot.focused_label.as_deref() == Some(label) {
@@ -357,7 +368,24 @@ fn assert_every_control_visible_when_focused(
     let height = ZOOMED_HEIGHT as f32;
     let mut start_entity: Option<String> = None;
     for press in 0..MAX_LAP_PRESSES {
-        let snapshot = press_key_and_wait_for_change(checkpoint, "ArrowRight")?;
+        let snapshot = match press_key_and_wait_for_change(checkpoint, "ArrowRight") {
+            Ok(snapshot) => snapshot,
+            // #129: a screen with exactly one focusable control (the result
+            // screen's single Continuă) wraps ArrowRight onto the same
+            // entity, so the snapshot legitimately never changes. Accept
+            // that as the lap's wrap if focus still sits on the starting
+            // control (whose visibility stop 0 already asserted); anything
+            // else is a genuine navigation failure.
+            Err(error) => {
+                let current = read_accessibility(checkpoint)?;
+                if start_entity.is_some()
+                    && current.as_ref().and_then(|s| s.focused_entity.clone()) == start_entity
+                {
+                    return Ok(());
+                }
+                return Err(error);
+            }
+        };
         let entity = snapshot
             .focused_entity
             .clone()

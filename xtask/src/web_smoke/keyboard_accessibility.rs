@@ -400,7 +400,25 @@ fn walk_full_lap(
         .ok_or_else(|| "the first ArrowRight press left nothing focused".to_string())?;
     let mut lap = vec![start];
     for _ in 0..max_presses {
-        let snapshot = press_key_and_wait_for_change(checkpoint, "ArrowRight")?;
+        let snapshot = match press_key_and_wait_for_change(checkpoint, "ArrowRight") {
+            Ok(snapshot) => snapshot,
+            // #129: a screen with exactly one focusable control (the result
+            // screen's single Continuă) wraps ArrowRight onto the same
+            // entity, which `arrow_navigation_settled` deliberately never
+            // treats as a settled *move* -- so the press "never settles"
+            // even though the lap is in fact complete. Accept that outcome
+            // as the wrap if focus still sits on the lap's start; anything
+            // else is a genuine navigation failure.
+            Err(error) => {
+                let current = read_accessibility(checkpoint)?;
+                if current.as_ref().and_then(|s| s.focused_entity.as_deref())
+                    == Some(start_entity.as_str())
+                {
+                    return Ok(lap);
+                }
+                return Err(error);
+            }
+        };
         if snapshot.focused_entity.as_deref() == Some(start_entity.as_str()) {
             return Ok(lap);
         }
@@ -592,6 +610,17 @@ fn wait_for_stable_frames(checkpoint: &Checkpoint) -> Result<(), String> {
 /// label matches `label` exactly, so callers never have to hard-code a
 /// screen's exact tab-stop index.
 fn press_arrow_until_label(checkpoint: &Checkpoint, label: &str) -> Result<(), String> {
+    // #129: focus can already be sitting on the requested control (e.g. the
+    // result screen's single Continuă right after a lap walk) -- an
+    // ArrowRight there would wrap onto the same entity, which
+    // `press_key_and_wait_for_change` deliberately never settles on.
+    if read_accessibility(checkpoint)?
+        .as_ref()
+        .and_then(|s| s.focused_label.as_deref())
+        == Some(label)
+    {
+        return Ok(());
+    }
     for _ in 0..64 {
         let snapshot = press_key_and_wait_for_change(checkpoint, "ArrowRight")?;
         if snapshot.focused_label.as_deref() == Some(label) {
