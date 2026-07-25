@@ -34,7 +34,8 @@ use crate::theme::PANEL_BORDER_INSET;
 
 use super::action_palette;
 use super::actions::ExtraDescriptors;
-use super::engine::{CombatEvent, DuelDistance};
+use super::engine::CombatEvent;
+use super::position::{MAX_SEPARATION, MELEE_REACH};
 use super::systems::{CombatLogEvent, CombatSide};
 
 /// How many log lines the combat log resource keeps (scrollback for the
@@ -159,14 +160,23 @@ pub fn bar_percent(current: i32, max: i32) -> f32 {
     (100.0 * current as f32 / max as f32).clamp(0.0, 100.0)
 }
 
-/// Romanian name of one [`DuelDistance`] band — the shared distance
-/// vocabulary for every readout of the engine's spacing (the arena's ground
-/// distance chip today; any future HUD text reuses the same words).
-pub fn distance_label(distance: DuelDistance) -> &'static str {
-    match distance.band() {
-        band if band == DuelDistance::CLOSE.band() => "Aproape",
-        band if band == DuelDistance::NEAR.band() => "Aproximativ",
-        _ => "Departe",
+/// Upper separation bound of the "Aproximativ" label: halfway between the
+/// old NEAR and FAR bands' world-unit separations. A pure presentation
+/// threshold — no combat rule reads it.
+const APPROXIMATE_LABEL_MAX: f32 = MAX_SEPARATION - super::position::STEP_DISTANCE / 2.0;
+
+/// Coarse Romanian name for a world-unit separation — the shared distance
+/// vocabulary for every readout of the duel's spacing (the arena's ground
+/// distance chip today; any future HUD text reuses the same words). Purely
+/// a projection of `combat::position`'s continuous separation (#159): the
+/// player reads words, the rules read world units.
+pub fn distance_label(separation: f32) -> &'static str {
+    if separation <= MELEE_REACH {
+        "Aproape"
+    } else if separation < APPROXIMATE_LABEL_MAX {
+        "Aproximativ"
+    } else {
+        "Departe"
     }
 }
 
@@ -186,7 +196,7 @@ pub fn log_line(actor: &str, opponent: &str, event: CombatEvent) -> String {
         CombatEvent::Moved { from, to } if from == to => {
             format!("{actor} își ține poziția.")
         }
-        CombatEvent::Moved { from, to } if to.band() < from.band() => {
+        CombatEvent::Moved { from, to } if to.separation() < from.separation() => {
             format!("{actor} înaintează în arenă.")
         }
         CombatEvent::Moved { .. } => format!("{actor} se retrage un pas."),
@@ -765,9 +775,8 @@ pub(super) fn apply_responsive_hud_layout(
 #[cfg(test)]
 mod tests {
     use super::super::action_palette::{ActionButton, ActionCostOrReason};
-    use super::super::engine::{
-        CombatAction, DuelDistance, HEAVY_STRIKE_BASE_HIT, QUICK_STRIKE_BASE_HIT,
-    };
+    use super::super::engine::{CombatAction, HEAVY_STRIKE_BASE_HIT, QUICK_STRIKE_BASE_HIT};
+    use super::super::position::{CombatSide, DuelPositions, MIN_SEPARATION, STEP_DISTANCE};
     use super::super::systems::{CombatPlugin, CombatRng, PlayerActionEvent};
     use super::*;
     use crate::arena::ArenaPlugin;
@@ -796,11 +805,27 @@ mod tests {
         magie: 0,
     };
 
+    /// Positions after one player step back from the opening placement.
+    fn retreated_positions() -> DuelPositions {
+        let mut positions = DuelPositions::starting();
+        positions.retreat(CombatSide::Player, STEP_DISTANCE);
+        positions
+    }
+
     #[test]
-    fn every_distance_band_has_its_romanian_label() {
-        assert_eq!(distance_label(DuelDistance::CLOSE), "Aproape");
-        assert_eq!(distance_label(DuelDistance::NEAR), "Aproximativ");
-        assert_eq!(distance_label(DuelDistance::FAR), "Departe");
+    fn every_separation_range_has_its_romanian_label() {
+        // The three separations movement can actually reach today (the old
+        // bands' world-unit equivalents) each carry their historical word.
+        assert_eq!(distance_label(MIN_SEPARATION), "Aproape");
+        assert_eq!(
+            distance_label(MIN_SEPARATION + STEP_DISTANCE),
+            "Aproximativ"
+        );
+        assert_eq!(distance_label(MAX_SEPARATION), "Departe");
+        // And the label is total over the continuum, not just those points.
+        assert_eq!(distance_label(0.0), "Aproape");
+        assert_eq!(distance_label(MELEE_REACH + 1.0), "Aproximativ");
+        assert_eq!(distance_label(MAX_SEPARATION + 100.0), "Departe");
     }
 
     /// Headless app on the fight screen with a deterministic duel RNG whose
@@ -955,15 +980,15 @@ mod tests {
             ),
             (
                 CombatEvent::Moved {
-                    from: DuelDistance::FAR,
-                    to: DuelDistance::NEAR,
+                    from: retreated_positions(),
+                    to: DuelPositions::starting(),
                 },
                 "Făt-Frumos înaintează în arenă.",
             ),
             (
                 CombatEvent::Moved {
-                    from: DuelDistance::NEAR,
-                    to: DuelDistance::FAR,
+                    from: DuelPositions::starting(),
+                    to: retreated_positions(),
                 },
                 "Făt-Frumos se retrage un pas.",
             ),

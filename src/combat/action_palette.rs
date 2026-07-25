@@ -66,6 +66,7 @@ use super::actions::{
 };
 use super::engine::CombatAction;
 use super::hud::{ActionBarRoot, HudScreen};
+use super::position::DuelPositions;
 use super::systems::{CombatPresentation, CombatTurn, PlayerActionEvent};
 
 #[cfg(test)]
@@ -940,6 +941,7 @@ type EnemyStats<'w, 's> =
 /// derive "what can the player do right now" differently.
 fn live_descriptors(
     turn: Option<&CombatTurn>,
+    separation: f32,
     presentation_busy: bool,
     player: &PlayerStats,
     enemy: &EnemyStats,
@@ -954,6 +956,7 @@ fn live_descriptors(
         turn: turn
             .copied()
             .unwrap_or_else(|| DescriptorContext::spawn_placeholder().turn),
+        separation,
         player_stamina,
         player_attributes,
         enemy_attributes,
@@ -989,6 +992,7 @@ fn live_descriptors(
 pub(super) fn update_action_buttons(
     mut commands: Commands,
     turn: Option<Res<CombatTurn>>,
+    positions: Res<DuelPositions>,
     presentation: Option<Res<CombatPresentation>>,
     extra: Res<ExtraDescriptors>,
     player: PlayerStats,
@@ -1003,7 +1007,14 @@ pub(super) fn update_action_buttons(
     let presentation_busy = presentation
         .as_deref()
         .is_some_and(CombatPresentation::is_busy);
-    let descriptors = live_descriptors(turn.as_deref(), presentation_busy, &player, &enemy, &extra);
+    let descriptors = live_descriptors(
+        turn.as_deref(),
+        positions.separation(),
+        presentation_busy,
+        &player,
+        &enemy,
+        &extra,
+    );
 
     for (entity, button, was_disabled, is_banner_row, mut background, children) in &mut buttons {
         let Some(descriptor) = descriptors.iter().find(|d| d.id == button.id) else {
@@ -1118,6 +1129,7 @@ pub(super) fn pulse_distance_chip_on_reach_hover(
     time: Res<Time>,
     accessibility: Option<Res<AccessibilityPreferences>>,
     turn: Option<Res<CombatTurn>>,
+    positions: Res<DuelPositions>,
     presentation: Option<Res<CombatPresentation>>,
     extra: Res<ExtraDescriptors>,
     player: PlayerStats,
@@ -1134,9 +1146,16 @@ pub(super) fn pulse_distance_chip_on_reach_hover(
         let presentation_busy = presentation
             .as_deref()
             .is_some_and(CombatPresentation::is_busy);
-        live_descriptors(turn.as_deref(), presentation_busy, &player, &enemy, &extra)
-            .iter()
-            .any(|d| hovered.contains(&d.id) && d.hit_chance.is_some() && !d.position_legal)
+        live_descriptors(
+            turn.as_deref(),
+            positions.separation(),
+            presentation_busy,
+            &player,
+            &enemy,
+            &extra,
+        )
+        .iter()
+        .any(|d| hovered.contains(&d.id) && d.hit_chance.is_some() && !d.position_legal)
     };
 
     let (alpha, scale) = if linked {
@@ -1191,6 +1210,7 @@ pub(super) fn sync_phone_open_category(
     ui_font: Res<UiFont>,
     icons: Res<ActionPictograms>,
     turn: Option<Res<CombatTurn>>,
+    positions: Res<DuelPositions>,
     presentation: Option<Res<CombatPresentation>>,
     extra: Res<ExtraDescriptors>,
     player: PlayerStats,
@@ -1229,7 +1249,14 @@ pub(super) fn sync_phone_open_category(
     let presentation_busy = presentation
         .as_deref()
         .is_some_and(CombatPresentation::is_busy);
-    let descriptors = live_descriptors(turn.as_deref(), presentation_busy, &player, &enemy, &extra);
+    let descriptors = live_descriptors(
+        turn.as_deref(),
+        positions.separation(),
+        presentation_busy,
+        &player,
+        &enemy,
+        &extra,
+    );
     let members: Vec<ActionDescriptor> = descriptors
         .into_iter()
         .filter(|d| d.category == open_category)
@@ -1693,6 +1720,22 @@ mod tests {
         assert_eq!(find_cost_or_reason_text(&mut app, step_back), "<- o bandă");
     }
 
+    /// Re-places the duel at the old FAR band's world-unit equivalent (out
+    /// of melee reach) or back at the starting toe-to-toe placement.
+    fn place_out_of_reach(app: &mut App) {
+        let mut positions = DuelPositions::starting();
+        positions.retreat(
+            crate::combat::CombatSide::Player,
+            crate::combat::position::LEAP_DISTANCE,
+        );
+        assert!(!positions.in_melee_reach());
+        *app.world_mut().resource_mut::<DuelPositions>() = positions;
+    }
+
+    fn place_in_reach(app: &mut App) {
+        *app.world_mut().resource_mut::<DuelPositions>() = DuelPositions::starting();
+    }
+
     /// Finds the [`ReachDistanceMark`] child of `button`.
     fn find_reach_mark(app: &mut App, button: Entity) -> Entity {
         let children = app
@@ -1709,7 +1752,7 @@ mod tests {
     #[test]
     fn reach_disabled_strikes_show_the_distance_mark_and_reason() {
         let mut app = test_app();
-        app.world_mut().resource_mut::<CombatTurn>().distance = crate::combat::DuelDistance::FAR;
+        place_out_of_reach(&mut app);
         app.update();
 
         let quick = find_button(&mut app, "quick-strike");
@@ -1733,7 +1776,7 @@ mod tests {
         );
 
         // Back in reach, the mark hides again.
-        app.world_mut().resource_mut::<CombatTurn>().distance = crate::combat::DuelDistance::CLOSE;
+        place_in_reach(&mut app);
         app.update();
         assert_eq!(
             app.world().get::<Visibility>(mark),
@@ -1755,7 +1798,7 @@ mod tests {
     #[test]
     fn hovering_a_reach_disabled_strike_pulses_the_ground_distance_chip() {
         let mut app = test_app();
-        app.world_mut().resource_mut::<CombatTurn>().distance = crate::combat::DuelDistance::FAR;
+        place_out_of_reach(&mut app);
         app.update();
         assert_eq!(
             chip_state(&mut app),
@@ -1788,7 +1831,7 @@ mod tests {
 
         // Back in melee reach the strike is position-legal again: hovering
         // it must not pulse anything.
-        app.world_mut().resource_mut::<CombatTurn>().distance = crate::combat::DuelDistance::CLOSE;
+        place_in_reach(&mut app);
         app.world_mut()
             .entity_mut(quick)
             .insert(Interaction::Hovered);

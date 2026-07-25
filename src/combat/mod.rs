@@ -9,14 +9,16 @@ pub mod ai;
 pub mod engine;
 pub mod hud;
 pub mod pause;
+pub mod position;
 pub mod systems;
 
 pub use actions::{
     ActionCategory, ActionCost, ActionDescriptor, ActionId, DescriptorContext, ExtraDescriptors,
     generate_action_descriptors,
 };
-pub use ai::{AiProfile, choose_action, choose_action_at_distance};
-pub use engine::{CombatAction, CombatEvent, DuelDistance, FighterState};
+pub use ai::{AiProfile, choose_action, choose_action_at_separation};
+pub use engine::{CombatAction, CombatEvent, FighterState};
 pub use hud::CombatLog;
 pub use pause::PauseState;
-pub use systems::{CombatLogEvent, CombatPlugin, CombatRng, CombatSide, CombatTurn};
+pub use position::{ArenaBounds, CombatSide, DuelPositions};
+pub use systems::{CombatLogEvent, CombatPlugin, CombatRng, CombatTurn};

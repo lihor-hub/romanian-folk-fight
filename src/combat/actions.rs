@@ -8,7 +8,7 @@
 //! builds one descriptor per action, deriving every state-dependent field —
 //! legality, cost, chance, the disabled reason — by calling into the
 //! existing engine/HUD rules ([`CombatAction::stamina_cost`],
-//! [`DuelDistance::in_melee_reach`]/[`DuelDistance::band`],
+//! [`in_melee_reach`] over the derived world-unit separation (#159),
 //! [`stats::hit_percent`], [`action_disabled_reason`]) rather than forking
 //! them. [`action_enabled`] itself is now defined *in terms of*
 //! [`action_disabled_reason`] so there is exactly one source of truth for
@@ -31,10 +31,11 @@
 use crate::character::{Attributes, stats};
 
 use super::engine::{
-    CombatAction, DuelDistance, HEAVY_STRIKE_BASE_HIT, NORMAL_STRIKE_BASE_HIT,
-    QUICK_STRIKE_BASE_HIT, REST_RESTORE,
+    CombatAction, HEAVY_STRIKE_BASE_HIT, NORMAL_STRIKE_BASE_HIT, QUICK_STRIKE_BASE_HIT,
+    REST_RESTORE,
 };
-use super::systems::{CombatSide, CombatTurn};
+use super::position::{CombatSide, MAX_SEPARATION, MIN_SEPARATION, in_melee_reach};
+use super::systems::CombatTurn;
 
 /// Stable, kebab-case identifier for one action descriptor — what
 /// registration/lookup keys off of (not the `CombatAction` enum directly, so
@@ -183,6 +184,10 @@ pub const ALL_ACTIONS: [CombatAction; 8] = [
 #[derive(Debug, Clone, Copy)]
 pub struct DescriptorContext {
     pub turn: CombatTurn,
+    /// Derived world-unit separation between the two fighters — the
+    /// projection of `combat::position::DuelPositions` every reach/movement
+    /// legality check reads (#159); never a stored band.
+    pub separation: f32,
     pub player_stamina: i32,
     pub player_attributes: Attributes,
     pub enemy_attributes: Attributes,
@@ -212,8 +217,8 @@ impl DescriptorContext {
                 over: false,
                 player_blocking: false,
                 enemy_blocking: false,
-                distance: DuelDistance::starting(),
             },
+            separation: MIN_SEPARATION,
             player_stamina: i32::MAX,
             player_attributes: Attributes::default(),
             enemy_attributes: Attributes::default(),
@@ -294,20 +299,19 @@ pub fn action_cost(action: CombatAction) -> ActionCost {
     }
 }
 
-/// Whether `action` is legal at `distance`, ignoring stamina/turn-order —
-/// reads [`DuelDistance::in_melee_reach`]/[`DuelDistance::band`] directly,
-/// the same primitives `combat::engine::resolve_action_at_distance` itself
-/// gates on, so this can never drift from the resolver's own reach rules.
-fn position_legal(action: CombatAction, distance: DuelDistance) -> bool {
+/// Whether `action` is legal at the current world-unit `separation`,
+/// ignoring stamina/turn-order — reads
+/// [`in_melee_reach`]/[`MIN_SEPARATION`]/[`MAX_SEPARATION`] directly, the
+/// same primitives `combat::engine::resolve_action_positioned` itself gates
+/// and clamps on, so this can never drift from the resolver's own rules.
+fn position_legal(action: CombatAction, separation: f32) -> bool {
     match action {
         CombatAction::QuickStrike | CombatAction::NormalStrike | CombatAction::HeavyStrike => {
-            distance.in_melee_reach()
+            in_melee_reach(separation)
         }
         CombatAction::Block | CombatAction::Rest => true,
-        CombatAction::StepForward | CombatAction::LeapForward => {
-            distance.band() > DuelDistance::CLOSE.band()
-        }
-        CombatAction::StepBack => distance.band() < DuelDistance::FAR.band(),
+        CombatAction::StepForward | CombatAction::LeapForward => separation > MIN_SEPARATION,
+        CombatAction::StepBack => separation < MAX_SEPARATION,
     }
 }
 
@@ -459,6 +463,7 @@ fn hit_chance(action: CombatAction, attacker: &Attributes, defender: &Attributes
 /// existing priority chain rather than needing a second copy of it.
 pub fn action_disabled_reason(
     turn: &CombatTurn,
+    separation: f32,
     stamina: i32,
     presentation_busy: bool,
     action: CombatAction,
@@ -474,7 +479,7 @@ pub fn action_disabled_reason(
     }
     match action {
         CombatAction::QuickStrike | CombatAction::NormalStrike | CombatAction::HeavyStrike => {
-            if !turn.distance.in_melee_reach() {
+            if !in_melee_reach(separation) {
                 return Some("Prea departe pentru lovitură.".to_string());
             }
             if stamina < action.stamina_cost() {
@@ -487,14 +492,14 @@ pub fn action_disabled_reason(
         }
         CombatAction::Block | CombatAction::Rest => None,
         CombatAction::StepForward | CombatAction::LeapForward => {
-            if turn.distance.band() <= DuelDistance::CLOSE.band() {
+            if separation <= MIN_SEPARATION {
                 Some("Ești deja aproape.".to_string())
             } else {
                 None
             }
         }
         CombatAction::StepBack => {
-            if turn.distance.band() >= DuelDistance::FAR.band() {
+            if separation >= MAX_SEPARATION {
                 Some("Ești deja la distanță maximă.".to_string())
             } else {
                 None
@@ -510,18 +515,24 @@ pub fn action_disabled_reason(
 /// behavior, so nothing else in the HUD needed to change).
 pub fn action_enabled(
     turn: &CombatTurn,
+    separation: f32,
     stamina: i32,
     presentation_busy: bool,
     action: CombatAction,
 ) -> bool {
-    action_disabled_reason(turn, stamina, presentation_busy, action).is_none()
+    action_disabled_reason(turn, separation, stamina, presentation_busy, action).is_none()
 }
 
 /// Builds one descriptor for `action` from `ctx` — every field derived by
 /// calling into the functions above, never re-implemented inline.
 fn descriptor_for(action: CombatAction, ctx: &DescriptorContext) -> ActionDescriptor {
-    let disabled_reason =
-        action_disabled_reason(&ctx.turn, ctx.player_stamina, ctx.presentation_busy, action);
+    let disabled_reason = action_disabled_reason(
+        &ctx.turn,
+        ctx.separation,
+        ctx.player_stamina,
+        ctx.presentation_busy,
+        action,
+    );
     let id = action_id(action);
     ActionDescriptor {
         id,
@@ -530,7 +541,7 @@ fn descriptor_for(action: CombatAction, ctx: &DescriptorContext) -> ActionDescri
         pictogram_id: id,
         cost: action_cost(action),
         hit_chance: hit_chance(action, &ctx.player_attributes, &ctx.enemy_attributes),
-        position_legal: position_legal(action, ctx.turn.distance),
+        position_legal: position_legal(action, ctx.separation),
         enabled: disabled_reason.is_none(),
         disabled_reason,
         intent: action,
@@ -560,12 +571,21 @@ mod tests {
         over: false,
         player_blocking: false,
         enemy_blocking: false,
-        distance: DuelDistance::CLOSE,
     };
 
+    /// The old `CLOSE`/`FAR` bands' world-unit separations, for legality
+    /// cases.
+    const CLOSE: f32 = MIN_SEPARATION;
+    const FAR: f32 = MAX_SEPARATION;
+
     fn ctx(turn: CombatTurn, stamina: i32) -> DescriptorContext {
+        ctx_at(turn, CLOSE, stamina)
+    }
+
+    fn ctx_at(turn: CombatTurn, separation: f32, stamina: i32) -> DescriptorContext {
         DescriptorContext {
             turn,
+            separation,
             player_stamina: stamina,
             player_attributes: Attributes {
                 putere: 4,
@@ -711,91 +731,171 @@ mod tests {
             over: true,
             ..PLAYER_TURN
         };
-        let far = CombatTurn {
-            distance: DuelDistance::FAR,
-            ..PLAYER_TURN
-        };
         let cases = [
-            (PLAYER_TURN, 50, QuickStrike, true, "affordable on my turn"),
-            (enemy_turn, 50, QuickStrike, false, "not my turn"),
-            (over, 50, QuickStrike, false, "duel is over"),
-            (far, 50, QuickStrike, false, "too far for quick strike"),
-            (PLAYER_TURN, 4, QuickStrike, false, "below the 5 cost"),
-            (PLAYER_TURN, 5, QuickStrike, true, "exactly the 5 cost"),
-            (far, 50, NormalStrike, false, "too far for normal strike"),
-            (PLAYER_TURN, 8, NormalStrike, false, "below the 9 cost"),
-            (PLAYER_TURN, 9, NormalStrike, true, "exactly the 9 cost"),
-            (far, 50, HeavyStrike, false, "too far for heavy strike"),
-            (PLAYER_TURN, 14, HeavyStrike, false, "below the 15 cost"),
-            (PLAYER_TURN, 15, HeavyStrike, true, "exactly the 15 cost"),
-            (PLAYER_TURN, 0, Block, true, "block never rejects"),
-            (PLAYER_TURN, 0, Rest, true, "rest never rejects"),
-            (PLAYER_TURN, 0, StepForward, false, "already close"),
-            (PLAYER_TURN, 0, StepBack, true, "can open distance"),
-            (far, 0, StepForward, true, "can close distance"),
-            (far, 0, StepBack, false, "already at max distance"),
-            (far, 0, LeapForward, true, "can leap from range"),
-            (over, 0, Rest, false, "nothing after the duel ends"),
+            (
+                PLAYER_TURN,
+                CLOSE,
+                50,
+                QuickStrike,
+                true,
+                "affordable on my turn",
+            ),
+            (enemy_turn, CLOSE, 50, QuickStrike, false, "not my turn"),
+            (over, CLOSE, 50, QuickStrike, false, "duel is over"),
+            (
+                PLAYER_TURN,
+                FAR,
+                50,
+                QuickStrike,
+                false,
+                "too far for quick strike",
+            ),
+            (
+                PLAYER_TURN,
+                CLOSE,
+                4,
+                QuickStrike,
+                false,
+                "below the 5 cost",
+            ),
+            (
+                PLAYER_TURN,
+                CLOSE,
+                5,
+                QuickStrike,
+                true,
+                "exactly the 5 cost",
+            ),
+            (
+                PLAYER_TURN,
+                FAR,
+                50,
+                NormalStrike,
+                false,
+                "too far for normal strike",
+            ),
+            (
+                PLAYER_TURN,
+                CLOSE,
+                8,
+                NormalStrike,
+                false,
+                "below the 9 cost",
+            ),
+            (
+                PLAYER_TURN,
+                CLOSE,
+                9,
+                NormalStrike,
+                true,
+                "exactly the 9 cost",
+            ),
+            (
+                PLAYER_TURN,
+                FAR,
+                50,
+                HeavyStrike,
+                false,
+                "too far for heavy strike",
+            ),
+            (
+                PLAYER_TURN,
+                CLOSE,
+                14,
+                HeavyStrike,
+                false,
+                "below the 15 cost",
+            ),
+            (
+                PLAYER_TURN,
+                CLOSE,
+                15,
+                HeavyStrike,
+                true,
+                "exactly the 15 cost",
+            ),
+            (PLAYER_TURN, CLOSE, 0, Block, true, "block never rejects"),
+            (PLAYER_TURN, CLOSE, 0, Rest, true, "rest never rejects"),
+            (PLAYER_TURN, CLOSE, 0, StepForward, false, "already close"),
+            (PLAYER_TURN, CLOSE, 0, StepBack, true, "can open distance"),
+            (PLAYER_TURN, FAR, 0, StepForward, true, "can close distance"),
+            (
+                PLAYER_TURN,
+                FAR,
+                0,
+                StepBack,
+                false,
+                "already at max distance",
+            ),
+            (
+                PLAYER_TURN,
+                FAR,
+                0,
+                LeapForward,
+                true,
+                "can leap from range",
+            ),
+            (over, CLOSE, 0, Rest, false, "nothing after the duel ends"),
         ];
-        for (turn, stamina, action, expected, why) in cases {
+        for (turn, separation, stamina, action, expected, why) in cases {
             assert_eq!(
-                action_enabled(&turn, stamina, false, action),
+                action_enabled(&turn, separation, stamina, false, action),
                 expected,
                 "{why}"
             );
             assert_eq!(
-                action_disabled_reason(&turn, stamina, false, action).is_none(),
+                action_disabled_reason(&turn, separation, stamina, false, action).is_none(),
                 expected,
                 "disabled_reason must agree with action_enabled: {why}"
             );
         }
         assert!(
-            !action_enabled(&PLAYER_TURN, 50, true, QuickStrike),
+            !action_enabled(&PLAYER_TURN, CLOSE, 50, true, QuickStrike),
             "presentation busy disables otherwise-valid actions"
         );
     }
 
     #[test]
     fn disabled_reasons_are_specific_and_in_romanian() {
-        let far = CombatTurn {
-            distance: DuelDistance::FAR,
-            ..PLAYER_TURN
-        };
         let cases = [
             (
-                far,
+                PLAYER_TURN,
+                FAR,
                 20,
                 CombatAction::QuickStrike,
                 "Prea departe pentru lovitură.",
             ),
             (
                 PLAYER_TURN,
+                CLOSE,
                 4,
                 CombatAction::QuickStrike,
                 "Stamina insuficientă (nevoie 5).",
             ),
             (
                 PLAYER_TURN,
+                CLOSE,
                 0,
                 CombatAction::StepForward,
                 "Ești deja aproape.",
             ),
             (
-                far,
+                PLAYER_TURN,
+                FAR,
                 0,
                 CombatAction::StepBack,
                 "Ești deja la distanță maximă.",
             ),
         ];
-        for (turn, stamina, action, expected) in cases {
+        for (turn, separation, stamina, action, expected) in cases {
             assert_eq!(
-                action_disabled_reason(&turn, stamina, false, action),
+                action_disabled_reason(&turn, separation, stamina, false, action),
                 Some(expected.to_string()),
                 "{action:?}"
             );
         }
         assert_eq!(
-            action_disabled_reason(&PLAYER_TURN, 50, true, CombatAction::QuickStrike),
+            action_disabled_reason(&PLAYER_TURN, CLOSE, 50, true, CombatAction::QuickStrike),
             Some("Se așteaptă finalizarea acțiunii precedente.".to_string())
         );
         let enemy_turn = CombatTurn {
@@ -803,7 +903,7 @@ mod tests {
             ..PLAYER_TURN
         };
         assert_eq!(
-            action_disabled_reason(&enemy_turn, 50, false, CombatAction::QuickStrike),
+            action_disabled_reason(&enemy_turn, CLOSE, 50, false, CombatAction::QuickStrike),
             Some("Nu e rândul tău.".to_string())
         );
         let over = CombatTurn {
@@ -811,7 +911,7 @@ mod tests {
             ..PLAYER_TURN
         };
         assert_eq!(
-            action_disabled_reason(&over, 50, false, CombatAction::Rest),
+            action_disabled_reason(&over, CLOSE, 50, false, CombatAction::Rest),
             Some("Lupta s-a încheiat.".to_string())
         );
     }
@@ -823,59 +923,42 @@ mod tests {
     /// checks, and within a strike's own check, reach beats stamina.
     #[test]
     fn disabled_reason_priority_picks_exactly_one_highest_priority_cause() {
-        let far_enemy_turn_over_and_busy = CombatTurn {
+        let enemy_turn_over = CombatTurn {
             side: CombatSide::Enemy,
             over: true,
-            distance: DuelDistance::FAR,
             ..PLAYER_TURN
         };
         // Presentation-busy outranks every turn/reach/stamina condition,
-        // even when all of them also apply.
+        // even when all of them also apply (out of reach, out of stamina).
         assert_eq!(
-            action_disabled_reason(
-                &far_enemy_turn_over_and_busy,
-                0,
-                true,
-                CombatAction::QuickStrike
-            ),
+            action_disabled_reason(&enemy_turn_over, FAR, 0, true, CombatAction::QuickStrike),
             Some("Se așteaptă finalizarea acțiunii precedente.".to_string()),
             "presentation-busy must win over every other simultaneous cause"
         );
 
-        let far_enemy_turn_over = CombatTurn {
-            side: CombatSide::Enemy,
-            over: true,
-            distance: DuelDistance::FAR,
-            ..PLAYER_TURN
-        };
         // With presentation clear, turn-over outranks not-your-turn and
         // reach/stamina.
         assert_eq!(
-            action_disabled_reason(&far_enemy_turn_over, 0, false, CombatAction::QuickStrike),
+            action_disabled_reason(&enemy_turn_over, FAR, 0, false, CombatAction::QuickStrike),
             Some("Lupta s-a încheiat.".to_string()),
             "turn-over must win over not-your-turn and reach/stamina"
         );
 
-        let far_enemy_turn = CombatTurn {
+        let enemy_turn = CombatTurn {
             side: CombatSide::Enemy,
-            distance: DuelDistance::FAR,
             ..PLAYER_TURN
         };
         // With the duel still live, not-your-turn outranks reach/stamina.
         assert_eq!(
-            action_disabled_reason(&far_enemy_turn, 0, false, CombatAction::QuickStrike),
+            action_disabled_reason(&enemy_turn, FAR, 0, false, CombatAction::QuickStrike),
             Some("Nu e rândul tău.".to_string()),
             "not-your-turn must win over reach/stamina"
         );
 
-        let far = CombatTurn {
-            distance: DuelDistance::FAR,
-            ..PLAYER_TURN
-        };
         // On the player's live turn, out of reach *and* out of stamina:
         // reach is checked first.
         assert_eq!(
-            action_disabled_reason(&far, 0, false, CombatAction::QuickStrike),
+            action_disabled_reason(&PLAYER_TURN, FAR, 0, false, CombatAction::QuickStrike),
             Some("Prea departe pentru lovitură.".to_string()),
             "reach must win over stamina within a strike's own check"
         );
@@ -896,37 +979,32 @@ mod tests {
     // --- position legality ---
 
     #[test]
-    fn position_legal_matches_distance_gated_actions() {
-        let close = DuelDistance::CLOSE;
-        let far = DuelDistance::FAR;
-        assert!(position_legal(CombatAction::QuickStrike, close));
-        assert!(!position_legal(CombatAction::QuickStrike, far));
-        assert!(position_legal(CombatAction::NormalStrike, close));
-        assert!(!position_legal(CombatAction::NormalStrike, far));
-        assert!(position_legal(CombatAction::HeavyStrike, close));
-        assert!(!position_legal(CombatAction::HeavyStrike, far));
-        assert!(position_legal(CombatAction::Block, far));
-        assert!(position_legal(CombatAction::Rest, far));
-        assert!(!position_legal(CombatAction::StepForward, close));
-        assert!(position_legal(CombatAction::StepForward, far));
-        assert!(!position_legal(CombatAction::LeapForward, close));
-        assert!(position_legal(CombatAction::LeapForward, far));
-        assert!(position_legal(CombatAction::StepBack, close));
-        assert!(!position_legal(CombatAction::StepBack, far));
+    fn position_legal_matches_separation_gated_actions() {
+        assert!(position_legal(CombatAction::QuickStrike, CLOSE));
+        assert!(!position_legal(CombatAction::QuickStrike, FAR));
+        assert!(position_legal(CombatAction::NormalStrike, CLOSE));
+        assert!(!position_legal(CombatAction::NormalStrike, FAR));
+        assert!(position_legal(CombatAction::HeavyStrike, CLOSE));
+        assert!(!position_legal(CombatAction::HeavyStrike, FAR));
+        assert!(position_legal(CombatAction::Block, FAR));
+        assert!(position_legal(CombatAction::Rest, FAR));
+        assert!(!position_legal(CombatAction::StepForward, CLOSE));
+        assert!(position_legal(CombatAction::StepForward, FAR));
+        assert!(!position_legal(CombatAction::LeapForward, CLOSE));
+        assert!(position_legal(CombatAction::LeapForward, FAR));
+        assert!(position_legal(CombatAction::StepBack, CLOSE));
+        assert!(!position_legal(CombatAction::StepBack, FAR));
     }
 
     #[test]
     fn descriptor_position_legal_field_matches_the_free_function() {
-        for distance in [DuelDistance::CLOSE, DuelDistance::NEAR, DuelDistance::FAR] {
-            let turn = CombatTurn {
-                distance,
-                ..PLAYER_TURN
-            };
-            for descriptor in generate_action_descriptors(&ctx(turn, 50)) {
+        use crate::combat::position::STEP_DISTANCE;
+        for separation in [CLOSE, CLOSE + STEP_DISTANCE, FAR] {
+            for descriptor in generate_action_descriptors(&ctx_at(PLAYER_TURN, separation, 50)) {
                 assert_eq!(
                     descriptor.position_legal,
-                    position_legal(descriptor.intent, distance),
-                    "{} at {distance:?}",
+                    position_legal(descriptor.intent, separation),
+                    "{} at separation {separation}",
                     descriptor.id
                 );
             }

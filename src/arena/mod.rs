@@ -8,7 +8,6 @@
 
 pub mod animation;
 pub mod fx;
-pub mod staging;
 
 use bevy::{ecs::system::SystemParam, prelude::*};
 
@@ -17,7 +16,7 @@ use crate::character::{
     PlayerFighter, bundled_human_catalog, fallback_human, spawn_fighter,
 };
 use crate::combat::hud::distance_label;
-use crate::combat::{AiProfile, CombatSide};
+use crate::combat::{AiProfile, CombatSide, DuelPositions};
 use crate::core::{GameState, UiFont, despawn_screen};
 use crate::creation::PlayerCharacter;
 use crate::cutout::{
@@ -30,7 +29,6 @@ use crate::roster::{Boss, CampaignSeed, LadderProgress, Opponent, PreparedEncoun
 use crate::theme::{GROUND_COLOR, NIGHT_BLACK, TEXT_DISABLED};
 use animation::{AnimationSet, FighterClip, FighterSpriteSheets};
 use fx::{ArenaBackgrounds, background_tier, spawn_background};
-pub use staging::ArenaStaging;
 
 /// Logical resolution the scene is designed for (the window in `main.rs`).
 pub const ARENA_WIDTH: f32 = 800.0;
@@ -72,8 +70,8 @@ const REST_FOOT_DROP: f32 = 104.78;
 /// World-space y of a fighter root standing with its feet on the line.
 const FIGHTER_Y: f32 = FOOT_LINE_Y + REST_FOOT_DROP * FIGHTER_SCALE;
 
-/// World transform of a fighter standing at staged center `x` (see
-/// [`ArenaStaging`]): on the ground, at the shared fighter depth, scaled to
+/// World transform of a fighter standing at authoritative center `x` (see
+/// [`DuelPositions`]): on the ground, at the shared fighter depth, scaled to
 /// realize [`FIGHTER_SIZE`]. The only per-fighter difference is the staged
 /// x — y, z, and scale are composition constants.
 pub fn staged_fighter_transform(x: f32) -> Transform {
@@ -101,7 +99,7 @@ pub(crate) const GROUND_CHIP_ALPHA: f32 = 0.45;
 struct SceneResources<'w> {
     sheets: Res<'w, FighterSpriteSheets>,
     backgrounds: Res<'w, ArenaBackgrounds>,
-    staging: Res<'w, ArenaStaging>,
+    positions: Res<'w, DuelPositions>,
     ui_font: Res<'w, UiFont>,
 }
 
@@ -127,10 +125,12 @@ pub struct ArenaPlugin;
 impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((animation::AnimationPlugin, fx::FxPlugin))
-            .init_resource::<ArenaStaging>()
+            // Idempotent with CombatPlugin's/AnimationPlugin's registration:
+            // the authoritative duel geometry (#159) always exists.
+            .init_resource::<DuelPositions>()
             .add_systems(
                 OnEnter(GameState::Fight),
-                (reset_staging, spawn_arena).chain(),
+                (reset_duel_positions, spawn_arena).chain(),
             )
             .add_systems(
                 Update,
@@ -184,10 +184,11 @@ fn spawn_arena(
     );
 }
 
-/// Resets [`ArenaStaging`] to the opening placement on every fight entry —
-/// staged positions are per-fight presentation state, not run state.
-fn reset_staging(mut staging: ResMut<ArenaStaging>) {
-    *staging = ArenaStaging::starting();
+/// Resets the authoritative [`DuelPositions`] to the opening placement on
+/// every fight entry — duel geometry is per-fight state, not run state.
+/// Chained *before* [`spawn_arena`], which reads it to place the fighters.
+fn reset_duel_positions(mut positions: ResMut<DuelPositions>) {
+    *positions = DuelPositions::starting();
 }
 
 /// The loading-guard retry: once the sheets finish loading mid-fight-screen,
@@ -246,14 +247,14 @@ fn spawn_scene(
         });
     spawn_background(&mut commands, &scene.backgrounds, background_tier(ladder));
     spawn_scenery(&mut commands);
-    spawn_contact_shadows(&mut commands, &scene.staging, asset_server);
-    spawn_ground_distance_chip(&mut commands, &scene.staging, &scene.ui_font);
+    spawn_contact_shadows(&mut commands, &scene.positions, asset_server);
+    spawn_ground_distance_chip(&mut commands, &scene.positions, &scene.ui_font);
     let player_fighter = spawn_arena_fighter(
         &mut commands,
         player.name.clone(),
         player.attributes,
         PlayerFighter,
-        staged_fighter_transform(scene.staging.player_x),
+        staged_fighter_transform(scene.positions.player_x),
         ArenaRig::Character(&player.definition),
         false,
         asset_server,
@@ -270,7 +271,7 @@ fn spawn_scene(
                 aggression: opponent.aggression,
             },
         ),
-        staged_fighter_transform(scene.staging.enemy_x),
+        staged_fighter_transform(scene.positions.enemy_x),
         match &seeded_visual {
             SeededEncounterVisual::Generated(generated) => {
                 ArenaRig::Character(&generated.definition)
@@ -375,7 +376,7 @@ pub(crate) struct GroundShadow {
 /// (and can pin) the entities.
 fn spawn_contact_shadows(
     commands: &mut Commands,
-    staging: &ArenaStaging,
+    positions: &DuelPositions,
     asset_server: Option<&AssetServer>,
 ) {
     for side in [CombatSide::Player, CombatSide::Enemy] {
@@ -393,7 +394,7 @@ fn spawn_contact_shadows(
             ArenaScreen,
             GroundShadow { side },
             sprite,
-            Transform::from_xyz(staging.x_of(side), FOOT_LINE_Y, CONTACT_SHADOW_Z),
+            Transform::from_xyz(positions.x_of(side), FOOT_LINE_Y, CONTACT_SHADOW_Z),
         ));
     }
 }
@@ -418,38 +419,44 @@ fn sync_contact_shadows(
 }
 
 /// Marker for the etched ground marker centered between the fighters that
-/// names the current [`crate::combat::DuelDistance`] band. It follows
-/// [`ArenaStaging`] (see [`sync_ground_distance_chip`]) so distance stays
-/// readable off the stage itself, without the log or HUD text.
+/// names the duel's spacing in coarse Romanian (a projection of the
+/// continuous separation, see `combat::hud::distance_label`). It follows
+/// the authoritative [`DuelPositions`] (see [`sync_ground_distance_chip`])
+/// so distance stays readable off the stage itself, without the log or HUD
+/// text.
 #[derive(Component)]
 pub(crate) struct GroundDistanceChip;
 
-/// The ground distance chip: a small, low-contrast [`Text2d`] band label at
-/// ground level, centered between the two staged fighters. Deliberately a
+/// The ground distance chip: a small, low-contrast [`Text2d`] label at
+/// ground level, centered between the two fighters. Deliberately a
 /// ground-tone etched marker, not a bright UI label.
-fn spawn_ground_distance_chip(commands: &mut Commands, staging: &ArenaStaging, ui_font: &UiFont) {
+fn spawn_ground_distance_chip(
+    commands: &mut Commands,
+    positions: &DuelPositions,
+    ui_font: &UiFont,
+) {
     commands.spawn((
         ArenaScreen,
         GroundDistanceChip,
-        Text2d::new(distance_label(staging.distance())),
+        Text2d::new(distance_label(positions.separation())),
         ui_font.text_font(GROUND_CHIP_FONT_SIZE),
         TextColor(TEXT_DISABLED.with_alpha(GROUND_CHIP_ALPHA)),
-        Transform::from_xyz(staging.midpoint_x(), GROUND_CHIP_Y, GROUND_CHIP_Z),
+        Transform::from_xyz(positions.midpoint_x(), GROUND_CHIP_Y, GROUND_CHIP_Z),
     ));
 }
 
-/// Keeps the ground distance chip centered between the staged fighters and
-/// naming the current band whenever [`ArenaStaging`] changes.
+/// Keeps the ground distance chip centered between the fighters and naming
+/// the current spacing whenever the authoritative [`DuelPositions`] change.
 fn sync_ground_distance_chip(
-    staging: Res<ArenaStaging>,
+    positions: Res<DuelPositions>,
     mut chips: Query<(&mut Text2d, &mut Transform), With<GroundDistanceChip>>,
 ) {
-    if !staging.is_changed() {
+    if !positions.is_changed() {
         return;
     }
     for (mut text, mut transform) in &mut chips {
-        text.0 = distance_label(staging.distance()).to_string();
-        transform.translation.x = staging.midpoint_x();
+        text.0 = distance_label(positions.separation()).to_string();
+        transform.translation.x = positions.midpoint_x();
     }
 }
 
@@ -763,6 +770,13 @@ mod tests {
         magie: 0,
     };
 
+    /// Positions after one player step back from the opening placement.
+    fn stepped_back_positions() -> DuelPositions {
+        let mut positions = DuelPositions::starting();
+        positions.retreat(CombatSide::Player, crate::combat::position::STEP_DISTANCE);
+        positions
+    }
+
     fn player_character() -> PlayerCharacter {
         PlayerCharacter {
             name: "Făt-Frumos".to_string(),
@@ -920,16 +934,19 @@ mod tests {
             .single(app.world())
             .expect("enemy fighter exists")
             .translation;
-        let staging = ArenaStaging::starting();
+        let positions = DuelPositions::starting();
         assert_eq!(
             player,
-            staged_fighter_transform(staging.player_x).translation
+            staged_fighter_transform(positions.player_x).translation
         );
-        assert_eq!(enemy, staged_fighter_transform(staging.enemy_x).translation);
+        assert_eq!(
+            enemy,
+            staged_fighter_transform(positions.enemy_x).translation
+        );
         assert_eq!(
             enemy.x - player.x,
-            staging::band_gap(crate::combat::DuelDistance::starting()),
-            "the opening gap realizes the engine's starting band"
+            crate::combat::position::MIN_SEPARATION,
+            "the opening gap is the authoritative starting separation"
         );
         assert!(player.x < enemy.x, "player left, enemy right");
     }
@@ -945,7 +962,7 @@ mod tests {
         assert_eq!(text.0, "Aproape", "the starting band is named in Romanian");
         assert_eq!(
             transform.translation.x,
-            ArenaStaging::starting().midpoint_x()
+            DuelPositions::starting().midpoint_x()
         );
         assert!(
             transform.translation.y < FIGHTER_Y - FIGHTER_SIZE.y / 2.0,
@@ -954,15 +971,14 @@ mod tests {
     }
 
     #[test]
-    fn the_ground_distance_chip_follows_staging_changes() {
+    fn the_ground_distance_chip_follows_position_changes() {
         let mut app = test_app();
-        app.world_mut().resource_mut::<ArenaStaging>().apply_move(
-            crate::combat::CombatSide::Enemy,
-            crate::combat::DuelDistance::FAR,
-        );
+        app.world_mut()
+            .resource_mut::<DuelPositions>()
+            .retreat(CombatSide::Enemy, crate::combat::position::LEAP_DISTANCE);
         app.update();
 
-        let expected_midpoint = app.world().resource::<ArenaStaging>().midpoint_x();
+        let expected_midpoint = app.world().resource::<DuelPositions>().midpoint_x();
         let (text, transform) = app
             .world_mut()
             .query_filtered::<(&Text2d, &Transform), With<GroundDistanceChip>>()
@@ -1633,7 +1649,7 @@ mod tests {
     #[test]
     fn contact_shadows_sit_on_the_standing_line_under_each_fighter() {
         let mut app = test_app();
-        let staging = ArenaStaging::starting();
+        let positions = DuelPositions::starting();
         let mut shadows: Vec<(f32, f32, f32)> = app
             .world_mut()
             .query_filtered::<&Transform, With<GroundShadow>>()
@@ -1650,8 +1666,8 @@ mod tests {
         assert_eq!(
             shadows,
             vec![
-                (staging.player_x, FOOT_LINE_Y, CONTACT_SHADOW_Z),
-                (staging.enemy_x, FOOT_LINE_Y, CONTACT_SHADOW_Z),
+                (positions.player_x, FOOT_LINE_Y, CONTACT_SHADOW_Z),
+                (positions.enemy_x, FOOT_LINE_Y, CONTACT_SHADOW_Z),
             ],
             "one shadow per fighter, on the line, behind the chip (z -8) and \
              in front of the tier foreground (z -8.5)"
@@ -1666,8 +1682,8 @@ mod tests {
                 actor: CombatSide::Player,
                 action: crate::combat::CombatAction::StepBack,
                 event: crate::combat::CombatEvent::Moved {
-                    from: crate::combat::DuelDistance::CLOSE,
-                    to: crate::combat::DuelDistance::NEAR,
+                    from: DuelPositions::starting(),
+                    to: stepped_back_positions(),
                 },
             });
         app.update();
@@ -1694,7 +1710,7 @@ mod tests {
         assert_eq!(shadow_x, fighter_x, "the shadow tracks the live tween x");
         assert_ne!(
             fighter_x,
-            ArenaStaging::starting().player_x,
+            DuelPositions::starting().player_x,
             "the sampled moment is genuinely mid-move"
         );
     }
