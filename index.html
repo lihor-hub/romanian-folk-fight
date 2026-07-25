@@ -46,6 +46,36 @@
     <link rel="icon" type="image/png" sizes="32x32" href="assets/web/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="assets/web/apple-touch-icon.png" />
 
+    <!-- #244: the `GameState::Loading` gate (`src/core/mod.rs`) blocks the
+         menu on exactly these two assets, but the wasm app cannot dispatch
+         their `AssetServer::load()` fetch until its `PreStartup` schedule
+         runs -- which Bevy's own plugin lifecycle withholds until the async
+         WebGPU/WebGL adapter+device negotiation finishes (see
+         `RenderPlugin::ready()`), often well after the wasm module itself
+         has downloaded. Under CPU-saturated software rendering that
+         negotiation alone can run 10+ seconds, so the in-app fetch cannot
+         start any earlier no matter how the game's own systems are ordered
+         (verified empirically: CPU-throttled locally, both dispatch ~9s
+         late, scaling ~linearly with the throttle rate -- an upstream/
+         architectural floor, not an ordering bug). These two preload hints
+         are dispatched by the browser's own preload scanner at HTML-parse
+         time instead, fully in parallel with wasm compilation and that
+         negotiation: the bytes are already cached by the time the app's own
+         (still render-gated) fetch finally runs, so it resolves without an
+         additional network round trip on top of that floor. See the #244
+         PR description for the full investigation; `xtask`'s cold-menu
+         web-smoke scenario keys its readiness gate on the app's *own*
+         fetch (`initiatorType: "fetch"`), never on these hints alone, so
+         this cannot mask a genuinely stalled app. -->
+    <link
+      rel="preload"
+      as="font"
+      type="font/ttf"
+      href="assets/fonts/Alegreya-Variable.ttf"
+      crossorigin
+    />
+    <link rel="preload" as="image" href="assets/ui/panel_border.png" />
+
     <link data-trunk rel="rust" data-wasm-opt="z" />
     <link data-trunk rel="copy-dir" href="assets" />
     <style>

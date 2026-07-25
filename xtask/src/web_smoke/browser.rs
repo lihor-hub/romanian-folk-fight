@@ -116,7 +116,13 @@ JSON.stringify({
     var status = typeof e.responseStatus === 'number' && e.responseStatus > 0
       ? e.responseStatus
       : (e.transferSize > 0 || e.decodedBodySize > 0 ? 200 : 0);
-    return { url: e.name, status: status, transfer_size: (e.transferSize || e.decodedBodySize || 0) };
+    return {
+      url: e.name,
+      status: status,
+      transfer_size: (e.transferSize || e.decodedBodySize || 0),
+      start_time: e.startTime,
+      initiator_type: e.initiatorType,
+    };
   })
 })
 "#;
@@ -127,6 +133,25 @@ pub struct ResourceEntry {
     pub url: String,
     pub status: i64,
     pub transfer_size: f64,
+    /// `PerformanceResourceTiming.startTime` (#244): milliseconds from
+    /// navigation start to when the browser actually dispatched this
+    /// request -- i.e. the wall-clock delay a CPU-saturated wasm executor
+    /// imposes on a gate-required asset's `fetch()` before the network even
+    /// gets involved. Diagnostic only; no readiness/assertion logic reads
+    /// this today.
+    pub start_time: f64,
+    /// `PerformanceResourceTiming.initiatorType` (#244): `"link"` for the
+    /// `<link rel="preload">` hints `index.html` now carries for the two
+    /// loading-gate assets, `"fetch"` for the request Bevy's own wasm
+    /// `AssetServer` dispatches once its (render-backend-gated) `PreStartup`
+    /// schedule finally runs. Both can name the exact same URL -- a preload
+    /// hint fires immediately at HTML-parse time, entirely decoupled from
+    /// the app's own readiness -- so [`crate::web_smoke::cold_menu`]'s
+    /// readiness gate must key on the latter specifically, or a stalled app
+    /// would look "asset fetched" the instant the preload scanner runs,
+    /// reopening the byte-identical-`Loading`-frame false-ready bug #243
+    /// fixed.
+    pub initiator_type: String,
 }
 
 /// One status snapshot; see [`STATUS_SCRIPT`] for exactly what each field
