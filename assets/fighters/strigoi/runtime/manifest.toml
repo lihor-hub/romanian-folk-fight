@@ -215,7 +215,7 @@ dimensions = [41, 86]
 sampler = "linear"
 attachment = "foot_back"
 pivot = [-6.56, -110.0]
-display = [21.28, 10.8]
+display = [10.36, 21.96]
 crop = "536,400,41,86"
 
 [[record]]

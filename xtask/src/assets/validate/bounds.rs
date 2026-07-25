@@ -60,9 +60,10 @@ pub const PIVOT_SANITY_MULTIPLIER: f32 = 6.0;
 /// tight tolerance would flag intentional art choices. The current
 /// inventory's highest *accepted* distortion is 2.27x
 /// (`fighters.strigoi.runtime.foot-front`); `3.0` leaves headroom above
-/// that. One record currently exceeds even this generous tolerance --
-/// see `ASPECT_DISTORTION_KNOWN_FAILURES` below, which documents it as a
-/// known failure rather than loosening this constant further.
+/// that. Every record in the current inventory is within this tolerance --
+/// see `ASPECT_DISTORTION_KNOWN_FAILURES` below, which stays empty by
+/// default and exists so a future outlier can be documented rather than
+/// silently loosening this constant.
 pub const ASPECT_DISTORTION_TOLERANCE: f32 = 3.0;
 
 /// Pre-existing aspect-distortion outliers accepted as documented known
@@ -70,14 +71,13 @@ pub const ASPECT_DISTORTION_TOLERANCE: f32 = 3.0;
 /// for every record. Each entry is `(asset id, reason)`. Remove an entry
 /// once its underlying asset is fixed (re-measure the record's `display`
 /// against a same-category sibling, or re-crop the source sheet).
-pub const ASPECT_DISTORTION_KNOWN_FAILURES: &[(&str, &str)] = &[(
-    "fighters.strigoi.runtime.foot-back",
-    "4.13x source/display aspect distortion -- the only rig part in the \
-     current inventory beyond the 3x tolerance (its sibling foot-front is \
-     2.27x). Pre-existing in the #167 sidecar snapshot, not introduced by \
-     this change; filed as a candidate follow-up issue rather than \
-     silently widening the tolerance to swallow it.",
-)];
+///
+/// Empty as of #236: `fighters.strigoi.runtime.foot-back` was the sole
+/// entry (4.13x distortion, its source crop being a tall/narrow claw rather
+/// than the wide/flat silhouette its shared foot template assumed). Fixed
+/// by giving that part its own display scale in `strigoi_part()`
+/// (`src/cutout.rs`), landing its ratio at ~0.99.
+pub const ASPECT_DISTORTION_KNOWN_FAILURES: &[(&str, &str)] = &[];
 
 /// Runs every metadata-bounds check against the aggregate's resolved
 /// records.
@@ -463,17 +463,30 @@ mod tests {
     }
 
     #[test]
-    fn the_documented_known_aspect_distortion_failure_is_not_re_reported() {
-        let record = rig_record(
+    fn the_fixed_strigoi_foot_back_aspect_is_clean_without_a_known_failure_entry() {
+        // Real data post-#236: fighters.strigoi.runtime.foot-back, corrected
+        // to display its own portrait-shaped source crop instead of being
+        // stretched into the shared foot template's landscape box (ratio
+        // ~0.99, well inside tolerance). `ASPECT_DISTORTION_KNOWN_FAILURES`
+        // is empty, so this now passes purely on the general rule.
+        assert!(ASPECT_DISTORTION_KNOWN_FAILURES.is_empty());
+        let mut record = rig_record(
             "foot-back",
             [41, 86],
             [-6.56, -110.0],
-            [21.28, 10.8],
+            [10.36, 21.96],
             Some("unknown"),
             None,
         );
-        let mut record = record;
         record.record.id = "fighters.strigoi.runtime.foot-back".to_string();
-        assert!(check(&[record]).is_empty());
+        let diagnostics = check(&[record]);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {:?}",
+            diagnostics
+                .iter()
+                .map(|d| d.to_string())
+                .collect::<Vec<_>>()
+        );
     }
 }
