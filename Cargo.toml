@@ -24,9 +24,19 @@ serde_json = "1"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "6"
 
-# Web save backend: the save lives in `window.localStorage`.
+# Web save backend: the save lives in `window.localStorage`. `Document`/
+# `Element`/`HtmlElement`/`Node` back #231's loading-failure overlay
+# (`src/core/mod.rs`'s `show_loading_failure`), which appends a plain HTML
+# error message straight to `<body>` when a #114-gated asset 404s.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3", features = ["Storage", "Window"] }
+web-sys = { version = "0.3", features = [
+    "Storage",
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "Node",
+] }
 
 [dev-dependencies]
 # Cmap coverage check for the bundled UI font (Romanian diacritics), see src/core.

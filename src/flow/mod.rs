@@ -515,6 +515,9 @@ mod tests {
         ];
         let all_states = [
             GameState::Loading,
+            // #231: has no owned rows either -- recovery from this state is
+            // a full page reload on web, never a `FlowIntent`.
+            GameState::LoadingFailed,
             GameState::MainMenu,
             GameState::CharacterCreation,
             GameState::Town,
