@@ -119,6 +119,53 @@ fn load_ui_font(
 /// nothing ever loads and this would hang forever waiting on it. When the
 /// `AssetServer` resource is absent, fall straight through to `MainMenu`
 /// instead.
+///
+/// ## #244: why this can stay `Loading` for 10+ seconds on wasm
+///
+/// [`load_ui_font`] and `load_panel_texture` call `AssetServer::load` in
+/// `PreStartup`, but that call only *queues* the load -- it does not
+/// dispatch the browser `fetch()` itself. On wasm, `AssetServer::load`
+/// spawns the actual read onto `IoTaskPool`, which routes to
+/// `web-task`'s single-threaded, microtask-scheduled executor
+/// (`bevy_tasks`'s `web` cfg); the `fetch()` call
+/// (`HttpWasmAssetReader::fetch_bytes` in `bevy_asset`) only runs the first
+/// time that spawned future is polled. And `PreStartup` itself cannot run
+/// at all until every plugin's `Plugin::ready()` returns `true` --
+/// `RenderPlugin::ready()` blocks on the async WebGPU/WebGL adapter+device
+/// negotiation (`bevy_render::renderer::initialize_renderer`), which is
+/// real, synchronous-ish CPU work.
+///
+/// Verified locally (`XTASK_WEB_SMOKE_CPU_THROTTLE`, CDP
+/// `Emulation.setCPUThrottlingRate`, see `xtask/src/web_smoke/browser.rs`):
+/// unthrottled, every eagerly-loaded asset in this app (the font, the panel
+/// texture, and ~290 more from other plugins' own `Startup`-time
+/// `AssetServer::load` calls -- shop icons, character-catalog images,
+/// fighter sprite sheets, arena backgrounds) dispatches its `fetch()` in one
+/// ~6ms-wide burst around 690ms after navigation start. At a 20x CPU
+/// throttle (approximating a CPU-saturated, SwiftShader-software-rendering
+/// CI runner), that same burst -- font and panel texture included -- moves
+/// to ~9.3-9.9s, scaling almost exactly linearly with the throttle rate.
+/// That whole burst happens *after* the render-backend negotiation finishes
+/// and `PreStartup` finally runs; it is not staggered across frames or
+/// ordered by which plugin queued its load first, so reordering
+/// [`load_ui_font`]/`load_panel_texture` relative to other plugins' loads,
+/// or polling asset tasks "earlier in the frame", cannot move the dispatch
+/// earlier -- the game's own code has not started running yet at the point
+/// where the delay lives. This is upstream-bound to `bevy_app`'s
+/// plugin-readiness gate and `bevy_render`'s backend negotiation, not an
+/// ordering bug in this crate.
+///
+/// The cheap mitigation actually shipped for #244 lives in `index.html`:
+/// `<link rel="preload">` hints for these same two asset paths, dispatched
+/// by the browser's own preload scanner at HTML-parse time, fully
+/// decoupled from `PreStartup`/`RenderPlugin::ready()`. This does not move
+/// the ~9s floor above (nothing can, short of a faster render backend or a
+/// less CPU-starved host) -- confirmed by `xtask`'s cold-menu web-smoke
+/// scenario timing before/after being statistically indistinguishable
+/// under the same throttle -- but it does mean the two assets' bytes are
+/// already cached by the time this system's `AssetServer::load` call
+/// finally runs, so nothing after that floor waits on an additional
+/// network round trip.
 fn transition_out_of_loading(
     ui_font: Res<UiFont>,
     panel_texture: Res<crate::theme::PanelTexture>,

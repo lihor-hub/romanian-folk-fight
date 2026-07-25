@@ -245,10 +245,20 @@ fn run_checkpoint(
         ));
     }
 
+    // Printed on every success branch below (#244): how long the readiness
+    // loop actually took to see both loading-gate assets fetched and the
+    // screen stabilize, so a CI run's cold-menu timing can be compared
+    // directly against another run (e.g. before/after a perf change) without
+    // having to fall back to the failure-only message further up.
+    let timing = format!(
+        "ready in {:?}, {} frame(s)",
+        readiness.elapsed, readiness.frames_observed
+    );
+
     match baseline::handle(SCENARIO, spec.name, &screenshot, update_baselines) {
         Ok(baseline::BaselineOutcome::Updated) => {
             println!(
-                "cold-menu[{}]: OK ({}x{}) -- baseline updated at {} -- artifacts: {}",
+                "cold-menu[{}]: OK ({}x{}, {timing}) -- baseline updated at {} -- artifacts: {}",
                 spec.name,
                 spec.width,
                 spec.height,
@@ -259,7 +269,7 @@ fn run_checkpoint(
         Ok(baseline::BaselineOutcome::Missing) => {
             *missing_baseline = true;
             println!(
-                "cold-menu[{}]: OK ({}x{}) -- no baseline exists yet -- artifacts: {}",
+                "cold-menu[{}]: OK ({}x{}, {timing}) -- no baseline exists yet -- artifacts: {}",
                 spec.name,
                 spec.width,
                 spec.height,
@@ -268,7 +278,7 @@ fn run_checkpoint(
         }
         Ok(baseline::BaselineOutcome::Matches) => {
             println!(
-                "cold-menu[{}]: OK ({}x{}) -- matches accepted baseline -- artifacts: {}",
+                "cold-menu[{}]: OK ({}x{}, {timing}) -- matches accepted baseline -- artifacts: {}",
                 spec.name,
                 spec.width,
                 spec.height,
@@ -296,7 +306,7 @@ fn run_checkpoint(
                 ));
             }
             println!(
-                "cold-menu[{}]: OK ({}x{}) -- differs from accepted baseline ({diff_pixels}/{total_pixels} px; \
+                "cold-menu[{}]: OK ({}x{}, {timing}) -- differs from accepted baseline ({diff_pixels}/{total_pixels} px; \
                  not a scenario failure by itself unless --strict-visual, see baseline.rs docs) -- artifacts: {}",
                 spec.name,
                 spec.width,
@@ -330,7 +340,12 @@ fn write_artifacts(
         status
             .resources
             .iter()
-            .map(|r| format!("{} {} ({} bytes)", r.status, r.url, r.transfer_size as u64))
+            .map(|r| {
+                format!(
+                    "{} {} ({} bytes) dispatched at {:.1}ms",
+                    r.status, r.url, r.transfer_size as u64, r.start_time
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n"),
     );
@@ -447,32 +462,53 @@ fn check_no_console_or_page_errors(status: &PageStatus, problems: &mut Vec<Strin
     }
 }
 
+/// Whether a resource-timing entry reflects the wasm app's *own*
+/// `AssetServer::load` dispatch (`fetch()`, reported by the browser as
+/// `initiatorType: "fetch"`) rather than the `<link rel="preload">` hint
+/// `index.html` also carries for the two [`REQUIRED_ASSETS`] (#244,
+/// `initiatorType: "link"`). The preload fires at HTML-parse time, entirely
+/// decoupled from the app's own readiness, so it must never stand in for
+/// "the app actually asked for this" -- see [`required_assets_fetched`].
+fn is_app_dispatched(entry: &crate::web_smoke::browser::ResourceEntry) -> bool {
+    entry.initiator_type == "fetch"
+}
+
 /// Whether every [`REQUIRED_ASSETS`] path has appeared in the page's
 /// resource-timing entries at all (any status; the post-ready
-/// [`check_required_assets`] still validates status/size). Part of the
-/// readiness gate, not just the assertions: on a CPU-saturated runner
-/// (SwiftShader software rendering on a busy CI host) the wasm app's asset
-/// load tasks can take 10+ seconds to even dispatch their `fetch()`es while
-/// the canvas keeps re-rendering the identical `GameState::Loading` clear
-/// color -- byte-identical frames that would otherwise satisfy the
-/// stability streak long before the app ever had a chance to paint the
-/// menu. Observed exactly so on CI runs 29083147501/29085154712 (and on an
-/// unrelated branch, 29083778372): "required asset never fetched:
-/// assets/fonts/Alegreya-Variable.ttf" plus a flat-clear-color screenshot,
-/// with the server receiving the font request moments *after* the
-/// checkpoint had already given up. Requiring the fetches before the streak
-/// may start keeps the readiness loop polling (bounded by the existing
-/// [`READY_MAX_WALL_CLOCK`]/[`READY_MAX_FRAMES`] caps) instead of
-/// stabilizing on the not-yet-loaded screen.
+/// [`check_required_assets`] still validates status/size), dispatched by the
+/// app itself rather than only by the `<link rel="preload">` hint (see
+/// [`is_app_dispatched`]). Part of the readiness gate, not just the
+/// assertions: on a CPU-saturated runner (SwiftShader software rendering on
+/// a busy CI host) the wasm app's asset load tasks can take 10+ seconds to
+/// even dispatch their `fetch()`es while the canvas keeps re-rendering the
+/// identical `GameState::Loading` clear color -- byte-identical frames that
+/// would otherwise satisfy the stability streak long before the app ever had
+/// a chance to paint the menu. Observed exactly so on CI runs
+/// 29083147501/29085154712 (and on an unrelated branch, 29083778372):
+/// "required asset never fetched: assets/fonts/Alegreya-Variable.ttf" plus a
+/// flat-clear-color screenshot, with the server receiving the font request
+/// moments *after* the checkpoint had already given up. Requiring the
+/// fetches before the streak may start keeps the readiness loop polling
+/// (bounded by the existing [`READY_MAX_WALL_CLOCK`]/[`READY_MAX_FRAMES`]
+/// caps) instead of stabilizing on the not-yet-loaded screen -- and
+/// requiring the app's *own* dispatch (not just the preload hint) keeps that
+/// true even now that the preload can make the URL appear in resource timing
+/// well before the app is anywhere near ready.
 fn required_assets_fetched(status: &PageStatus) -> bool {
-    REQUIRED_ASSETS
-        .iter()
-        .all(|(suffix, _)| status.resources.iter().any(|r| r.url.ends_with(suffix)))
+    REQUIRED_ASSETS.iter().all(|(suffix, _)| {
+        status
+            .resources
+            .iter()
+            .any(|r| r.url.ends_with(suffix) && is_app_dispatched(r))
+    })
 }
 
 fn check_required_assets(status: &PageStatus, problems: &mut Vec<String>) {
     for (suffix, _source) in REQUIRED_ASSETS {
-        let matching = status.resources.iter().find(|r| r.url.ends_with(*suffix));
+        let matching = status
+            .resources
+            .iter()
+            .find(|r| r.url.ends_with(*suffix) && is_app_dispatched(r));
         match matching {
             None => problems.push(format!("required asset never fetched: {suffix}")),
             Some(entry) if !(200..300).contains(&entry.status) => problems.push(format!(
@@ -612,11 +648,25 @@ mod tests {
         }
     }
 
+    /// A `ResourceEntry` as the app's own `AssetServer::load` dispatch would
+    /// report it (`initiatorType: "fetch"`) -- what every pre-existing test
+    /// below means by "fetched".
     fn entry(url: &str) -> ResourceEntry {
         ResourceEntry {
             url: url.to_string(),
             status: 200,
             transfer_size: 1024.0,
+            start_time: 0.0,
+            initiator_type: "fetch".to_string(),
+        }
+    }
+
+    /// A `ResourceEntry` as index.html's `<link rel="preload">` hint would
+    /// report it (`initiatorType: "link"`, #244).
+    fn preload_entry(url: &str) -> ResourceEntry {
+        ResourceEntry {
+            initiator_type: "link".to_string(),
+            ..entry(url)
         }
     }
 
@@ -654,6 +704,45 @@ mod tests {
     fn required_assets_fetched_accepts_both_gate_assets_among_unrelated_entries() {
         let status = status_with_resources(vec![
             entry("http://127.0.0.1:8080/assets/sprites/player.png"),
+            entry("http://127.0.0.1:8080/assets/fonts/Alegreya-Variable.ttf"),
+            entry("http://127.0.0.1:8080/assets/ui/panel_border.png"),
+        ]);
+        assert!(required_assets_fetched(&status));
+    }
+
+    /// #244: `index.html`'s `<link rel="preload">` hint for the two gate
+    /// assets fires at HTML-parse time, entirely decoupled from the app's
+    /// own readiness -- a stalled-forever app (wasm never even instantiates)
+    /// would still show both URLs in resource timing from the preload alone.
+    /// If readiness treated that as "fetched", the stability streak could
+    /// start on the still-blank `Loading` clear color the instant the
+    /// preload scanner runs, reopening the exact false-ready bug #243 fixed
+    /// (just via a new loophole). Only an entry the app itself dispatched
+    /// (`initiatorType: "fetch"`) may satisfy the gate.
+    #[test]
+    fn required_assets_fetched_ignores_the_preload_hint_and_still_waits_for_the_apps_own_fetch() {
+        let status = status_with_resources(vec![
+            preload_entry("http://127.0.0.1:8080/assets/fonts/Alegreya-Variable.ttf"),
+            preload_entry("http://127.0.0.1:8080/assets/ui/panel_border.png"),
+        ]);
+        assert!(
+            !required_assets_fetched(&status),
+            "a preload-only hit must not stand in for the app's own dispatch"
+        );
+
+        let mut problems = Vec::new();
+        check_required_assets(&status, &mut problems);
+        assert!(
+            problems.iter().any(|p| p.contains("never fetched")),
+            "the assertion phase must not credit the preload hint either: {problems:?}"
+        );
+
+        // Once the app's own fetch also lands (both entries present, as a
+        // real browser would report for a URL that's both preloaded and
+        // later requested by the app), readiness opens as normal.
+        let status = status_with_resources(vec![
+            preload_entry("http://127.0.0.1:8080/assets/fonts/Alegreya-Variable.ttf"),
+            preload_entry("http://127.0.0.1:8080/assets/ui/panel_border.png"),
             entry("http://127.0.0.1:8080/assets/fonts/Alegreya-Variable.ttf"),
             entry("http://127.0.0.1:8080/assets/ui/panel_border.png"),
         ]);

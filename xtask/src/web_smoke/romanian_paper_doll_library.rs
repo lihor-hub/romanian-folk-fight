@@ -1065,6 +1065,8 @@ mod tests {
             url: "http://127.0.0.1/assets/a.png".to_owned(),
             status: 200,
             transfer_size: 42.0,
+            start_time: 0.0,
+            initiator_type: "fetch".to_owned(),
         }];
         assert!(!gear_assets_fetched(&resources, &paths));
 
@@ -1072,6 +1074,8 @@ mod tests {
             url: "http://127.0.0.1/assets/b.png".to_owned(),
             status: 200,
             transfer_size: 0.0,
+            start_time: 0.0,
+            initiator_type: "fetch".to_owned(),
         });
         assert!(!gear_assets_fetched(&resources, &paths));
 
