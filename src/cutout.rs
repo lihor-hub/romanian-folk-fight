@@ -1077,13 +1077,33 @@ fn strigoi_part(mut part: CutoutPart) -> CutoutPart {
             part.pivot.x *= 0.86;
             part.pivot.y *= 1.16;
         }
-        CutoutPartKind::FootBack | CutoutPartKind::FootFront => {
+        CutoutPartKind::FootFront => {
             part.offset.x *= 0.82;
             part.offset.y -= 8.0;
             part.size.x *= 0.76;
             part.size.y *= 0.9;
             part.pivot.x *= 0.76;
             part.pivot.y *= 0.9;
+        }
+        // The strigoi back-foot source crop (unlike its front-foot sibling)
+        // is a tall, narrow claw -- 41x86px, aspect ~0.48 -- not the
+        // wide/flat silhouette the shared (28.0, 12.0) foot template
+        // assumes (see `human_parts()`). Reusing `FootFront`'s
+        // landscape-biased scale here stretched the claw into a 21.28x10.8
+        // display box (aspect ~1.97): a 4.13x source/display distortion
+        // (#236). These factors instead preserve the same rendered
+        // footprint area (21.28 * 10.8 == 10.36 * 21.96) while reorienting
+        // it to the claw's own portrait aspect, landing the display/source
+        // ratio at ~0.99. `fighters.strigoi.runtime.foot-back` in
+        // `assets/fighters/strigoi/runtime/manifest.toml` records this same
+        // `display` value and must stay in sync with this literal.
+        CutoutPartKind::FootBack => {
+            part.offset.x *= 0.82;
+            part.offset.y -= 8.0;
+            part.size.x *= 0.37;
+            part.size.y *= 1.83;
+            part.pivot.x *= 0.37;
+            part.pivot.y *= 1.83;
         }
     }
     part
