@@ -7,6 +7,7 @@
 
 use bevy::prelude::*;
 use bevy::sprite::{BorderRect, SliceScaleMode, TextureSlicer};
+use bevy::ui::VisualBox;
 use bevy::ui::widget::NodeImageMode;
 
 use crate::core::UiFont;
@@ -218,10 +219,21 @@ pub fn panel_slice_mode() -> NodeImageMode {
 
 /// An [`ImageNode`] rendering the embroidery-motif panel border, 9-sliced to
 /// fit whatever `Node` size the caller gives it.
+///
+/// `visual_box` is explicitly [`VisualBox::BorderBox`] rather than Bevy
+/// 0.19's `ImageNode` default of `VisualBox::ContentBox` (#338): panel
+/// nodes are padded by [`PANEL_BORDER_INSET`] (see [`merge_panel_padding`])
+/// so their *content* clears the border, but that means the content box is
+/// inset from the node's outer edge by exactly the border width. Drawing
+/// the border art on the content box (the default) paints it inset by that
+/// same amount, landing the embroidery ring right under the panel content
+/// instead of around it. `BorderBox` draws the art on the full node instead,
+/// so it covers the border ring the padding was designed to clear.
 pub fn panel_border(panel_texture: &PanelTexture) -> ImageNode {
     ImageNode {
         image: panel_texture.image.clone(),
         image_mode: panel_slice_mode(),
+        visual_box: VisualBox::BorderBox,
         ..default()
     }
 }
@@ -247,6 +259,12 @@ pub fn motif_band(panel_texture: &PanelTexture) -> ImageNode {
             tile_y: false,
             stretch_value: 1.0,
         },
+        // Kept in step with `panel_border` for contract consistency (#338):
+        // these nodes are unpadded today, so `BorderBox` is pixel-identical
+        // to the `ContentBox` default here, but the chrome family should
+        // agree on which box it draws to rather than relying on that
+        // coincidence.
+        visual_box: VisualBox::BorderBox,
         ..default()
     }
 }
@@ -261,6 +279,10 @@ pub fn motif_emblem(panel_texture: &PanelTexture) -> ImageNode {
         image: panel_texture.image.clone(),
         rect: Some(Rect::new(0.0, 0.0, PANEL_BORDER_INSET, PANEL_BORDER_INSET)),
         image_mode: NodeImageMode::Stretch,
+        // See `motif_band`: kept in step with `panel_border` for contract
+        // consistency (#338), pixel-identical today since this node is
+        // unpadded.
+        visual_box: VisualBox::BorderBox,
         ..default()
     }
 }
@@ -407,6 +429,32 @@ mod tests {
             SliceScaleMode::Tile { stretch_value: 1.0 }
         );
         assert_eq!(slicer.max_corner_scale, 1.0);
+    }
+
+    /// #338: Bevy 0.19's `ImageNode` defaults `visual_box` to
+    /// `VisualBox::ContentBox`, which draws chrome art inset by the node's
+    /// padding — i.e. exactly under the panel content the padding exists to
+    /// protect. All three theme chrome `ImageNode`s must opt into
+    /// `VisualBox::BorderBox` so the art covers the full node instead.
+    #[test]
+    fn theme_chrome_image_nodes_draw_on_the_border_box() {
+        let texture = PanelTexture::default();
+        assert_eq!(
+            panel_border(&texture).visual_box,
+            VisualBox::BorderBox,
+            "panel_border must draw on the border box, not the content box, \
+             or its art lands under the panel content instead of around it"
+        );
+        assert_eq!(
+            motif_band(&texture).visual_box,
+            VisualBox::BorderBox,
+            "motif_band should match panel_border's visual_box for chrome contract consistency"
+        );
+        assert_eq!(
+            motif_emblem(&texture).visual_box,
+            VisualBox::BorderBox,
+            "motif_emblem should match panel_border's visual_box for chrome contract consistency"
+        );
     }
 
     /// #121: the divider band samples the top border strip between the two
