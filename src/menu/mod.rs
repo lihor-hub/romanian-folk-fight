@@ -18,6 +18,22 @@ use crate::ui_widgets::focus::{
 const MENU_ROOT_PADDING: f32 = 18.0;
 const MENU_TITLE_STAGE_WIDTH: f32 = 382.0;
 const MENU_BUTTON_PANEL_WIDTH: f32 = 318.0;
+/// Horizontal gap between the title stage and button panel (the root row's
+/// `column_gap`). Named so [`menu_panels_center_horizontally`] can reproduce
+/// the root's centering math exactly instead of guessing at the literal
+/// (#232).
+const MENU_PANEL_GAP: f32 = 24.0;
+/// Width of every menu button, including the disabled **Continuă** marker.
+/// Named so tests can check it against [`MENU_BUTTON_PANEL_WIDTH`] and
+/// [`crate::theme::PANEL_BORDER_INSET`] to prove button fills stay clear of
+/// the button panel's embroidered border (#232).
+const MENU_BUTTON_WIDTH: f32 = 260.0;
+/// Padding on every side of the button panel. Equals
+/// [`crate::theme::PANEL_BORDER_INSET`] exactly, so `merge_panel_padding`
+/// leaves it untouched and the button column's flow starts right at the
+/// border's inner edge -- named so tests can check that equality explicitly
+/// instead of re-deriving it from a bare literal (#232).
+const MENU_BUTTON_PANEL_PADDING: f32 = 24.0;
 
 /// Shown in place of **Continuă** (#201) when the stored run snapshot is
 /// present but unusable — corrupt/partially-written JSON, an unsupported old
@@ -138,6 +154,25 @@ impl Plugin for MenuPlugin {
 /// invalid save) — the recovery button only appears if the data survives
 /// long enough for the player to see it and choose to discard it via
 /// [`MenuAction::ClearCorruptSave`].
+///
+/// The root row centers the title stage + button panel group via
+/// `justify_content: Center` (see the test-only `menu_row_margins` helper
+/// for the exact math, and `menu_panels_center_horizontally_at_common_desktop_widths`
+/// for the regression test), and every button stays narrower than the
+/// button panel's bordered content box (see
+/// `button_fill_clears_the_button_panel_border_inset`).
+/// #232 reported both as visually broken at 1280×800: the title
+/// stage/button panel row read as left-of-center and the disabled
+/// **Continuă** fill appeared to overlap the panel's embroidered border.
+/// Investigation found neither was a box-model bug -- #338/#341's `panel_border`
+/// fix (drawing the 9-slice chrome on the border box instead of the content
+/// box) was a render-only change that left every `ComputedNode` untouched,
+/// but it also fixed the *visual* symptom: before that fix the border art
+/// was drawn inset under the panel content instead of around it, which is
+/// what actually read as overlapping content and (by throwing off the
+/// panels' apparent visual weight) an off-center row. The tests above lock
+/// in the now-correct geometry so a future chrome change can't silently
+/// reintroduce either symptom.
 fn spawn_main_menu(
     mut commands: Commands,
     store: Option<Res<SaveStore>>,
@@ -158,7 +193,7 @@ fn spawn_main_menu(
                 flex_wrap: FlexWrap::Wrap,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                column_gap: Val::Px(24.0),
+                column_gap: Val::Px(MENU_PANEL_GAP),
                 row_gap: Val::Px(16.0),
                 padding: UiRect::all(Val::Px(MENU_ROOT_PADDING)),
                 overflow: Overflow::scroll_y(),
@@ -229,7 +264,7 @@ fn spawn_main_menu(
                             flex_direction: FlexDirection::Column,
                             align_items: AlignItems::Center,
                             row_gap: Val::Px(14.0),
-                            padding: UiRect::all(Val::Px(24.0)),
+                            padding: UiRect::all(Val::Px(MENU_BUTTON_PANEL_PADDING)),
                             ..default()
                         },
                     ),
@@ -328,7 +363,7 @@ fn menu_button(label: &str, text_color: Color, background: Color, ui_font: &UiFo
         Focusable,
         TabIndex(0),
         Node {
-            width: Val::Px(260.0),
+            width: Val::Px(MENU_BUTTON_WIDTH),
             height: Val::Px(56.0),
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
@@ -348,6 +383,27 @@ fn menu_panels_fit_width(viewport_width: f32) -> bool {
     let usable_width = viewport_width - MENU_ROOT_PADDING * 2.0;
     MENU_TITLE_STAGE_WIDTH.min(usable_width) <= usable_width
         && MENU_BUTTON_PANEL_WIDTH.min(usable_width) <= usable_width
+}
+
+/// Reproduces the root row's flexbox centering math (#232): a `Row` with
+/// `justify_content: Center` distributes leftover space evenly around the
+/// combined width of its children, inside the content box the root's own
+/// `padding` carves out. Returns `(left_margin, right_margin)` from the
+/// viewport edges to the title-stage / button-panel group, so tests can
+/// assert they match instead of trusting the layout engine to agree with a
+/// screenshot by eye.
+///
+/// Only valid while the two panels sit on a single unwrapped row, i.e. above
+/// [`menu_panels_fit_width`]'s breakpoint -- narrower viewports stack the
+/// panels (`flex_wrap: Wrap`) and center each independently instead.
+#[cfg(test)]
+fn menu_row_margins(viewport_width: f32) -> (f32, f32) {
+    let content_width = MENU_TITLE_STAGE_WIDTH + MENU_PANEL_GAP + MENU_BUTTON_PANEL_WIDTH;
+    let usable_width = viewport_width - MENU_ROOT_PADDING * 2.0;
+    let leftover = usable_width - content_width;
+    let left_margin = MENU_ROOT_PADDING + leftover / 2.0;
+    let right_margin = viewport_width - (left_margin + content_width);
+    (left_margin, right_margin)
 }
 
 /// Query filter: buttons whose interaction changed this frame.
@@ -719,6 +775,77 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(scroll_roots, 1, "narrow stacked menu can scroll");
+    }
+
+    /// #232: at common unwrapped desktop widths, the title stage + button
+    /// panel row must sit exactly horizontally centered -- equal margins
+    /// from the viewport's left and right edges. A screenshot-only check
+    /// can't distinguish "centered but visually unbalanced" from "actually
+    /// off-center"; this pins down the box-model math directly instead.
+    #[test]
+    fn menu_panels_center_horizontally_at_common_desktop_widths() {
+        // Ground the formula below in the actually-spawned root `Node`:
+        // `menu_row_margins` only proves the row centers *if* the root is a
+        // full-width `Row` with `justify_content: Center` -- assert that's
+        // really what `spawn_main_menu` produces, so a change to any of
+        // these fields fails this test instead of only a screenshot diff.
+        let mut app = test_app();
+        app.update();
+        let root = app
+            .world_mut()
+            .query_filtered::<(Entity, &Node), With<MainMenuScreen>>()
+            .iter(app.world())
+            .next()
+            .expect("menu root spawned")
+            .0;
+        let node = app.world().get::<Node>(root).expect("root carries a Node");
+        assert_eq!(
+            node.width,
+            Val::Percent(100.0),
+            "root must span the full viewport width"
+        );
+        assert_eq!(node.flex_direction, FlexDirection::Row);
+        assert_eq!(node.justify_content, JustifyContent::Center);
+
+        for viewport_width in [1280.0, 1440.0, 1920.0] {
+            assert!(
+                menu_panels_fit_width(viewport_width),
+                "{viewport_width}px must stay on the single unwrapped row this check assumes"
+            );
+            let (left_margin, right_margin) = menu_row_margins(viewport_width);
+            assert!(
+                (left_margin - right_margin).abs() < 0.01,
+                "menu row not centered at {viewport_width}px: left {left_margin}, right {right_margin}"
+            );
+        }
+    }
+
+    /// #232: every menu button (including the disabled **Continuă** marker,
+    /// which shares [`menu_button`]'s node) must be narrower than the button
+    /// panel's bordered content box, with room to spare -- otherwise the
+    /// button's flat fill paints over the embroidered 9-slice ring the
+    /// panel's padding exists to protect (`crate::theme::merge_panel_padding`,
+    /// #120/#338).
+    #[test]
+    fn button_fill_clears_the_button_panel_border_inset() {
+        // The panel's own spawn code passes `MENU_BUTTON_PANEL_PADDING`,
+        // which `merge_panel_padding` leaves untouched since it already
+        // meets `PANEL_BORDER_INSET` -- assert that invariant explicitly so
+        // this test breaks (loudly) if either constant ever drifts apart.
+        let merged_padding =
+            crate::theme::merge_panel_padding(UiRect::all(Val::Px(MENU_BUTTON_PANEL_PADDING)));
+        assert_eq!(
+            merged_padding,
+            UiRect::all(Val::Px(crate::theme::PANEL_BORDER_INSET)),
+            "button panel padding must equal the border inset exactly"
+        );
+
+        let content_width = MENU_BUTTON_PANEL_WIDTH - 2.0 * crate::theme::PANEL_BORDER_INSET;
+        assert!(
+            MENU_BUTTON_WIDTH < content_width,
+            "button width {MENU_BUTTON_WIDTH} must stay inside the {content_width}px \
+             bordered content box, or its fill overlaps the embroidery"
+        );
     }
 
     #[test]
