@@ -316,8 +316,11 @@ pub fn merge_panel_padding(caller: UiRect) -> UiRect {
 }
 
 /// A `node` decorated with the embroidery 9-slice panel border — the shape
-/// every menu panel, HUD fighter panel, shop row group, and result dialog
-/// uses instead of a flat `BackgroundColor`.
+/// every menu panel, HUD fighter panel, and result dialog uses instead of a
+/// flat `BackgroundColor`. Shop catalog rows deliberately do **not** use this
+/// (#234): the floor below can't fit a compact row without growing it well
+/// past its intended height, so `shop::spawn_item_row` uses its own compact
+/// walnut chrome instead (see that function's doc comment).
 ///
 /// The node's padding is merged with [`PANEL_BORDER_INSET`] (see
 /// [`merge_panel_padding`]) so panel content — text, bars, readouts — always
