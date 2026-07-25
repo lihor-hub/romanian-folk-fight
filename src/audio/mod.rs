@@ -94,8 +94,9 @@ pub fn track_for(state: GameState, boss_fight: bool) -> Option<MusicTrack> {
             MusicTrack::Arena
         }),
         // Nothing has painted a frame yet (#114); silence until the menu is
-        // actually ready to play over.
-        GameState::Loading => None,
+        // actually ready to play over. #231's error overlay is plain HTML,
+        // not a Bevy-audible screen, so it stays silent too.
+        GameState::Loading | GameState::LoadingFailed => None,
         GameState::FightResult | GameState::GameOver | GameState::Victory => None,
     }
 }

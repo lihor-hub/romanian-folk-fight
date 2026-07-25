@@ -35,6 +35,15 @@ pub enum GameState {
     /// [`transition_out_of_loading`].
     #[default]
     Loading,
+    /// #231: entered instead of [`GameState::MainMenu`] when [`UiFont`] or
+    /// [`crate::theme::PanelTexture`] *terminally* fails to load (e.g. a 404
+    /// on the web build) rather than merely still loading. Before this
+    /// state existed, a failed gate asset looked identical to a slow one to
+    /// [`transition_out_of_loading`] — both left `is_loaded_with_dependencies`
+    /// `false` forever — so the game sat in [`GameState::Loading`]
+    /// indefinitely with a blank canvas and no feedback. See
+    /// `show_loading_failure`.
+    LoadingFailed,
     MainMenu,
     CharacterCreation,
     /// The between-fights hub (#129, `docs/navigation-proposal.md`): one
@@ -100,7 +109,10 @@ fn load_ui_font(
 /// screen depends on: [`UiFont`] and [`crate::theme::PanelTexture`]. Moves to
 /// [`GameState::MainMenu`] only once `AssetServer::is_loaded_with_dependencies`
 /// is true for both, so no screen ever spawns text or a panel border with an
-/// unloaded handle (#114).
+/// unloaded handle (#114). If either handle instead *terminally* fails to
+/// load (e.g. a 404 on web, see [`gate_asset_failed`]), moves to
+/// [`GameState::LoadingFailed`] instead of leaving the player on an
+/// indefinite blank screen (#231).
 ///
 /// Headless test apps build without `AssetPlugin` (see [`load_ui_font`] and
 /// `load_panel_texture`'s own `Option<Res<AssetServer>>` tolerance), so
@@ -121,7 +133,107 @@ fn transition_out_of_loading(
     let panel_ready = asset_server.is_loaded_with_dependencies(panel_texture.image.id());
     if font_ready && panel_ready {
         next_state.set(GameState::MainMenu);
+        return;
     }
+    if gate_asset_failed(&asset_server, ui_font.font.id())
+        || gate_asset_failed(&asset_server, panel_texture.image.id())
+    {
+        next_state.set(GameState::LoadingFailed);
+    }
+}
+
+/// True once `id`'s load has *terminally* failed — either the asset itself
+/// (its direct [`LoadState`]) or one of its recursive dependencies. Checking
+/// only `is_loaded_with_dependencies` can't distinguish this from "still
+/// loading": both report `false` for a load that failed just as much as for
+/// one that's merely slow, which is exactly the #231 bug (an eternal,
+/// indistinguishable-from-working `Loading` state on a 404).
+fn gate_asset_failed(
+    asset_server: &AssetServer,
+    id: impl Into<bevy::asset::UntypedAssetId>,
+) -> bool {
+    let id = id.into();
+    asset_server.load_state(id).is_failed()
+        || asset_server.recursive_dependency_load_state(id).is_failed()
+}
+
+/// #231: player-facing surface for [`GameState::LoadingFailed`]. [`UiFont`]
+/// itself may be the asset that failed, so this deliberately does not spawn
+/// any Bevy UI (which would need a working `TextFont` to say anything at
+/// all) — see the wasm32 half below for where the actual message lives.
+///
+/// Native has no equivalent surface to degrade to (no DOM, and the design is
+/// scoped to the web loading gate the issue reports on — see #231); it just
+/// logs so the failure is never silent to a developer running a native
+/// build, without panicking or blocking.
+#[cfg(not(target_arch = "wasm32"))]
+fn show_loading_failure() {
+    error!(
+        "GameState::LoadingFailed (#231): a required asset (UiFont or PanelTexture) failed to load; \
+         the game cannot proceed past the loading gate. On the web build this shows a Romanian \
+         error message with a reload button instead of this log line."
+    );
+}
+
+/// Web half of [`show_loading_failure`] (see its doc comment for why this
+/// can't be ordinary Bevy UI): appends a small, fully self-styled HTML
+/// overlay straight to `<body>`, next to (not replacing) the game canvas.
+/// It only uses the browser's built-in serif font stack — never the bundled
+/// [`UiFont`] — so it renders correctly even when the font itself is the
+/// asset that 404'd.
+///
+/// Retry is a full page reload, wired as a plain inline `onclick` attribute
+/// rather than a `#[wasm_bindgen]`-exported Rust callback: `src/review/mod.rs`
+/// already establishes the precedent of avoiding new JS↔wasm bundling wiring
+/// in this codebase (it polls `localStorage` instead of exporting functions),
+/// and a reload is the simplest *deterministic* recovery here — it re-runs
+/// every fetch from a clean slate exactly like the player's first visit,
+/// rather than trying to resurrect a possibly half-initialized render state
+/// in place. The tradeoff: retry cannot re-check just the one failed asset
+/// without reloading everything else too; see the PR description for why
+/// that's an acceptable simplification for a rare failure path.
+#[cfg(target_arch = "wasm32")]
+fn show_loading_failure() {
+    const OVERLAY_ID: &str = "rff-loading-failed";
+
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Some(document) = window.document() else {
+        return;
+    };
+    // OnEnter(GameState::LoadingFailed) only ever runs once per page load
+    // (nothing transitions back out of this state), but guard against a
+    // double-append anyway rather than relying on that.
+    if document.get_element_by_id(OVERLAY_ID).is_some() {
+        return;
+    }
+    let Some(body) = document.body() else {
+        return;
+    };
+    let Ok(overlay) = document.create_element("div") else {
+        return;
+    };
+    let _ = overlay.set_attribute("id", OVERLAY_ID);
+    let _ = overlay.set_attribute(
+        "style",
+        "position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;\
+         align-items:center;justify-content:center;gap:1.25rem;padding:1rem;\
+         background:#1a1214;color:#e8dcc8;font-family:Georgia,'Times New Roman',serif;\
+         text-align:center;",
+    );
+    overlay.set_inner_html(
+        "<h1 style=\"margin:0;font-size:clamp(1.75rem,6vw,3rem);color:#e8dcc8;\">\
+         Romanian Folk Fight</h1>\
+         <p style=\"margin:0;max-width:34rem;font-size:1.05rem;line-height:1.5;\">\
+         Nu am putut încărca un fișier necesar jocului (un font sau o imagine). \
+         Verifică-ți conexiunea la internet și încearcă din nou.</p>\
+         <button type=\"button\" onclick=\"location.reload()\" style=\"\
+         font:inherit;font-size:1.05rem;padding:0.6rem 1.5rem;border-radius:4px;\
+         border:1px solid #c9a227;background:#7a1f1f;color:#e8dcc8;cursor:pointer;\">\
+         Reîncarcă pagina</button>",
+    );
+    let _ = body.append_child(&overlay);
 }
 
 /// Live window size plus the derived mobile/desktop layout choice (#31).
@@ -241,6 +353,7 @@ impl Plugin for CorePlugin {
                 Update,
                 transition_out_of_loading.run_if(in_state(GameState::Loading)),
             )
+            .add_systems(OnEnter(GameState::LoadingFailed), show_loading_failure)
             .add_systems(Update, (track_viewport_size, letterbox_camera).chain())
             // Every screen consumes the theme module's palette, spacing, and
             // panel texture, so it rides along with the other core resources
@@ -456,13 +569,12 @@ mod tests {
         assert_eq!(*state.get(), GameState::MainMenu);
     }
 
-    /// With a real `AssetServer`, the gate must wait for *both* the font and
-    /// the panel texture before ever entering `MainMenu` — one handle stuck
-    /// (here, deliberately pointed at a path that will never resolve) must
-    /// hold the whole gate, even while the other handle finishes loading.
-    /// Once both handles are backed by real, loadable assets, the gate opens.
-    #[test]
-    fn loading_transitions_to_main_menu_only_once_both_handles_are_loaded() {
+    /// A real `AssetServer` plus a headless-safe PNG loader, wired the way
+    /// the `loading_*` tests below need it: both `UiFont` and `PanelTexture`
+    /// load for real (unlike [`test_app`], which has no `AssetPlugin` at all
+    /// and so always falls straight through — see
+    /// `headless_app_without_asset_plugin_reaches_main_menu`).
+    fn loading_test_app() -> App {
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
@@ -480,6 +592,44 @@ mod tests {
         app.register_asset_loader(bevy::image::ImageLoader::new(
             bevy::image::CompressedImageFormats::NONE,
         ));
+        app
+    }
+
+    /// With a real `AssetServer`, the gate must wait for *both* the font and
+    /// the panel texture (`AssetServer::is_loaded_with_dependencies`) before
+    /// ever entering `MainMenu` — the ordinary, everything-succeeds path.
+    /// #231's failure path (a gate asset that never resolves) has its own
+    /// test below.
+    #[test]
+    fn loading_transitions_to_main_menu_once_both_real_assets_load() {
+        let mut app = loading_test_app();
+        let mut reached_main_menu = false;
+        for _ in 0..500 {
+            app.update();
+            if *app.world().resource::<State<GameState>>().get() == GameState::MainMenu {
+                reached_main_menu = true;
+                break;
+            }
+        }
+        assert!(
+            reached_main_menu,
+            "loading must reach MainMenu once both real gate assets report loaded"
+        );
+    }
+
+    /// #231: a *terminally failed* gate asset (here, a font path that can
+    /// never resolve — standing in for a 404 on the web build) must not look
+    /// identical to "still loading" forever. Before this fix, both left
+    /// `is_loaded_with_dependencies` `false`, so the game stayed on a blank
+    /// `GameState::Loading` screen indefinitely with no feedback. The gate
+    /// must instead move to `GameState::LoadingFailed`, and then *stay*
+    /// there — nothing here silently retries or self-heals; recovery is an
+    /// explicit action outside this state machine (a full page reload on
+    /// web, see `show_loading_failure`'s doc comment), not some system
+    /// quietly polling for the file to reappear.
+    #[test]
+    fn loading_enters_loading_failed_when_a_gate_asset_terminally_fails() {
+        let mut app = loading_test_app();
         // PreStartup loads the real bundled font + panel texture.
         app.update();
         assert_eq!(
@@ -488,10 +638,8 @@ mod tests {
             "must not race ahead of the asset fetches on the very first frame"
         );
 
-        // Break just the font handle: a path that can never resolve keeps
-        // `is_loaded_with_dependencies` false forever, so even once the
-        // (still-genuine) panel texture finishes loading, the gate must
-        // stay shut.
+        // Break the font handle: a path that can never resolve fails,
+        // standing in for a 404 on web.
         {
             let asset_server = app.world().resource::<AssetServer>().clone();
             let mut ui_font = app.world_mut().resource_mut::<UiFont>();
@@ -504,33 +652,38 @@ mod tests {
         // transition is only *pending* — so discard any queued transition
         // now; from here on the gate re-evaluates against the broken font.
         *app.world_mut().resource_mut::<NextState<GameState>>() = NextState::Unchanged;
-        for _ in 0..30 {
+
+        let mut reached_loading_failed = false;
+        for _ in 0..100 {
             app.update();
+            if *app.world().resource::<State<GameState>>().get() == GameState::LoadingFailed {
+                reached_loading_failed = true;
+                break;
+            }
         }
-        assert_eq!(
-            *app.world().resource::<State<GameState>>().get(),
-            GameState::Loading,
-            "one unresolved handle must block the transition even though the other loaded"
+        assert!(
+            reached_loading_failed,
+            "a terminally failed gate asset must move the game to LoadingFailed, not leave it \
+             stuck in an indistinguishable-from-working Loading forever (#231)"
         );
 
-        // Repair the font handle with the real asset; now both are genuine
-        // loadable assets, so the gate must eventually open.
+        // Repairing the handle afterwards must NOT silently pull the game
+        // back out of LoadingFailed: `transition_out_of_loading` only runs
+        // `.run_if(in_state(GameState::Loading))` (see `CorePlugin::build`),
+        // so nothing is polling asset state anymore once this state is
+        // entered.
         {
             let asset_server = app.world().resource::<AssetServer>().clone();
             let mut ui_font = app.world_mut().resource_mut::<UiFont>();
             ui_font.font = asset_server.load(UI_FONT_PATH);
         }
-        let mut reached_main_menu = false;
-        for _ in 0..500 {
+        for _ in 0..20 {
             app.update();
-            if *app.world().resource::<State<GameState>>().get() == GameState::MainMenu {
-                reached_main_menu = true;
-                break;
-            }
         }
-        assert!(
-            reached_main_menu,
-            "loading must reach MainMenu once both handles report loaded"
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::LoadingFailed,
+            "LoadingFailed must not silently self-heal once entered"
         );
     }
 
