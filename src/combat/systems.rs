@@ -18,30 +18,16 @@ use crate::ui_widgets::focus::{FocusNavigationPlugin, FocusNavigationSet};
 use super::action_palette;
 use super::actions::ExtraDescriptors;
 use super::ai::{self, AiProfile};
-use super::engine::{self, CombatAction, CombatEvent, DuelDistance};
+use super::engine::{self, CombatAction, CombatEvent};
 use super::hud;
 use super::pause::{self, PauseState};
+use super::position::DuelPositions;
+
+pub use super::position::CombatSide;
 
 /// Unity-style combat cooldown: slightly longer than the current 0.4s attack
 /// clip, so a readable pose lands before the next fighter acts.
 pub const PRESENTATION_DELAY_SECONDS: f32 = 0.5;
-
-/// The two sides of a duel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CombatSide {
-    Player,
-    Enemy,
-}
-
-impl CombatSide {
-    /// The other side of the duel.
-    pub fn opponent(self) -> Self {
-        match self {
-            Self::Player => Self::Enemy,
-            Self::Enemy => Self::Player,
-        }
-    }
-}
 
 /// Turn state of the running duel. Inserted once both fighters exist (the
 /// faster `agilitate` opens, ties to the player) and removed when the fight
@@ -49,6 +35,9 @@ impl CombatSide {
 ///
 /// The blocking flags live here rather than on the fighters because they are
 /// duel state: they expire on the owner's turn and reset between fights.
+/// The fighters' spacing is *not* here — the authoritative geometry is the
+/// [`DuelPositions`] resource (#159), reset by the arena on fight entry and
+/// mutated only through the resolver.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CombatTurn {
     /// Whose action is being awaited.
@@ -59,8 +48,6 @@ pub struct CombatTurn {
     pub player_blocking: bool,
     /// Whether the enemy is guarding since their last turn.
     pub enemy_blocking: bool,
-    /// Persistent relative spacing between the fighters.
-    pub distance: DuelDistance,
 }
 
 /// Seeded RNG that drives every combat roll; the engine never touches
@@ -108,7 +95,7 @@ pub struct PlayerActionEvent(pub CombatAction);
 
 /// A combat event that occurred, tagged with who acted. The HUD log,
 /// announcer, and FX issues consume these.
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Message, Debug, Clone, Copy, PartialEq)]
 pub struct CombatLogEvent {
     /// Who performed the action that produced this event.
     pub actor: CombatSide,
@@ -132,6 +119,11 @@ impl Plugin for CombatPlugin {
             // observed by them this same `Update` pass, not one frame later —
             // the same reasoning `crate::flow::FlowIntentEmission` documents.
             .add_plugins(FocusNavigationPlugin)
+            // Idempotent with ArenaPlugin's registration: the authoritative
+            // duel geometry always exists, even in headless combat tests.
+            // The arena resets it to the starting placement on fight entry
+            // (ordered before its fighter spawn, which reads it).
+            .init_resource::<DuelPositions>()
             .init_resource::<ExtraDescriptors>()
             .init_resource::<action_palette::PhonePaletteState>()
             .init_resource::<action_palette::ActionPictograms>()
@@ -276,7 +268,6 @@ fn init_turn(
         over: false,
         player_blocking: false,
         enemy_blocking: false,
-        distance: DuelDistance::starting(),
     });
 }
 
@@ -323,10 +314,12 @@ fn player_input(
 
 /// Applies the player's chosen action; any extra queued actions this turn are
 /// dropped.
+#[allow(clippy::too_many_arguments)]
 fn resolve_player_action(
     mut actions: MessageReader<PlayerActionEvent>,
     turn: Option<ResMut<CombatTurn>>,
     rng: Option<ResMut<CombatRng>>,
+    mut positions: ResMut<DuelPositions>,
     presentation: Option<ResMut<CombatPresentation>>,
     mut log: MessageWriter<CombatLogEvent>,
     mut player: PlayerQuery,
@@ -356,6 +349,7 @@ fn resolve_player_action(
             player,
             enemy,
             &mut turn,
+            &mut positions,
             &mut rng,
             &mut log,
         );
@@ -369,9 +363,11 @@ fn resolve_player_action(
 /// fighters and the enemy's [`AiProfile`] (default aggression if the spawner
 /// did not attach one). Waits for the presentation gate after player actions,
 /// while drawing from the same seeded RNG as the resolver.
+#[allow(clippy::too_many_arguments)]
 fn enemy_turn(
     turn: Option<ResMut<CombatTurn>>,
     rng: Option<ResMut<CombatRng>>,
+    mut positions: ResMut<DuelPositions>,
     presentation: Option<ResMut<CombatPresentation>>,
     mut log: MessageWriter<CombatLogEvent>,
     mut player: PlayerQuery,
@@ -400,13 +396,15 @@ fn enemy_turn(
         warn!("no unique enemy AiProfile ({error}); using the default");
         AiProfile::default()
     });
-    let action = ai::choose_action_at_distance(&me, &foe, &profile, turn.distance, &mut rng.0);
+    let action =
+        ai::choose_action_at_separation(&me, &foe, &profile, positions.separation(), &mut rng.0);
     apply_action(
         action,
         CombatSide::Enemy,
         enemy,
         player,
         &mut turn,
+        &mut positions,
         &mut rng,
         &mut log,
     );
@@ -444,12 +442,14 @@ fn snapshot(fighter: &FighterItem, blocking: bool) -> engine::FighterState {
 ///
 /// The turn passes even on an [`CombatEvent::OutOfStamina`] no-op so a
 /// fighter can never wedge the duel by re-trying a strike forever.
+#[allow(clippy::too_many_arguments)]
 fn apply_action(
     action: CombatAction,
     actor_side: CombatSide,
     actor: FighterItem,
     target: FighterItem,
     turn: &mut CombatTurn,
+    positions: &mut DuelPositions,
     rng: &mut CombatRng,
     log: &mut MessageWriter<CombatLogEvent>,
 ) {
@@ -462,11 +462,12 @@ fn apply_action(
     let (_, _, mut actor_hp, mut actor_stamina) = actor;
     let (_, _, mut target_hp, mut target_stamina) = target;
 
-    let events = engine::resolve_action_at_distance(
+    let events = engine::resolve_action_positioned(
         &mut actor_state,
         &mut target_state,
         action,
-        &mut turn.distance,
+        positions,
+        actor_side,
         &mut rng.0,
     );
 
@@ -669,8 +670,12 @@ mod tests {
                 over: false,
                 player_blocking: false,
                 enemy_blocking: false,
-                distance: DuelDistance::starting(),
             }
+        );
+        assert_eq!(
+            *app.world().resource::<DuelPositions>(),
+            DuelPositions::starting(),
+            "the duel opens at the starting placement"
         );
         assert_eq!(enemy_pools(&mut app), (70, 40), "enemy untouched");
     }
@@ -809,12 +814,27 @@ mod tests {
         assert_eq!(player_pools(&mut app), (90, 35), "heavy strike costs 15");
     }
 
+    fn positions(app: &App) -> DuelPositions {
+        *app.world().resource::<DuelPositions>()
+    }
+
     #[cfg(debug_assertions)]
     #[test]
-    fn movement_actions_update_distance_and_pass_the_turn() {
+    fn movement_actions_update_positions_and_pass_the_turn() {
+        use crate::combat::position::{MIN_SEPARATION, STEP_DISTANCE};
+
         let mut app = test_app();
         press_vs_resting_enemy(&mut app, KeyCode::Digit6);
-        assert_eq!(turn(&app).distance, DuelDistance::NEAR);
+        assert_eq!(
+            positions(&app).separation(),
+            MIN_SEPARATION + STEP_DISTANCE,
+            "the step back opened exactly one step"
+        );
+        assert_eq!(
+            positions(&app).enemy_x,
+            DuelPositions::starting().enemy_x,
+            "only the retreating player moved"
+        );
         assert_eq!(
             turn(&app).side,
             CombatSide::Player,
@@ -822,23 +842,26 @@ mod tests {
         );
 
         press_vs_resting_enemy(&mut app, KeyCode::Digit5);
-        assert_eq!(turn(&app).distance, DuelDistance::CLOSE);
+        assert_eq!(positions(&app).separation(), MIN_SEPARATION);
+        assert!(positions(&app).in_melee_reach());
         assert_eq!(enemy_pools(&mut app).0, 70, "movement deals no damage");
     }
 
     #[cfg(debug_assertions)]
     #[test]
     fn enemy_advances_back_after_the_player_opens_distance() {
+        use crate::combat::position::{MIN_SEPARATION, STEP_DISTANCE};
+
         let mut app = test_app();
         press(&mut app, KeyCode::Digit6);
-        assert_eq!(turn(&app).distance, DuelDistance::NEAR);
+        assert_eq!(positions(&app).separation(), MIN_SEPARATION + STEP_DISTANCE);
         assert_eq!(turn(&app).side, CombatSide::Enemy);
 
         advance_presentation(&mut app);
         assert_eq!(
-            turn(&app).distance,
-            DuelDistance::CLOSE,
-            "the player steps back to near, then the ready enemy steps forward"
+            positions(&app).separation(),
+            MIN_SEPARATION,
+            "the player steps back out of reach, then the ready enemy steps forward"
         );
         assert_eq!(turn(&app).side, CombatSide::Player);
         assert_eq!(player_pools(&mut app), (90, 50));
@@ -921,6 +944,76 @@ mod tests {
         assert!(turn(&app).over);
     }
 
+    /// #159's transform-synchronization acceptance, end to end through the
+    /// real ECS schedule: after every settled action of one deterministic
+    /// scripted fight, each fighter's rendered `Transform.translation.x`
+    /// equals the authoritative combat position, and the positions stay
+    /// ordered and inside the arena across every action — including the
+    /// wall pair-slide and both movement clamps. Run with `--nocapture` to
+    /// print the rule-vs-rendered trace.
+    #[test]
+    fn a_scripted_fight_keeps_rendered_transforms_equal_to_rule_positions() {
+        use crate::combat::position::ARENA_BOUNDS;
+
+        fn fighter_x<M: Component>(app: &mut App) -> f32 {
+            app.world_mut()
+                .query_filtered::<&Transform, With<M>>()
+                .single(app.world())
+                .expect("fighter exists")
+                .translation
+                .x
+        }
+
+        let mut app = test_app();
+        let script = [
+            CombatAction::StepBack,    // 250 apart, only the player moved
+            CombatAction::StepBack,    // wall pair-slide: 360 apart at the left wall
+            CombatAction::StepBack,    // clamped no-op at MAX_SEPARATION
+            CombatAction::LeapForward, // 220 back in: toe-to-toe again
+            CombatAction::QuickStrike, // melee reachable at the equivalent separation
+            CombatAction::StepForward, // clamped no-op at MIN_SEPARATION
+        ];
+        println!("turn | action        | rule player/enemy x | rendered player/enemy x");
+        for (turn, &action) in script.iter().enumerate() {
+            drain_enemy_stamina(&mut app);
+            app.world_mut().write_message(PlayerActionEvent(action));
+            app.update();
+            advance_presentation(&mut app); // settles the 0.45s footwork/lunge
+            advance_presentation(&mut app); // releases + settles the enemy reply
+            let rule = *app.world().resource::<DuelPositions>();
+            let rendered = (
+                fighter_x::<PlayerFighter>(&mut app),
+                fighter_x::<EnemyFighter>(&mut app),
+            );
+            println!(
+                "{turn:4} | {action:?} | {:.1} / {:.1} | {:.1} / {:.1}",
+                rule.player_x, rule.enemy_x, rendered.0, rendered.1
+            );
+            assert_eq!(
+                rendered,
+                (rule.player_x, rule.enemy_x),
+                "turn {turn} ({action:?}): rendered transforms must equal the rule positions"
+            );
+            assert!(
+                rule.player_x < rule.enemy_x,
+                "turn {turn}: ordering holds ({rule:?})"
+            );
+            assert!(
+                ARENA_BOUNDS.contains(rule.player_x) && ARENA_BOUNDS.contains(rule.enemy_x),
+                "turn {turn}: both fighters stay inside the arena ({rule:?})"
+            );
+        }
+        let final_positions = *app.world().resource::<DuelPositions>();
+        assert!(
+            final_positions.in_melee_reach(),
+            "the leap brought the duel back into melee reach"
+        );
+        assert!(
+            enemy_pools(&mut app).0 < 70,
+            "the closing quick strike landed at the equivalent separation"
+        );
+    }
+
     #[test]
     fn leaving_the_fight_drops_the_combat_resources() {
         let mut app = test_app();
@@ -982,7 +1075,12 @@ mod tests {
         assert_eq!(
             turn(&full_motion),
             turn(&reduced_motion),
-            "turn side, block flags, over flag, and duel distance all match"
+            "turn side, block flags, and over flag all match"
+        );
+        assert_eq!(
+            positions(&full_motion),
+            positions(&reduced_motion),
+            "the authoritative duel positions match bit for bit"
         );
     }
 }

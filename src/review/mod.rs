@@ -97,9 +97,10 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
 use crate::arena::fx::ParallaxLayer;
-use crate::arena::{ArenaStaging, FIGHTER_SIZE, staged_fighter_transform};
+use crate::arena::{FIGHTER_SIZE, staged_fighter_transform};
 use crate::character::material::{HybridCharacterMaterial, PendingHybridCharacterMaterial};
 use crate::character::{EnemyFighter, PlayerFighter, Stamina};
+use crate::combat::DuelPositions;
 use crate::combat::action_palette::{
     ActionButton, ActionCostOrReason, CategoryButton, PhonePaletteState,
 };
@@ -350,7 +351,7 @@ impl Plugin for ReviewPlugin {
             // publish_motion_state/publish_palette_state read the staged
             // fighter positions; idempotent with ArenaPlugin's own
             // registration.
-            .init_resource::<ArenaStaging>()
+            .init_resource::<DuelPositions>()
             .add_message::<PlayerActionEvent>()
             .add_systems(PreStartup, prefetch_paper_doll_gear)
             .add_systems(
@@ -888,8 +889,9 @@ fn publish_paper_doll_state(
 
 /// Everything the `reduced-motion-fight` scenario (#200) needs to assert the
 /// reduced-motion treatment precisely: both fighters' root transform (and
-/// their staged rest positions from [`ArenaStaging`], so the scenario can
-/// compute an exact offset without duplicating `arena`'s staging math), the
+/// their authoritative rest positions from [`DuelPositions`], so the
+/// scenario can compute an exact offset without duplicating the combat
+/// position math), the
 /// camera translation (screen shake's target), and every parallax layer's
 /// rest/current x. Published under [`REVIEW_MOTION_KEY`] every frame the
 /// arena is up.
@@ -919,7 +921,7 @@ type EnemyMotionQuery<'w, 's> = Query<
 /// scenario can't mistake a stale snapshot from a previous fight for the
 /// current one).
 fn publish_motion_state(
-    staging: Res<ArenaStaging>,
+    positions: Res<DuelPositions>,
     players: Query<&Transform, (With<PlayerFighter>, Without<EnemyFighter>)>,
     enemies: EnemyMotionQuery,
     cameras: Query<&Transform, With<WorldCamera>>,
@@ -935,9 +937,9 @@ fn publish_motion_state(
         .unwrap_or((0.0, 0.0));
     let snapshot = MotionSnapshot {
         player_x: player.translation.x,
-        player_staged_x: staging.player_x,
+        player_staged_x: positions.player_x,
         enemy_x: enemy.translation.x,
-        enemy_staged_x: staging.enemy_x,
+        enemy_staged_x: positions.enemy_x,
         camera_x,
         camera_y,
         parallax: parallax
@@ -1104,7 +1106,7 @@ struct PhonePaletteSnapshot {
 
 /// #276's deterministic proxy for "the area a fighter's body is readable
 /// in": a world-space box centered on the fighter's *staged* position
-/// (`arena::ArenaStaging`, the per-event-sequence-deterministic rest x)
+/// (`combat::DuelPositions`, the per-action-sequence-deterministic rest x)
 /// sized to `arena::FIGHTER_SIZE`, projected to full-window logical screen
 /// space through the same letterbox projection every other geometry fact in
 /// this module uses. Deliberately built from the staged rest position
@@ -1193,7 +1195,7 @@ fn focus_snapshot(
 #[allow(clippy::too_many_arguments)]
 fn publish_palette_state(
     letterbox: Option<Res<LetterboxRect>>,
-    staging: Res<ArenaStaging>,
+    positions: Res<DuelPositions>,
     viewport: Res<ViewportInfo>,
     phone_state: Option<Res<PhonePaletteState>>,
     input_focus: Res<InputFocus>,
@@ -1268,8 +1270,8 @@ fn publish_palette_state(
         let window = Rect::from_corners(Vec2::ZERO, Vec2::new(viewport.width, viewport.height));
         let fits_in_window = window.contains(extent.min) && window.contains(extent.max);
         let fighter_rects = [
-            fighter_readable_rect(staging.player_x, *letterbox),
-            fighter_readable_rect(staging.enemy_x, *letterbox),
+            fighter_readable_rect(positions.player_x, *letterbox),
+            fighter_readable_rect(positions.enemy_x, *letterbox),
         ];
         let overlaps_fighter_region = all_rects.iter().any(|target| {
             fighter_rects
@@ -1737,7 +1739,7 @@ fn publish_current_screen(state: Res<State<GameState>>) {
 /// cost, QuickStrike otherwise. Writes the same
 /// `combat::systems::PlayerActionEvent` the HUD's action buttons write, so
 /// this is deterministic *input* seeding (per the issue's seam contract),
-/// never a bypass of `combat::engine::resolve_action_at_distance`. Combined
+/// never a bypass of `combat::engine::resolve_action_positioned`. Combined
 /// with a `seedCombat`-fixed [`CombatRng`] and a fixed hero preset/opponent,
 /// this makes an entire duel's outcome fully reproducible -- see
 /// `gold_journey_seed_wins_the_first_duel` below for the exact pinned seed
@@ -2663,7 +2665,8 @@ mod tests {
     mod gold_journey_seed {
         use crate::character::{Attributes, stats};
         use crate::combat::ai::{self, AiProfile};
-        use crate::combat::engine::{self, CombatAction, CombatEvent, DuelDistance, FighterState};
+        use crate::combat::engine::{self, CombatAction, CombatEvent, FighterState};
+        use crate::combat::position::{CombatSide, DuelPositions};
         use rand::SeedableRng;
         use rand_chacha::ChaCha8Rng;
 
@@ -2724,7 +2727,7 @@ mod tests {
             let mut player = player();
             let (mut enemy, profile) = opponent();
             let mut rng = ChaCha8Rng::seed_from_u64(GOLD_JOURNEY_SEED);
-            let mut distance = DuelDistance::starting();
+            let mut positions = DuelPositions::starting();
             assert!(
                 engine::player_acts_first(&player.attributes, &enemy.attributes),
                 "Voinicul (agilitate 3) must open the round against Hoț de codru (agilitate 2)"
@@ -2732,11 +2735,12 @@ mod tests {
 
             for turn in 0..MAX_TURNS {
                 let action = player_policy(&player);
-                let events = engine::resolve_action_at_distance(
+                let events = engine::resolve_action_positioned(
                     &mut player,
                     &mut enemy,
                     action,
-                    &mut distance,
+                    &mut positions,
+                    CombatSide::Player,
                     &mut rng,
                 );
                 if events.contains(&CombatEvent::Defeated) {
@@ -2746,13 +2750,19 @@ mod tests {
                     );
                     return;
                 }
-                let action =
-                    ai::choose_action_at_distance(&enemy, &player, &profile, distance, &mut rng);
-                let events = engine::resolve_action_at_distance(
+                let action = ai::choose_action_at_separation(
+                    &enemy,
+                    &player,
+                    &profile,
+                    positions.separation(),
+                    &mut rng,
+                );
+                let events = engine::resolve_action_positioned(
                     &mut enemy,
                     &mut player,
                     action,
-                    &mut distance,
+                    &mut positions,
+                    CombatSide::Enemy,
                     &mut rng,
                 );
                 assert!(

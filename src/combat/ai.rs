@@ -11,9 +11,10 @@ use rand::{Rng, RngExt as _};
 use crate::character::stats;
 
 use super::engine::{
-    CombatAction, DuelDistance, FighterState, HEAVY_DAMAGE_MULTIPLIER, HEAVY_STRIKE_COST,
-    NORMAL_STRIKE_COST, QUICK_STRIKE_COST, roll,
+    CombatAction, FighterState, HEAVY_DAMAGE_MULTIPLIER, HEAVY_STRIKE_COST, NORMAL_STRIKE_COST,
+    QUICK_STRIKE_COST, roll,
 };
+use super::position::{MIN_SEPARATION, STEP_DISTANCE, in_melee_reach};
 
 /// Per-archetype tuning knob for the enemy decision policy, attached as a
 /// component to enemy fighters. The folklore roster issue tunes it per
@@ -63,24 +64,27 @@ pub fn choose_action(
     profile: &AiProfile,
     rng: &mut impl Rng,
 ) -> CombatAction {
-    choose_action_at_distance(me, foe, profile, DuelDistance::starting(), rng)
+    choose_action_at_separation(me, foe, profile, MIN_SEPARATION, rng)
 }
 
-/// Chooses an action while accounting for the duel's current spacing.
-pub fn choose_action_at_distance(
+/// Chooses an action while accounting for the duel's current spacing, given
+/// as the derived world-unit separation between the two fighters.
+pub fn choose_action_at_separation(
     me: &FighterState,
     foe: &FighterState,
     profile: &AiProfile,
-    distance: DuelDistance,
+    separation: f32,
     rng: &mut impl Rng,
 ) -> CombatAction {
     // 1. Cannot pay for any strike: recover.
     if me.stamina < QUICK_STRIKE_COST {
         return CombatAction::Rest;
     }
-    // 2. Out of reach: close the gap instead of wasting a melee strike.
-    if !distance.in_melee_reach() {
-        return if distance == DuelDistance::FAR {
+    // 2. Out of reach: close the gap instead of wasting a melee strike —
+    //    leaping only when a single step would still leave the foe out of
+    //    reach, otherwise the measured step suffices.
+    if !in_melee_reach(separation) {
+        return if !in_melee_reach(separation - STEP_DISTANCE) {
             CombatAction::LeapForward
         } else {
             CombatAction::StepForward
@@ -250,21 +254,26 @@ mod tests {
 
     #[test]
     fn out_of_reach_enemy_advances_before_attacking() {
+        // One step out of reach: a measured step suffices. Two steps out:
+        // only a leap closes it — the old NEAR/FAR movement policy, now
+        // expressed over the derived world-unit separation.
+        let one_step_out = MIN_SEPARATION + STEP_DISTANCE;
+        let two_steps_out = MIN_SEPARATION + 2.0 * STEP_DISTANCE;
         for seed in 0..20 {
-            let action = choose_action_at_distance(
+            let action = choose_action_at_separation(
                 &fighter(),
                 &fighter(),
                 &profile(1.0),
-                DuelDistance::NEAR,
+                one_step_out,
                 &mut rng(seed),
             );
             assert_eq!(action, CombatAction::StepForward, "seed {seed}: near gap");
 
-            let action = choose_action_at_distance(
+            let action = choose_action_at_separation(
                 &fighter(),
                 &fighter(),
                 &profile(1.0),
-                DuelDistance::FAR,
+                two_steps_out,
                 &mut rng(seed),
             );
             assert_eq!(action, CombatAction::LeapForward, "seed {seed}: far gap");

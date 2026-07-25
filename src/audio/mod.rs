@@ -497,6 +497,26 @@ mod tests {
         }
     }
 
+    /// Positions at the old FAR band's world-unit separation and back in
+    /// reach one step later — payload fixtures for the Moved case below.
+    fn far_positions() -> crate::combat::DuelPositions {
+        let mut positions = crate::combat::DuelPositions::starting();
+        positions.retreat(
+            crate::combat::CombatSide::Player,
+            crate::combat::position::LEAP_DISTANCE,
+        );
+        positions
+    }
+
+    fn near_positions() -> crate::combat::DuelPositions {
+        let mut positions = far_positions();
+        positions.advance(
+            crate::combat::CombatSide::Player,
+            crate::combat::position::STEP_DISTANCE,
+        );
+        positions
+    }
+
     #[test]
     fn every_combat_event_maps_to_an_sfx() {
         // Exhaustive by construction: `sfx_for` matches without a wildcard,
@@ -510,8 +530,8 @@ mod tests {
             (CombatEvent::Rested { amount: 2 }, Sfx::Rest),
             (
                 CombatEvent::Moved {
-                    from: crate::combat::DuelDistance::FAR,
-                    to: crate::combat::DuelDistance::NEAR,
+                    from: far_positions(),
+                    to: near_positions(),
                 },
                 Sfx::Whoosh,
             ),

@@ -3,7 +3,7 @@
 //! table ([`FighterClip`]), the sprite-sheet handles and readiness guard
 //! ([`FighterSpriteSheets`]), and the wiring that turns [`CombatLogEvent`]s
 //! into attack / hurt / KO / footwork animations. Movement events update
-//! the persistent [`ArenaStaging`] positions and tween the fighters to
+//! the authoritative [`DuelPositions`] carried by movement events and tween the fighters to
 //! their new staged x — fighters never return to fixed anchors — while the
 //! attack lunge arcs out from and back to the attacker's current staged x.
 
@@ -19,7 +19,7 @@ use crate::cutout::{
 use crate::roster::LADDER;
 use crate::settings::AccessibilityPreferences;
 
-use super::ArenaStaging;
+use crate::combat::DuelPositions;
 
 /// Side length of one sprite-sheet frame in pixels.
 pub const FRAME_SIZE: u32 = 128;
@@ -252,11 +252,11 @@ fn load_fighter_sheets(
 }
 
 /// Attack lunge of one fighter: an out-and-back arc from the fighter's
-/// *current* staged x towards the opponent's, lasting exactly one attack
-/// clip. Only the side is stored — the endpoints are read live from
-/// [`ArenaStaging`] every frame, so a mid-lunge pair slide (see
-/// [`ArenaStaging::apply_move`]) never strands the fighter on a stale
-/// return position.
+/// *current* authoritative x towards the opponent's, lasting exactly one
+/// attack clip. Only the side is stored — the endpoints are read live from
+/// the [`DuelPositions`] resource every frame, so a mid-lunge wall
+/// pair-slide (see [`DuelPositions::retreat`]) never strands the fighter on
+/// a stale return position.
 #[derive(Component, Debug, Clone)]
 pub struct AttackLunge {
     side: CombatSide,
@@ -299,8 +299,8 @@ pub fn lunge_x(from_x: f32, toward_x: f32, progress: f32, reduced_motion: bool) 
     from_x + delta * arc
 }
 
-/// One fighter's movement tween from its old staged x to its new one.
-/// The staged positions themselves are combat truth (see [`ArenaStaging`]);
+/// One fighter's movement tween from its old authoritative x to its new
+/// one (both carried by the `Moved` event's [`DuelPositions`] snapshots);
 /// this component only paces the transition — the fighter always ends at
 /// `to_x` and never returns to where it started.
 #[derive(Component, Debug, Clone)]
@@ -311,7 +311,7 @@ struct FootworkStep {
 }
 
 impl FootworkStep {
-    /// A [`FOOTWORK_DURATION`] tween between two staged positions.
+    /// A [`FOOTWORK_DURATION`] tween between two authoritative positions.
     fn new(from_x: f32, to_x: f32) -> Self {
         Self {
             from_x,
@@ -330,7 +330,7 @@ impl FootworkStep {
     }
 }
 
-/// X of a fighter tweening between staged positions at `progress` in
+/// X of a fighter tweening between authoritative positions at `progress` in
 /// `0..=1`: a cubic ease-out from `from_x` landing exactly on `to_x`.
 /// Position is semantic state, not decoration, so reduced motion (#200)
 /// does not shrink the displacement — it replaces the tween with a
@@ -541,13 +541,13 @@ fn set_cutout_pose(
 /// Maps this frame's combat events onto clips: any strike attempt plays the
 /// attacker's attack (with a lunge), miss/reach failures make the defender
 /// avoid, Hit/Crit/Blocked plays the defender's reaction, and Defeated plays
-/// the defender's KO (which then freezes). Movement events additionally
-/// advance [`ArenaStaging`] and tween the actor (and, on a pair slide, the
-/// opponent) to the new staged x.
+/// the defender's KO (which then freezes). Movement events tween the actor
+/// (and, on a wall pair-slide, the opponent) to the authoritative x carried
+/// by the event — the [`DuelPositions`] resource itself was already updated
+/// by the combat resolver; presentation only paces the transition.
 fn animate_combat_events(
     mut commands: Commands,
     mut events: MessageReader<CombatLogEvent>,
-    mut staging: ResMut<ArenaStaging>,
     mut players: SideAnimation<PlayerFighter, EnemyFighter>,
     mut enemies: SideAnimation<EnemyFighter, PlayerFighter>,
 ) {
@@ -610,12 +610,14 @@ fn animate_combat_events(
                 }
             }
             CombatEvent::Rested { .. } | CombatEvent::OutOfStamina => {}
-            CombatEvent::Moved { to, .. } => {
-                // The staging update is combat truth and applies regardless
-                // of presentation state; the tweens below only pace it.
-                let old_actor_x = staging.x_of(actor);
-                let old_opponent_x = staging.x_of(actor.opponent());
-                staging.apply_move(actor, to);
+            CombatEvent::Moved { from, to } => {
+                // The event's snapshots are combat truth (the resolver has
+                // already moved the authoritative positions); the tweens
+                // below only pace the fighters onto them.
+                let old_actor_x = from.x_of(actor);
+                let new_actor_x = to.x_of(actor);
+                let old_opponent_x = from.x_of(actor.opponent());
+                let new_opponent_x = to.x_of(actor.opponent());
                 let clip = match action {
                     CombatAction::StepBack => FighterClip::StepBack,
                     CombatAction::StepForward | CombatAction::LeapForward => {
@@ -634,12 +636,11 @@ fn animate_combat_events(
                     set_cutout_pose(&mut commands, entity, pose_kind, &mut pose);
                     commands
                         .entity(entity)
-                        .insert(FootworkStep::new(old_actor_x, staging.x_of(actor)));
+                        .insert(FootworkStep::new(old_actor_x, new_actor_x));
                 }
                 // A wall hit slides both fighters (see
-                // `ArenaStaging::apply_move`); the standing opponent glides
+                // `DuelPositions::retreat`); the standing opponent glides
                 // to its new x with the same tween, no clip change.
-                let new_opponent_x = staging.x_of(actor.opponent());
                 if new_opponent_x != old_opponent_x
                     && let Ok((entity, _, _, _, _)) = defender
                 {
@@ -1044,8 +1045,8 @@ fn idle_breath_delta(kind: crate::cutout::CutoutPartKind, phase: f32) -> Jointed
 }
 
 /// Tweens lunging fighters along [`lunge_x`] and lands them back exactly on
-/// their *current* staged x when the lunge ends — endpoints are read live
-/// from [`ArenaStaging`], never a fixed anchor. The lunge's own timer
+/// their *current* authoritative x when the lunge ends — endpoints are read
+/// live from [`DuelPositions`], never a fixed anchor. The lunge's own timer
 /// (paced by the attack clip's duration, see [`AttackLunge::for_side`])
 /// ticks identically regardless of
 /// [`AccessibilityPreferences::reduced_motion`] -- only the peak
@@ -1054,19 +1055,19 @@ fn apply_lunges(
     time: Res<Time>,
     mut commands: Commands,
     accessibility: Res<AccessibilityPreferences>,
-    staging: Res<ArenaStaging>,
+    positions: Res<DuelPositions>,
     mut query: Query<(Entity, &mut AttackLunge, &mut Transform)>,
 ) {
     for (entity, mut lunge, mut transform) in &mut query {
         lunge.timer.tick(time.delta());
-        let from_x = staging.x_of(lunge.side);
+        let from_x = positions.x_of(lunge.side);
         if lunge.timer.is_finished() {
             transform.translation.x = from_x;
             commands.entity(entity).remove::<AttackLunge>();
         } else {
             transform.translation.x = lunge_x(
                 from_x,
-                staging.x_of(lunge.side.opponent()),
+                positions.x_of(lunge.side.opponent()),
                 lunge.timer.fraction(),
                 accessibility.reduced_motion,
             );
@@ -1075,10 +1076,10 @@ fn apply_lunges(
 }
 
 /// Applies the movement tweens and lands fighters exactly on their new
-/// staged x at the end. Same timing invariant as [`apply_lunges`]:
+/// authoritative x at the end. Same timing invariant as [`apply_lunges`]:
 /// [`FOOTWORK_DURATION`] never changes with the preference — under reduced
 /// motion the fighter simply sits on `to_x` from the first frame (see
-/// [`footwork_x`]), because the staged position is semantic state.
+/// [`footwork_x`]), because the authoritative position is semantic state.
 fn apply_footwork(
     time: Res<Time>,
     mut commands: Commands,
@@ -1114,9 +1115,9 @@ impl Plugin for AnimationPlugin {
         // reduced-motion systems below usable in apps/tests built without
         // it, defaulting to full motion.
         app.init_resource::<AccessibilityPreferences>();
-        // Idempotent with ArenaPlugin's registration: the staging-driven
-        // systems below never observe a missing resource.
-        app.init_resource::<ArenaStaging>();
+        // Idempotent with ArenaPlugin's/CombatPlugin's registration: the
+        // position-driven systems below never observe a missing resource.
+        app.init_resource::<DuelPositions>();
         app.add_systems(Startup, load_fighter_sheets).add_systems(
             Update,
             (
@@ -1139,9 +1140,10 @@ impl Plugin for AnimationPlugin {
 mod tests {
     use super::*;
     use crate::arena::ArenaPlugin;
-    use crate::arena::staging::{CLOSE_GAP, FAR_GAP, NEAR_GAP};
     use crate::character::{Attributes, Fighter};
-    use crate::combat::DuelDistance;
+    use crate::combat::position::{
+        ARENA_BOUNDS, LEAP_DISTANCE, MAX_SEPARATION, MIN_SEPARATION, STEP_DISTANCE,
+    };
     use crate::core::{CorePlugin, GameState};
     use crate::creation::PlayerCharacter;
     use crate::cutout::{CutoutPartKind, CutoutPartMarker, CutoutPose};
@@ -1206,40 +1208,41 @@ mod tests {
     }
 
     #[test]
-    fn the_lunge_arcs_out_and_back_from_the_staged_position() {
-        let staging = ArenaStaging::starting();
-        let from = staging.player_x;
-        let toward = staging.enemy_x;
+    fn the_lunge_arcs_out_and_back_from_the_authoritative_position() {
+        let positions = DuelPositions::starting();
+        let from = positions.player_x;
+        let toward = positions.enemy_x;
         assert_eq!(lunge_x(from, toward, 0.0, false), from);
         assert_eq!(lunge_x(from, toward, 1.0, false), from);
         let peak = lunge_x(from, toward, 0.5, false);
         assert!(peak > from, "the player lunges rightwards");
         assert!(
-            (peak - (from + staging.gap() * LUNGE_FRACTION)).abs() < 1e-3,
-            "peaks at the lunge fraction of the current staged gap"
+            (peak - (from + positions.separation() * LUNGE_FRACTION)).abs() < 1e-3,
+            "peaks at the lunge fraction of the current separation"
         );
         let quarter = lunge_x(from, toward, 0.25, false);
         assert!(from < quarter && quarter < peak, "smooth arc out");
     }
 
     #[test]
-    fn the_lunge_peak_scales_with_the_current_gap() {
-        let mut staging = ArenaStaging::starting();
-        let close_peak = lunge_x(staging.player_x, staging.enemy_x, 0.5, false);
-        assert!((close_peak - staging.player_x - CLOSE_GAP * LUNGE_FRACTION).abs() < 1e-3);
-        staging.apply_move(CombatSide::Player, DuelDistance::FAR);
-        let far_peak = lunge_x(staging.player_x, staging.enemy_x, 0.5, false);
+    fn the_lunge_peak_scales_with_the_current_separation() {
+        let mut positions = DuelPositions::starting();
+        let close_peak = lunge_x(positions.player_x, positions.enemy_x, 0.5, false);
+        assert!((close_peak - positions.player_x - MIN_SEPARATION * LUNGE_FRACTION).abs() < 1e-3);
+        positions.retreat(CombatSide::Player, LEAP_DISTANCE);
+        assert_eq!(positions.separation(), MAX_SEPARATION);
+        let far_peak = lunge_x(positions.player_x, positions.enemy_x, 0.5, false);
         assert!(
-            (far_peak - staging.player_x - FAR_GAP * LUNGE_FRACTION).abs() < 1e-3,
-            "a wider band lunges proportionally further"
+            (far_peak - positions.player_x - MAX_SEPARATION * LUNGE_FRACTION).abs() < 1e-3,
+            "a wider separation lunges proportionally further"
         );
     }
 
     #[test]
     fn reduced_motion_shrinks_the_lunge_to_the_documented_nudge_on_the_same_arc() {
-        let staging = ArenaStaging::starting();
-        let from = staging.player_x;
-        let toward = staging.enemy_x;
+        let positions = DuelPositions::starting();
+        let from = positions.player_x;
+        let toward = positions.enemy_x;
         assert_eq!(
             lunge_x(from, toward, 0.0, true),
             from,
@@ -1400,7 +1403,7 @@ mod tests {
             high_contrast: false,
         });
         write_event(&mut app, CombatSide::Player, CombatEvent::Missed);
-        let staged_x = app.world().resource::<ArenaStaging>().player_x;
+        let staged_x = app.world().resource::<DuelPositions>().player_x;
         let half_clip = FighterClip::Attack
             .animation()
             .clip_duration()
@@ -1418,7 +1421,7 @@ mod tests {
     fn toggling_reduced_motion_on_mid_lunge_shrinks_the_fighter_offset_immediately() {
         let mut app = test_app();
         write_event(&mut app, CombatSide::Player, CombatEvent::Missed);
-        let staged_x = app.world().resource::<ArenaStaging>().player_x;
+        let staged_x = app.world().resource::<DuelPositions>().player_x;
         let half_clip = FighterClip::Attack
             .animation()
             .clip_duration()
@@ -1514,8 +1517,8 @@ mod tests {
             CombatSide::Enemy,
             crate::combat::CombatAction::StepBack,
             CombatEvent::Moved {
-                from: crate::combat::DuelDistance::CLOSE,
-                to: crate::combat::DuelDistance::NEAR,
+                from: DuelPositions::starting(),
+                to: enemy_stepped_back(),
             },
         );
         assert_eq!(rig_pose::<EnemyFighter>(&mut app), CutoutPose::StepBack);
@@ -1831,17 +1834,17 @@ mod tests {
     fn the_lunge_moves_the_attacker_out_and_ends_on_the_staged_x() {
         // Pure-logic pass over the ECS pieces: build a lunge, tick it midway
         // and to the end through the component API.
-        let staging = ArenaStaging::starting();
+        let positions = DuelPositions::starting();
         let mut lunge = AttackLunge::for_side(CombatSide::Player);
         let half = lunge.timer.duration() / 2;
         lunge.timer.tick(half);
         let mid = lunge_x(
-            staging.x_of(lunge.side),
-            staging.x_of(lunge.side.opponent()),
+            positions.x_of(lunge.side),
+            positions.x_of(lunge.side.opponent()),
             lunge.timer.fraction(),
             false,
         );
-        assert!(mid > staging.player_x, "moved towards the enemy");
+        assert!(mid > positions.player_x, "moved towards the enemy");
         lunge.timer.tick(half);
         assert!(lunge.timer.is_finished(), "lunge ends with the attack clip");
     }
@@ -1879,9 +1882,38 @@ mod tests {
         }
     }
 
-    /// The player fighter's staged x from the app's [`ArenaStaging`].
+    /// The player fighter's authoritative x from the app's
+    /// [`DuelPositions`].
     fn staged_player_x(app: &App) -> f32 {
-        app.world().resource::<ArenaStaging>().player_x
+        app.world().resource::<DuelPositions>().player_x
+    }
+
+    /// Positions after one enemy step back from the opening placement.
+    fn enemy_stepped_back() -> DuelPositions {
+        let mut positions = DuelPositions::starting();
+        positions.retreat(CombatSide::Enemy, STEP_DISTANCE);
+        positions
+    }
+
+    /// Applies `movement` to the authoritative positions — exactly what the
+    /// combat resolver does before emitting the event — then writes the
+    /// matching `Moved` message and runs one update.
+    fn write_move(
+        app: &mut App,
+        actor: CombatSide,
+        action: crate::combat::CombatAction,
+        movement: impl FnOnce(&mut DuelPositions),
+    ) -> (DuelPositions, DuelPositions) {
+        let from = *app.world().resource::<DuelPositions>();
+        movement(&mut app.world_mut().resource_mut::<DuelPositions>());
+        let to = *app.world().resource::<DuelPositions>();
+        app.world_mut().write_message(CombatLogEvent {
+            actor,
+            action,
+            event: CombatEvent::Moved { from, to },
+        });
+        app.update();
+        (from, to)
     }
 
     /// Advances well past one [`FOOTWORK_DURATION`] in steps below virtual
@@ -1904,24 +1936,21 @@ mod tests {
     }
 
     #[test]
-    fn a_movement_event_tweens_only_the_actor_to_its_new_staged_x() {
+    fn a_movement_event_tweens_only_the_actor_to_its_new_authoritative_x() {
         let mut app = test_app();
-        let start = ArenaStaging::starting();
-        app.world_mut().write_message(CombatLogEvent {
-            actor: CombatSide::Player,
-            action: crate::combat::CombatAction::StepBack,
-            event: CombatEvent::Moved {
-                from: DuelDistance::CLOSE,
-                to: DuelDistance::NEAR,
-            },
-        });
-        app.update();
+        let start = DuelPositions::starting();
+        write_move(
+            &mut app,
+            CombatSide::Player,
+            crate::combat::CombatAction::StepBack,
+            |positions| positions.retreat(CombatSide::Player, STEP_DISTANCE),
+        );
         advance_past_footwork(&mut app);
 
         assert_eq!(
             player_transform_x(&mut app),
-            start.enemy_x - NEAR_GAP,
-            "the actor lands exactly gap(to) from the standing opponent"
+            start.enemy_x - (MIN_SEPARATION + STEP_DISTANCE),
+            "the actor lands exactly one step further from the standing opponent"
         );
         assert_eq!(
             enemy_transform_x(&mut app),
@@ -1936,56 +1965,54 @@ mod tests {
     }
 
     #[test]
-    fn a_wall_hit_slides_both_fighters_keeping_the_gap_exact() {
+    fn a_wall_hit_slides_both_fighters_keeping_the_separation_exact() {
         let mut app = test_app();
-        // close -> near: player retreats to 110 - 250 = -140.
-        app.world_mut().write_message(CombatLogEvent {
-            actor: CombatSide::Player,
-            action: crate::combat::CombatAction::StepBack,
-            event: CombatEvent::Moved {
-                from: DuelDistance::CLOSE,
-                to: DuelDistance::NEAR,
-            },
-        });
-        app.update();
+        // First retreat: player retreats to 110 - 250 = -140.
+        write_move(
+            &mut app,
+            CombatSide::Player,
+            crate::combat::CombatAction::StepBack,
+            |positions| positions.retreat(CombatSide::Player, STEP_DISTANCE),
+        );
         advance_past_footwork(&mut app);
-        // near -> far: the raw target 110 - 360 = -250 crosses the left
+        // Second retreat: the raw target -140 - 110 = -250 crosses the left
         // wall; the residual slides the pair right together.
-        app.world_mut().write_message(CombatLogEvent {
-            actor: CombatSide::Player,
-            action: crate::combat::CombatAction::StepBack,
-            event: CombatEvent::Moved {
-                from: DuelDistance::NEAR,
-                to: DuelDistance::FAR,
-            },
-        });
-        app.update();
+        write_move(
+            &mut app,
+            CombatSide::Player,
+            crate::combat::CombatAction::StepBack,
+            |positions| positions.retreat(CombatSide::Player, STEP_DISTANCE),
+        );
         advance_past_footwork(&mut app);
 
         let player_x = player_transform_x(&mut app);
         let enemy_x = enemy_transform_x(&mut app);
-        assert_eq!(player_x, crate::arena::staging::STAGE_MIN_X);
-        assert_eq!(enemy_x - player_x, FAR_GAP, "the gap stays exact");
-        let staging = *app.world().resource::<ArenaStaging>();
+        assert_eq!(player_x, ARENA_BOUNDS.min_x);
+        assert_eq!(
+            enemy_x - player_x,
+            MAX_SEPARATION,
+            "the separation stays exact"
+        );
+        let positions = *app.world().resource::<DuelPositions>();
         assert_eq!(
             (player_x, enemy_x),
-            (staging.player_x, staging.enemy_x),
-            "both transforms settle exactly on the staged positions"
+            (positions.player_x, positions.enemy_x),
+            "both transforms settle exactly on the authoritative positions"
         );
     }
 
     #[test]
     fn movement_events_play_the_actor_footwork_clip() {
         let mut app = test_app();
-        app.world_mut().write_message(CombatLogEvent {
-            actor: CombatSide::Player,
-            action: crate::combat::CombatAction::StepForward,
-            event: CombatEvent::Moved {
-                from: crate::combat::DuelDistance::NEAR,
-                to: crate::combat::DuelDistance::CLOSE,
-            },
-        });
-        app.update();
+        app.world_mut()
+            .resource_mut::<DuelPositions>()
+            .retreat(CombatSide::Player, STEP_DISTANCE);
+        write_move(
+            &mut app,
+            CombatSide::Player,
+            crate::combat::CombatAction::StepForward,
+            |positions| positions.advance(CombatSide::Player, STEP_DISTANCE),
+        );
 
         let (clip, index) = side_state::<PlayerFighter>(&mut app);
         assert_eq!(clip, FighterClip::StepForward);
@@ -2005,20 +2032,17 @@ mod tests {
             reduced_motion: true,
             high_contrast: false,
         });
-        app.world_mut().write_message(CombatLogEvent {
-            actor: CombatSide::Player,
-            action: crate::combat::CombatAction::StepBack,
-            event: CombatEvent::Moved {
-                from: DuelDistance::CLOSE,
-                to: DuelDistance::NEAR,
-            },
-        });
-        app.update();
+        write_move(
+            &mut app,
+            CombatSide::Player,
+            crate::combat::CombatAction::StepBack,
+            |positions| positions.retreat(CombatSide::Player, STEP_DISTANCE),
+        );
         let staged_x = staged_player_x(&app);
         assert_ne!(
             staged_x,
-            ArenaStaging::starting().player_x,
-            "the staged position itself moved -- position is semantic state"
+            DuelPositions::starting().player_x,
+            "the authoritative position itself moved -- position is semantic state"
         );
         advance(&mut app, 0.001);
         assert_eq!(
@@ -2038,15 +2062,12 @@ mod tests {
     #[test]
     fn backward_movement_events_play_the_back_step_clip() {
         let mut app = test_app();
-        app.world_mut().write_message(CombatLogEvent {
-            actor: CombatSide::Enemy,
-            action: crate::combat::CombatAction::StepBack,
-            event: CombatEvent::Moved {
-                from: crate::combat::DuelDistance::CLOSE,
-                to: crate::combat::DuelDistance::NEAR,
-            },
-        });
-        app.update();
+        write_move(
+            &mut app,
+            CombatSide::Enemy,
+            crate::combat::CombatAction::StepBack,
+            |positions| positions.retreat(CombatSide::Enemy, STEP_DISTANCE),
+        );
 
         assert_eq!(
             side_state::<EnemyFighter>(&mut app).0,
