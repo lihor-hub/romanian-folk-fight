@@ -70,24 +70,23 @@ pub(crate) fn world_point_for_screen_point(screen: Vec2, letterbox: LetterboxRec
 }
 
 /// The forward projection -- world space back to full-window logical screen
-/// space -- exact inverse of [`world_point_for_screen_point`]. A plain
-/// (non-`review`) production build never needs this (a preview rig is only
-/// ever placed screen -> world); `creation`'s and `shop`'s tests use it to
-/// verify a rig's resulting `Transform` actually lands back inside the
-/// `PreviewStage` rect it was derived from (#123, #273). #276 adds a second,
-/// real (feature-gated) production caller: `review::publish_palette_state`
-/// projects the staged fighter positions (`arena::ArenaStaging`) through
-/// this to build its deterministic fighter-readable-region proxy for the
-/// `fight-palette-phone` scenario's obstruction check.
+/// space -- exact inverse of [`world_point_for_screen_point`]. Used by
+/// `review::publish_palette_state`, which projects the staged fighter
+/// positions (`arena::ArenaStaging`) through this to build its deterministic
+/// fighter-readable-region proxy for the `fight-palette-phone` scenario's
+/// obstruction check (#276). `creation` and `shop` used to reach this too
+/// (#123, #273), for the letterboxed `WorldCamera` their preview rigs used
+/// to render through; #247 moved those rigs to
+/// [`super::PreviewCamera`](crate::core::PreviewCamera)'s own full-window
+/// projection instead (see [`preview_world_point_for_screen_point`] and its
+/// test-only inverse [`screen_point_for_preview_world_point`]), so this
+/// letterbox-specific forward projection is now exclusively the `review`
+/// seam's.
 ///
-/// `#[cfg(any(test, feature = "review"))]` rather than plain `pub(crate)`
-/// since nothing in an ordinary `cargo build`/`trunk build --release` needs
-/// the forward projection -- only tests and the review seam do. Still
-/// reachable from `creation`'s and `shop`'s own `#[cfg(test)] mod tests`:
-/// `cfg(test)` applies to the whole crate for a given `cargo test`
-/// compilation, not per-module, so this item exists in the same build as
-/// every other module's test code.
-#[cfg(any(test, feature = "review"))]
+/// `#[cfg(feature = "review")]` rather than plain `pub(crate)` since nothing
+/// in an ordinary `cargo build`/`trunk build --release`/`cargo test` needs
+/// the letterboxed forward projection -- only the review seam does.
+#[cfg(feature = "review")]
 pub(crate) fn screen_point_for_world_point(world: Vec2, letterbox: LetterboxRect) -> Vec2 {
     let zoom = letterbox_zoom(letterbox);
     letterbox.position
@@ -95,4 +94,30 @@ pub(crate) fn screen_point_for_world_point(world: Vec2, letterbox: LetterboxRect
             (world.x + LOGICAL_WIDTH / 2.0) * zoom,
             (LOGICAL_HEIGHT / 2.0 - world.y) * zoom,
         )
+}
+
+/// Inverse-projects a point in full-window logical screen space (top-left
+/// origin, y-down) into the world-space point [`super::PreviewCamera`]
+/// renders there (#247). Unlike [`world_point_for_screen_point`], this
+/// camera is never letterboxed — one world unit is always exactly one
+/// logical screen pixel over the *whole* window, so there is no
+/// [`LetterboxRect`]/zoom factor to invert: `viewport` is simply the
+/// window's current logical size (`ViewportInfo::width`/`height`). This is
+/// the fix for #247: the letterboxed `WorldCamera` a creation/shop preview
+/// rig used to be placed through (via [`world_point_for_screen_point`]) can
+/// have a visible viewport far shorter than the preview frame's own on-screen
+/// box on a narrow/tall (phone) window, permanently clipping part of the
+/// frame to black no matter where the rig is positioned inside it.
+pub(crate) fn preview_world_point_for_screen_point(screen: Vec2, viewport: Vec2) -> Vec2 {
+    Vec2::new(screen.x - viewport.x / 2.0, viewport.y / 2.0 - screen.y)
+}
+
+/// The forward projection for [`preview_world_point_for_screen_point`] — see
+/// [`screen_point_for_world_point`]'s doc comment for why this exists only
+/// for `creation`'s and `shop`'s own tests to verify a preview rig's
+/// resulting `Transform` actually lands back inside the `PreviewStage` rect
+/// it was derived from.
+#[cfg(test)]
+pub(crate) fn screen_point_for_preview_world_point(world: Vec2, viewport: Vec2) -> Vec2 {
+    Vec2::new(world.x + viewport.x / 2.0, viewport.y / 2.0 - world.y)
 }
