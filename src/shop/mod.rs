@@ -1991,6 +1991,26 @@ mod tests {
         );
     }
 
+    /// #234: the compact chrome from #249 above is a fixed set of `Node`
+    /// properties, not something the phone-width layout branch touches, but
+    /// #234's acceptance criteria explicitly call out 390x844 alongside
+    /// 1280x800. Lock the same compact-height contract at that viewport too,
+    /// so a future phone-only regression can't silently reintroduce the
+    /// oversized #120-floor padding this issue was about.
+    #[test]
+    fn catalog_rows_stay_compact_at_phone_width() {
+        let mut app = test_app_with_window(390.0, 844.0);
+        let row = item_row_entity(&mut app, ItemId::BataCiobaneasca);
+        let node = app.world().get::<Node>(row).expect("item row has a Node");
+
+        assert_eq!(node.padding, UiRect::axes(Val::Px(8.0), Val::Px(4.0)));
+        assert_eq!(node.min_height, Val::Px(MIN_TOUCH_TARGET + 8.0));
+        assert!(
+            app.world().get::<ImageNode>(row).is_none(),
+            "a compact row must not carry the 24px 9-slice embroidery at phone width either (#234)"
+        );
+    }
+
     /// #307 red-first (pure math): the gold-journey phone viewport is 390 CSS
     /// px wide (DPR 1/2/3 all resolve to the same logical width). The catalog
     /// column clamps to ~351 px there, but the row's fixed-cell layout needs
