@@ -21,6 +21,30 @@
 //! other themed surface. `Checkpoint::click` then dispatches a real CDP
 //! mouse click at that band's center pixel.
 //!
+//! #344's root cause lived entirely in this heuristic's color tolerance: the
+//! embroidery-motif panel border (`scripts/generate-ui-panel.py`) tiles a
+//! base fill measured at `rgb(122, 31, 31)` on the exact screenshots that
+//! triggered this bug -- inside the old, generous
+//! [`BUTTON_COLOR_TOLERANCE`] (`24`) around [`BUTTON_NORMAL_RGB`]
+//! (`rgb(128, 23, 20)`), even though a real button's interior renders
+//! *pixel-exact* (`bevy_ui` fills a flat color with no lighting/mipmapping to
+//! blur it, confirmed by sampling many real button interiors: zero
+//! deviation). That collision broke button-finding two different ways in the
+//! same run: in isolation (the main menu title card's own top/bottom
+//! border trim, wide and tall enough on its own to pass every other filter)
+//! it produced two *wrong* matches that coincidentally also numbered two,
+//! so the very first readiness check passed with the wrong coordinates and
+//! every later click landed on inert decoration instead of `Setări`; merged
+//! against a real button (`Înapoi`, flush against the settings panel's own
+//! bottom trim, bridged by [`MAX_ROW_GAP`] since the border matched too) it
+//! inflated that button's band past [`MAX_BAND_HEIGHT`], hiding a real
+//! button behind its own frame. Tightening the tolerance to
+//! [`BUTTON_COLOR_TOLERANCE`]'s current value -- comfortably below the
+//! smallest observed channel gap to the border's color, comfortably above
+//! zero for a pixel-exact fill -- stops the border from ever registering as
+//! button-colored at all, fixing both symptoms at their single shared cause
+//! instead of patching each shape separately.
+//!
 //! ## Why localStorage, not a re-opened screenshot, proves persistence
 //!
 //! Neither toggle changes its resting *color* (only its text label, which
@@ -75,11 +99,29 @@ const STABLE_FRAMES_REQUIRED: usize = 3;
 /// `src/theme/mod.rs`'s `BUTTON_NORMAL` (`Color::srgb(0.50, 0.09, 0.08)`)
 /// approximated as 8-bit sRGB (`round(component * 255)`).
 const BUTTON_NORMAL_RGB: [u8; 3] = [128, 23, 20];
-/// Per-channel tolerance around [`BUTTON_NORMAL_RGB`] -- generous enough to
-/// absorb minor rendering/AA differences while staying well clear of
-/// `BUTTON_HOVERED`/`BUTTON_PRESSED`/`BUTTON_DISABLED`, each of which
-/// differs from `BUTTON_NORMAL` by at least 35 in some channel.
-const BUTTON_COLOR_TOLERANCE: i16 = 24;
+/// Per-channel tolerance around [`BUTTON_NORMAL_RGB`].
+///
+/// #344: this was previously `24` -- "generous enough to absorb minor
+/// rendering/AA differences" -- but a real button's interior renders
+/// *pixel-exact* (`bevy_ui` fills a flat color with no lighting/mipmapping
+/// to blur it; sampling many real button interiors across multiple captured
+/// screenshots found zero deviation from [`BUTTON_NORMAL_RGB`]), so no such
+/// slack is actually needed there. Meanwhile the embroidery-motif panel
+/// border (`scripts/generate-ui-panel.py`) tiles a base fill measured at
+/// `rgb(122, 31, 31)` on the exact screenshots that triggered #344 -- only
+/// `6`/`8`/`11` per channel from [`BUTTON_NORMAL_RGB`], comfortably inside
+/// the old tolerance of `24`. That collision let the border read as
+/// button-colored, both in isolation (producing wrong-but-plausible "button"
+/// matches on a card that has no buttons at all) and merged against a real
+/// button flush against its own panel's border (inflating that button's
+/// band past [`MAX_BAND_HEIGHT`], hiding it). `5` sits comfortably below the
+/// smallest observed channel gap to the border's color (`6`) and
+/// comfortably above the `0` a pixel-exact fill needs, so it still absorbs
+/// any genuine minor rendering variance without ever matching the border --
+/// while staying nowhere near `BUTTON_HOVERED`/`BUTTON_PRESSED`/
+/// `BUTTON_DISABLED`, each of which differs from `BUTTON_NORMAL` by at least
+/// 35 in some channel.
+const BUTTON_COLOR_TOLERANCE: i16 = 5;
 /// A row counts toward a button's vertical band once at least this many of
 /// its pixels match the button color -- generous relative to the ~260px
 /// button width so a text-heavy row still counts (a button's label covers
@@ -681,5 +723,120 @@ mod tests {
         let buttons = vec![(1.0, 1.0), (2.0, 2.0), (3.0, 3.0)];
         let err = expect_exact_button_count(&buttons, 2, "the settings panel").unwrap_err();
         assert!(err.contains("found 3"));
+    }
+
+    // `find_wide_button_centers` -- #344: the embroidery-motif panel
+    // border's base fill color (measured at `rgb(122, 31, 31)` on the exact
+    // screenshots that triggered this bug) fell inside the *old*, generous
+    // `BUTTON_COLOR_TOLERANCE` (`24`) around `BUTTON_NORMAL_RGB`
+    // (`rgb(128, 23, 20)`), so a long enough, tall enough stretch of border
+    // trim read as button-colored regardless of its width or the real
+    // button's own exact shape. These pin the fix at its actual root cause
+    // -- color, not size -- by holding shape fixed and varying only fill
+    // color across the tightened tolerance boundary.
+
+    /// Paints one solid horizontal band, `run_width` px wide and centered in
+    /// a `1280`-wide row, across `y_start..y_start+height`, filled with
+    /// `color`, everywhere else left far outside any button-color
+    /// tolerance. `color` lets a test stand in for a real button's exact
+    /// fill, the panel border's measured fill, or a boundary probe between
+    /// the two -- [`find_wide_button_centers`] must tell them apart purely
+    /// by color now that width/height alone cannot.
+    fn synthetic_band_screenshot(
+        y_start: u32,
+        height: u32,
+        run_width: u32,
+        color: [u8; 3],
+    ) -> Vec<u8> {
+        let width = VIEWPORT_WIDTH;
+        let full_height = VIEWPORT_HEIGHT;
+        let mut img =
+            image::RgbaImage::from_pixel(width, full_height, image::Rgba([20, 15, 14, 255]));
+        let x_start = (width - run_width) / 2;
+        for y in y_start..(y_start + height) {
+            for x in x_start..(x_start + run_width) {
+                img.put_pixel(x, y, image::Rgba([color[0], color[1], color[2], 255]));
+            }
+        }
+        let mut bytes: Vec<u8> = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .expect("encoding a synthetic test PNG never fails");
+        bytes
+    }
+
+    /// #344's measured panel-border base fill -- inside the old tolerance of
+    /// `24` around [`BUTTON_NORMAL_RGB`] (diffs of `6`/`8`/`11` per channel),
+    /// outside the current tolerance of `5`.
+    const PANEL_BORDER_RGB: [u8; 3] = [122, 31, 31];
+
+    #[test]
+    fn find_wide_button_centers_finds_a_real_260px_wide_button_band() {
+        let png = synthetic_band_screenshot(300, 56, 260, BUTTON_NORMAL_RGB);
+        let centers = find_wide_button_centers(&png).expect("valid PNG");
+        assert_eq!(centers.len(), 1, "a real button-shaped band must be found");
+    }
+
+    #[test]
+    fn find_wide_button_centers_rejects_the_panel_borders_measured_color_at_button_size() {
+        // Same exact shape as a real button (260x56) -- only the color
+        // differs, matching the panel border's measured fill. Before #344's
+        // fix (tolerance 24) this band was indistinguishable from a real
+        // button; the tightened tolerance must now reject it on color alone.
+        let png = synthetic_band_screenshot(300, 56, 260, PANEL_BORDER_RGB);
+        let centers = find_wide_button_centers(&png).expect("valid PNG");
+        assert_eq!(
+            centers.len(),
+            0,
+            "the panel border's own color must never be mistaken for a button's, regardless of shape"
+        );
+    }
+
+    #[test]
+    fn find_wide_button_centers_rejects_the_panel_borders_measured_color_at_card_width() {
+        // The exact shape #344 observed in isolation on the main menu: an
+        // isolated border-trim band, within the accepted height window and
+        // wider than any button (a card's border tiles across the whole
+        // card).
+        let png = synthetic_band_screenshot(200, 50, 330, PANEL_BORDER_RGB);
+        let centers = find_wide_button_centers(&png).expect("valid PNG");
+        assert_eq!(centers.len(), 0);
+    }
+
+    #[test]
+    fn find_wide_button_centers_boundary_accepts_tolerance_exactly() {
+        // `BUTTON_NORMAL_RGB` shifted by exactly `BUTTON_COLOR_TOLERANCE` in
+        // every channel must still read as button-colored.
+        let shifted = [
+            BUTTON_NORMAL_RGB[0] + u8::try_from(BUTTON_COLOR_TOLERANCE).unwrap(),
+            BUTTON_NORMAL_RGB[1] + u8::try_from(BUTTON_COLOR_TOLERANCE).unwrap(),
+            BUTTON_NORMAL_RGB[2] + u8::try_from(BUTTON_COLOR_TOLERANCE).unwrap(),
+        ];
+        let png = synthetic_band_screenshot(300, 56, 260, shifted);
+        let centers = find_wide_button_centers(&png).expect("valid PNG");
+        assert_eq!(
+            centers.len(),
+            1,
+            "exactly at the tolerance boundary must still pass"
+        );
+    }
+
+    #[test]
+    fn find_wide_button_centers_boundary_rejects_one_past_tolerance() {
+        let shifted = [
+            BUTTON_NORMAL_RGB[0] + u8::try_from(BUTTON_COLOR_TOLERANCE).unwrap() + 1,
+            BUTTON_NORMAL_RGB[1],
+            BUTTON_NORMAL_RGB[2],
+        ];
+        let png = synthetic_band_screenshot(300, 56, 260, shifted);
+        let centers = find_wide_button_centers(&png).expect("valid PNG");
+        assert_eq!(
+            centers.len(),
+            0,
+            "one channel one past the tolerance boundary must be rejected"
+        );
     }
 }
