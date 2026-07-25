@@ -10,9 +10,14 @@ use bevy::window::{PrimaryWindow, WindowResized};
 
 use crate::theme::is_mobile_width;
 
-#[cfg(any(test, feature = "review"))]
+#[cfg(test)]
+pub(crate) use projection::screen_point_for_preview_world_point;
+#[cfg(feature = "review")]
 pub(crate) use projection::screen_point_for_world_point;
-pub(crate) use projection::{letterbox_zoom, logical_node_rect, world_point_for_screen_point};
+pub(crate) use projection::{
+    letterbox_zoom, logical_node_rect, preview_world_point_for_screen_point,
+    world_point_for_screen_point,
+};
 
 /// Fixed logical resolution the arena world is designed at (matches
 /// `arena::ARENA_WIDTH`/`ARENA_HEIGHT`). The camera keeps this exact world
@@ -401,7 +406,14 @@ impl Plugin for CorePlugin {
                 transition_out_of_loading.run_if(in_state(GameState::Loading)),
             )
             .add_systems(OnEnter(GameState::LoadingFailed), show_loading_failure)
-            .add_systems(Update, (track_viewport_size, letterbox_camera).chain())
+            .add_systems(
+                Update,
+                (
+                    track_viewport_size,
+                    (letterbox_camera, sync_preview_camera_projection),
+                )
+                    .chain(),
+            )
             // Every screen consumes the theme module's palette, spacing, and
             // panel texture, so it rides along with the other core resources
             // instead of every test app wiring it up separately.
@@ -509,6 +521,43 @@ fn letterbox_camera(
     }
 }
 
+/// Keeps [`PreviewCamera`]'s projection tracking the *current* logical
+/// viewport size (#247): [`PreviewCamera`] uses `ScalingMode::Fixed`, sized
+/// to [`ViewportInfo`] every time it changes, rather than a hardcoded
+/// constant like [`WorldCamera`]'s arena-sized
+/// `Fixed { LOGICAL_WIDTH, LOGICAL_HEIGHT }` -- so one world unit is always
+/// exactly one *logical* screen pixel over the entire window, regardless of
+/// the display's device pixel ratio.
+///
+/// A bare `Camera2d` (no custom `Projection`, `PreviewCamera`'s state before
+/// this system first runs) instead defaults to `ScalingMode::WindowSize`,
+/// which maps one world unit to one *physical* pixel --
+/// `bevy_camera::projection::OrthographicProjection::update` sizes it off
+/// the camera's `Viewport::physical_size`. That is only equivalent to a
+/// logical pixel at device pixel ratio 1: at any other ratio,
+/// `creation`'s/`shop`'s screen-space placement math (in logical pixels,
+/// matching `ComputedNode`/[`ViewportInfo`]) would land the rig at the wrong
+/// physical position and the wrong apparent size -- this was caught live in
+/// the browser at DPR 2 while fixing #247, not by any headless test (every
+/// headless test window has an implicit scale factor of 1).
+fn sync_preview_camera_projection(
+    viewport: Res<ViewportInfo>,
+    mut cameras: Query<&mut Projection, With<PreviewCamera>>,
+) {
+    if !viewport.is_changed() || viewport.width <= 0.0 || viewport.height <= 0.0 {
+        return;
+    }
+    for mut projection in &mut cameras {
+        *projection = Projection::Orthographic(OrthographicProjection {
+            scaling_mode: bevy::camera::ScalingMode::Fixed {
+                width: viewport.width,
+                height: viewport.height,
+            },
+            ..OrthographicProjection::default_2d()
+        });
+    }
+}
+
 /// Despawns every entity tagged with the screen marker `T`. Register it in
 /// `OnExit(...)` so a screen cleans up after itself.
 /// Despawns every entity tagged `T` (a screen's root marker), then clears
@@ -546,11 +595,40 @@ pub struct WorldCamera;
 #[derive(Component)]
 pub struct UiCamera;
 
+/// Marker for the preview camera (#247): full window and never letterboxed,
+/// like [`UiCamera`], but dedicated to world-space character-preview rigs
+/// (creation/shop) instead of Bevy UI. [`WorldCamera`]'s fixed 4:3 viewport
+/// is sized for the *arena*, and on a narrow/tall (phone-shaped) window that
+/// viewport shrinks to a short horizontal strip vertically centered in the
+/// window — far shorter than a preview frame's own on-screen box, which sits
+/// wherever the page's normal top-to-bottom flow puts it, not necessarily
+/// inside that strip. No repositioning of the rig can fix this: a screen
+/// point outside [`WorldCamera`]'s letterboxed viewport has no world-space
+/// position [`WorldCamera`] can ever render at all, so the part of the frame
+/// above/below the strip stays permanently black no matter what
+/// (`update_preview_transform`/`update_shop_preview_transform` before #247).
+/// Routing preview rigs through this camera instead — full window, exactly
+/// like [`UiCamera`] — removes the arena's fixed aspect ratio from the
+/// picture entirely: one world unit is always one logical screen pixel, so
+/// the rig can be placed anywhere the frame actually is.
+#[derive(Component)]
+pub struct PreviewCamera;
+
 /// Render layer used exclusively by the UI camera. World sprites stay on the
 /// default layer (0) and are invisible to this camera, so it only ever
-/// draws UI — the two cameras' outputs simply composite (world camera first,
-/// UI camera on top with a transparent clear).
+/// draws UI — the three cameras' outputs simply composite in `order`
+/// (world camera, then the preview camera, then UI on top, each with a
+/// transparent clear except the world camera's).
 const UI_RENDER_LAYER: usize = 1;
+
+/// Render layer used exclusively by [`PreviewCamera`] (#247). A cutout-rig
+/// entity must carry this layer (in addition to its usual sprite/mesh
+/// components) to be visible to the preview camera instead of the default
+/// (layer 0) [`WorldCamera`] — [`RenderLayers`] is not inherited through
+/// Bevy's entity hierarchy, so every rig part/gear-layer entity needs its
+/// own copy, not just the rig root (see `creation`'s and `shop`'s own
+/// `tag_preview_render_layer`-style systems).
+pub(crate) const PREVIEW_RENDER_LAYER: usize = 2;
 
 fn spawn_camera(mut commands: Commands) {
     commands.spawn((
@@ -564,7 +642,24 @@ fn spawn_camera(mut commands: Commands) {
             ..OrthographicProjection::default_2d()
         }),
     ));
-    // A second camera dedicated to UI: full window, always on top, so menus
+    // A camera dedicated to world-space character-preview rigs (#247): full
+    // window and never letterboxed, composited after the world camera (so
+    // the arena background beneath it isn't erased) and before the UI camera
+    // (so panel borders/text stay on top of the rig). Uses the default
+    // `Camera2d` projection deliberately (no `Fixed` scaling like
+    // `WorldCamera`) so one world unit is always one logical screen pixel,
+    // matching `UiCamera`'s own "full window, no letterbox" treatment.
+    commands.spawn((
+        Camera2d,
+        PreviewCamera,
+        Camera {
+            order: 1,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+        RenderLayers::layer(PREVIEW_RENDER_LAYER),
+    ));
+    // A camera dedicated to UI: full window, always on top, so menus
     // and the HUD reflow across the whole viewport instead of being
     // letterboxed along with the fixed-resolution arena world (#31).
     commands.spawn((
@@ -572,7 +667,7 @@ fn spawn_camera(mut commands: Commands) {
         UiCamera,
         IsDefaultUiCamera,
         Camera {
-            order: 1,
+            order: 2,
             clear_color: ClearColorConfig::None,
             ..default()
         },
@@ -930,6 +1025,53 @@ mod tests {
                 Vec2::new(800.0, 600.0),
                 "rect spans the full 4:3 window"
             );
+        }
+    }
+
+    /// #247: [`PreviewCamera`] must carry a `Fixed` scaling mode tracking
+    /// the *current* [`ViewportInfo`] -- not the `Camera2d` default
+    /// (`ScalingMode::WindowSize`, which maps one world unit to one
+    /// *physical* pixel, silently wrong at any device pixel ratio other
+    /// than 1; see [`sync_preview_camera_projection`]'s doc comment). This
+    /// can't be caught by asserting on `creation`'s/`shop`'s resulting
+    /// `Transform` values directly (every headless test window has an
+    /// implicit scale factor of 1, exactly the one ratio the bug is
+    /// invisible at) -- it was only caught live in the browser at DPR 2 --
+    /// so this test instead asserts on the projection [`sync_preview_camera_projection`]
+    /// actually produces, which the DPR bug would have gotten wrong
+    /// regardless of what scale factor a headless test window reports.
+    #[test]
+    fn sync_preview_camera_projection_tracks_the_current_viewport_size() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(ViewportInfo::new(390.0, 844.0));
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera2d,
+                PreviewCamera,
+                Projection::Orthographic(OrthographicProjection::default_2d()),
+            ))
+            .id();
+        app.add_systems(Update, sync_preview_camera_projection);
+        app.update();
+
+        let Projection::Orthographic(projection) = app
+            .world()
+            .get::<Projection>(camera)
+            .expect("has a Projection")
+        else {
+            panic!("PreviewCamera must keep an orthographic projection");
+        };
+        match projection.scaling_mode {
+            bevy::camera::ScalingMode::Fixed { width, height } => {
+                assert_eq!(width, 390.0, "must be fixed to the current logical width");
+                assert_eq!(height, 844.0, "must be fixed to the current logical height");
+            }
+            other => panic!(
+                "must be Fixed to the current logical viewport size, not {other:?} \
+                 (the WindowSize default maps one world unit to one *physical* pixel)"
+            ),
         }
     }
 
