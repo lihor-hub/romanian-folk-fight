@@ -1,0 +1,55 @@
+name: Asset proposal
+description: Propose art, audio, or font contributions (replacing or adding to placeholder assets).
+title: "[Asset]: "
+labels: ["assets", "enhancement"]
+body:
+  - type: textarea
+    id: what-asset
+    attributes:
+      label: What asset is this?
+      description: What are you proposing — a sprite, sound effect, music track, font, background, etc.? Where in the game would it be used?
+      placeholder: e.g. a new fighter cutout for the Vârcolac enemy
+    validations:
+      required: true
+
+  - type: textarea
+    id: folkloric-reference
+    attributes:
+      label: Folkloric reference / inspiration
+      description: What Romanian folklore reference or inspiration is this asset based on?
+      placeholder: e.g. based on the strigoi legend as described in...
+    validations:
+      required: true
+
+  - type: textarea
+    id: license-provenance
+    attributes:
+      label: License / provenance of source material
+      description: >-
+        Required. Assets in this repo are licensed per-file — see
+        `assets/CREDITS.md`. Tell us exactly where this asset (or its source
+        material) came from and under what license it can be included here
+        (e.g. self-created and dedicated to CC0, generated with a named tool
+        under its terms, licensed stock content with a link to the license,
+        etc.). Proposals without clear provenance cannot be accepted.
+      placeholder: |
+        Source: ...
+        License: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: preview
+    attributes:
+      label: Preview
+      description: Attach a preview image, audio clip, or mockup. You can drag and drop files here.
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Anything else reviewers should know.
+    validations:
+      required: false
