@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Play the game
+    url: https://lihor-hub.github.io/romanian-folk-fight/
+    about: Try the current browser build before filing an issue.
+  - name: Game design ideas & questions
+    url: https://github.com/lihor-hub/romanian-folk-fight/discussions
+    about: Open-ended ideas, gameplay discussion, and questions that aren't a bug or a concrete feature request.

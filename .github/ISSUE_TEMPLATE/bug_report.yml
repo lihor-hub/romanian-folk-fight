@@ -1,0 +1,78 @@
+name: Bug report
+description: Something in the game isn't working as expected.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug you ran into.
+      placeholder: Tell us what happened.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+      description: What you expected instead.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Where did you encounter this?
+      options:
+        - "Browser — please give browser + OS below"
+        - "Native build"
+    validations:
+      required: true
+
+  - type: input
+    id: platform-details
+    attributes:
+      label: Browser + OS (if applicable)
+      description: e.g. Chrome 126 on macOS 14, Safari on iOS 17, or the native build's OS.
+      placeholder: Chrome 126 on macOS 14
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce the bug?
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: dropdown
+    id: save-state
+    attributes:
+      label: Is this related to your save state?
+      description: >-
+        The game persists saves in browser storage (localStorage on web,
+        a local save file natively). Let us know if the bug seems tied to an
+        existing save, a fresh save, or save/load itself.
+      options:
+        - "Not save-related"
+        - "Happens with an existing save"
+        - "Happens only on a fresh/new save"
+        - "The bug is in saving or loading itself"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: If applicable, add screenshots to help explain the problem. You can drag and drop images here.
+    validations:
+      required: false
