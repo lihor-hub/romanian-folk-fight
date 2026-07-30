@@ -66,7 +66,7 @@ use super::actions::{
 };
 use super::engine::CombatAction;
 use super::hud::{ActionBarRoot, HudScreen};
-use super::position::DuelPositions;
+use super::position::{CombatSide, DuelPositions};
 use super::systems::{CombatPresentation, CombatTurn, PlayerActionEvent};
 
 #[cfg(test)]
@@ -334,7 +334,7 @@ fn banner_groups(descriptors: &[ActionDescriptor]) -> Vec<(ActionCategory, Vec<A
 
 /// A banner row's compact info line while enabled (§3): strikes show
 /// `"70% · -9"`, block `"-3"`, rest `"+20"`, movement a direction arrow
-/// with its band shift. Every number comes from the descriptor's own
+/// with its action word. Every number comes from the descriptor's own
 /// structured fields ([`ActionDescriptor::hit_chance`]/
 /// [`ActionDescriptor::cost`]); only the movement arrow is an id-keyed
 /// cosmetic, like [`glyph_for`].
@@ -357,13 +357,17 @@ fn banner_cost_line(descriptor: &ActionDescriptor) -> String {
     }
 }
 
-/// Direction arrow + band shift for a movement row's info line. Id-keyed
-/// cosmetic text (fallback for unknown ids), mirroring [`glyph_for`].
+/// Direction arrow + action word for a movement row's info line. Id-keyed
+/// cosmetic text (fallback for unknown ids), mirroring [`glyph_for`]. #160
+/// scales step/leap ground by the mover's own `agilitate`, so this no
+/// longer names a fixed distance unit ("band") — a leftover flagged by
+/// #159's handoff, since the old wording (`"-> o bandă"`) claimed a
+/// specific, no-longer-true amount of ground.
 fn movement_hint(pictogram_id: ActionId) -> &'static str {
     match pictogram_id {
-        "step-forward" => "-> o bandă",
-        "leap-forward" => ">> două benzi",
-        "step-back" => "<- o bandă",
+        "step-forward" => "-> pas",
+        "leap-forward" => ">> salt",
+        "step-back" => "<- pas",
         _ => "poziție",
     }
 }
@@ -939,9 +943,11 @@ type EnemyStats<'w, 's> =
 /// and phone reconciliation alike) and [`sync_phone_open_category`] (the
 /// phone action row's population) need — factored out so the two can never
 /// derive "what can the player do right now" differently.
+#[allow(clippy::too_many_arguments)]
 fn live_descriptors(
     turn: Option<&CombatTurn>,
     separation: f32,
+    player_wall_pinned: bool,
     presentation_busy: bool,
     player: &PlayerStats,
     enemy: &EnemyStats,
@@ -957,6 +963,7 @@ fn live_descriptors(
             .copied()
             .unwrap_or_else(|| DescriptorContext::spawn_placeholder().turn),
         separation,
+        player_wall_pinned,
         player_stamina,
         player_attributes,
         enemy_attributes,
@@ -1010,6 +1017,7 @@ pub(super) fn update_action_buttons(
     let descriptors = live_descriptors(
         turn.as_deref(),
         positions.separation(),
+        positions.is_wall_pinned(CombatSide::Player),
         presentation_busy,
         &player,
         &enemy,
@@ -1149,6 +1157,7 @@ pub(super) fn pulse_distance_chip_on_reach_hover(
         live_descriptors(
             turn.as_deref(),
             positions.separation(),
+            positions.is_wall_pinned(CombatSide::Player),
             presentation_busy,
             &player,
             &enemy,
@@ -1252,6 +1261,7 @@ pub(super) fn sync_phone_open_category(
     let descriptors = live_descriptors(
         turn.as_deref(),
         positions.separation(),
+        positions.is_wall_pinned(CombatSide::Player),
         presentation_busy,
         &player,
         &enemy,
@@ -1717,7 +1727,7 @@ mod tests {
         // Step-back is the movement action that is *enabled* at the
         // starting close range; the disabled advances show their reasons.
         let step_back = find_button(&mut app, "step-back");
-        assert_eq!(find_cost_or_reason_text(&mut app, step_back), "<- o bandă");
+        assert_eq!(find_cost_or_reason_text(&mut app, step_back), "<- pas");
     }
 
     /// Re-places the duel at the old FAR band's world-unit equivalent (out

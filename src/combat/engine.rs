@@ -9,7 +9,7 @@ use rand::{Rng, RngExt as _};
 
 use crate::character::{Attributes, stats};
 
-use super::position::{CombatSide, DuelPositions, LEAP_DISTANCE, STEP_DISTANCE};
+use super::position::{CombatSide, DuelPositions, leap_distance, step_distance};
 
 /// Stamina cost of [`CombatAction::QuickStrike`].
 pub const QUICK_STRIKE_COST: i32 = 5;
@@ -56,12 +56,17 @@ pub enum CombatAction {
     Block,
     /// Recover [`REST_RESTORE`] stamina, capped at max.
     Rest,
-    /// Close [`STEP_DISTANCE`] world units toward the opponent.
+    /// Close [`super::position::step_distance`]`(agilitate)` world units
+    /// toward the opponent, scaled by the actor's own `agilitate` (#160).
     StepForward,
-    /// Open [`STEP_DISTANCE`] world units away from the opponent.
+    /// Open [`super::position::step_distance`]`(agilitate)` world units
+    /// away from the opponent, scaled by the actor's own `agilitate`
+    /// (#160); rejected outright when the actor cannot legally retreat
+    /// (see [`super::position::DuelPositions::can_retreat`]).
     StepBack,
-    /// Bound [`LEAP_DISTANCE`] world units forward, clamped at
-    /// [`super::position::MIN_SEPARATION`].
+    /// Bound [`super::position::leap_distance`]`(agilitate)` world units
+    /// forward, clamped at [`super::position::MIN_SEPARATION`] — always
+    /// strictly more ground than the actor's own step (#160).
     LeapForward,
 }
 
@@ -242,15 +247,24 @@ pub fn resolve_action_positioned(
             actor.stamina += amount;
             vec![CombatEvent::Rested { amount }]
         }
-        CombatAction::StepForward => move_fighter(actor, positions, |positions| {
-            positions.advance(actor_side, STEP_DISTANCE)
-        }),
-        CombatAction::StepBack => move_fighter(actor, positions, |positions| {
-            positions.retreat(actor_side, STEP_DISTANCE)
-        }),
-        CombatAction::LeapForward => move_fighter(actor, positions, |positions| {
-            positions.advance(actor_side, LEAP_DISTANCE)
-        }),
+        CombatAction::StepForward => {
+            let distance = step_distance(actor.attributes.agilitate);
+            move_fighter(actor, positions, |positions| {
+                positions.advance(actor_side, distance)
+            })
+        }
+        CombatAction::StepBack => {
+            let distance = step_distance(actor.attributes.agilitate);
+            move_fighter(actor, positions, |positions| {
+                positions.retreat(actor_side, distance)
+            })
+        }
+        CombatAction::LeapForward => {
+            let distance = leap_distance(actor.attributes.agilitate);
+            move_fighter(actor, positions, |positions| {
+                positions.advance(actor_side, distance)
+            })
+        }
     }
 }
 
@@ -344,16 +358,19 @@ pub(super) fn roll(rng: &mut impl Rng, percent: i32) -> bool {
 mod tests {
     use super::*;
     use crate::character::stats::{CRIT_PERCENT_CAP, HIT_PERCENT_MAX, HIT_PERCENT_MIN};
-    use crate::combat::position::{MAX_SEPARATION, MIN_SEPARATION};
+    use crate::combat::position::{ARENA_BOUNDS, MAX_SEPARATION, MIN_SEPARATION, STEP_DISTANCE};
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
 
-    /// Positions at the old `FAR` band's equivalent separation: the player
-    /// retreated twice from the opening placement.
+    /// Positions at the old `FAR` band's equivalent separation: the enemy
+    /// retreated twice from the opening placement — the enemy (opening 220
+    /// units from its own wall) reaches exactly `MAX_SEPARATION` without
+    /// wall-pinning, unlike the player (opening only 120 units from its
+    /// wall, #160's real corner pressure).
     fn far_positions() -> DuelPositions {
         let mut positions = DuelPositions::starting();
-        positions.retreat(CombatSide::Player, STEP_DISTANCE);
-        positions.retreat(CombatSide::Player, STEP_DISTANCE);
+        positions.retreat(CombatSide::Enemy, STEP_DISTANCE);
+        positions.retreat(CombatSide::Enemy, STEP_DISTANCE);
         assert_eq!(positions.separation(), MAX_SEPARATION);
         positions
     }
@@ -424,7 +441,11 @@ mod tests {
 
     #[test]
     fn movement_actions_change_positions_and_clamp_at_the_edges() {
-        let mut actor = fighter();
+        // agilitate 1: the STEP_DISTANCE/LEAP_DISTANCE baseline. The player
+        // opens only 120 world units from the left wall, so its second
+        // retreat pins there short of MAX_SEPARATION — true wall pinning
+        // (#160), replacing the old pair slide.
+        let mut actor = FighterState::new(attrs(4, 1, 5, 1));
         let mut target = fighter();
         let mut positions = DuelPositions::starting();
 
@@ -445,6 +466,7 @@ mod tests {
         );
         assert_eq!(positions.separation(), MIN_SEPARATION + STEP_DISTANCE);
         assert_eq!(positions.enemy_x, 110.0, "only the actor moved");
+        assert!(positions.can_retreat(CombatSide::Player), "not pinned yet");
 
         resolve_action_positioned(
             &mut actor,
@@ -454,7 +476,12 @@ mod tests {
             CombatSide::Player,
             &mut rng_hit_no_crit(),
         );
-        assert_eq!(positions.separation(), MAX_SEPARATION);
+        assert_eq!(
+            positions.player_x, ARENA_BOUNDS.min_x,
+            "pinned at the left wall short of the 360 cap"
+        );
+        assert_eq!(positions.separation(), 260.0);
+        assert!(!positions.can_retreat(CombatSide::Player));
 
         let before = positions;
         let events = resolve_action_positioned(
@@ -471,7 +498,7 @@ mod tests {
                 from: before,
                 to: before,
             }],
-            "retreating at max separation clamps in place"
+            "retreating while wall-pinned clamps in place"
         );
 
         resolve_action_positioned(
@@ -484,6 +511,43 @@ mod tests {
         );
         assert_eq!(positions.separation(), MIN_SEPARATION);
         assert!(positions.in_melee_reach());
+    }
+
+    /// #160's acceptance criterion: two fighters with different agility
+    /// cover different distances with the same movement action, and the
+    /// same fighter's leap always attempts strictly more ground than its
+    /// step.
+    #[test]
+    fn fighters_with_different_agilitate_cover_different_ground_with_the_same_action() {
+        let step_of = |agilitate: u32| {
+            let mut actor = FighterState::new(attrs(4, agilitate, 5, 1));
+            let mut target = fighter();
+            // The enemy side retreats: 220 units of room to its own wall,
+            // so neither agility's step is wall-clamped.
+            let mut positions = DuelPositions::starting();
+            resolve_action_positioned(
+                &mut actor,
+                &mut target,
+                CombatAction::StepBack,
+                &mut positions,
+                CombatSide::Enemy,
+                &mut rng_hit_no_crit(),
+            );
+            positions.separation() - MIN_SEPARATION
+        };
+        assert_eq!(step_of(0), step_distance(0));
+        assert_eq!(step_of(5), step_distance(5));
+        assert!(
+            step_of(5) > step_of(0),
+            "the same StepBack covers more ground for the more agile fighter"
+        );
+        for agilitate in [0, 1, 5, 10] {
+            assert!(
+                leap_distance(agilitate) > step_distance(agilitate),
+                "agilitate {agilitate}: LeapForward always attempts strictly more \
+                 ground than StepForward before boundary clamping"
+            );
+        }
     }
 
     #[test]
@@ -1116,6 +1180,7 @@ mod tests {
                     &player,
                     &profile,
                     positions.separation(),
+                    positions.retreat_space(CombatSide::Enemy),
                     &mut rng,
                 );
                 let events = resolve_action_positioned(

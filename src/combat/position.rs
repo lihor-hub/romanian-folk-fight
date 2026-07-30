@@ -33,19 +33,38 @@
 //! - **Ordering / no pass-through**: `player_x < enemy_x`, always separated
 //!   by at least [`MIN_SEPARATION`].
 //! - **Bounds**: both fighters inside [`ARENA_BOUNDS`]. A retreat whose
-//!   target would cross a wall slides *both* fighters by the residual (the
-//!   pair slide), keeping the separation exact — spacing is rules truth,
-//!   absolute position is composition. (#160 replaces this with true wall
-//!   pinning when retreat becomes tactical.)
+//!   target would cross the *mover's own* wall clamps that mover there —
+//!   true wall pinning (#160): the standing opponent never moves as a side
+//!   effect, so a fighter can walk itself into a corner with no space left
+//!   to retreat further. [`DuelPositions::can_retreat`] is the legality
+//!   check for that state; [`super::actions::action_disabled_reason`] reads
+//!   it to disable the command and explain why.
 //! - **Path dependence**: only separation is movement-determined; absolute
 //!   positions carry the whole movement history.
 //!
-//! ## Handoff (for the #160 tactical-positioning child)
+//! ## Tactical movement (#160)
+//!
+//! Ground covered by a step or leap scales with the *mover's own*
+//! `agilitate`: [`step_distance`] and [`leap_distance`] replace the fixed
+//! pre-#160 constants (kept as [`STEP_DISTANCE`]/[`LEAP_DISTANCE`], the
+//! `agilitate == 1` baseline every position/arena/render fixture that
+//! doesn't model a specific fighter still uses directly). A leap is always
+//! [`LEAP_STEP_MULTIPLIER`] times that same fighter's own step, so it is
+//! strictly larger than a step for every fighter at every legal agility.
+//!
+//! [`DuelPositions::displace_target`] is the one clamped primitive (arena
+//! bounds + no-pass-through, no [`MAX_SEPARATION`] cap) later shove/recoil
+//! integrations share, so neither reimplements this module's boundary
+//! logic.
+//!
+//! ## Handoff (for the #130/#131/#135 children building on #160)
 //!
 //! The exported surface is: [`ArenaBounds`]/[`ARENA_BOUNDS`],
 //! [`DuelPositions`] (`starting`, `x_of`, `separation`, `midpoint_x`,
-//! `in_melee_reach`, `advance`, `retreat`), the movement/reach constants
-//! above, and [`CombatSide`]. Transform synchronization: fighters spawn at
+//! `in_melee_reach`, `advance`, `retreat`, `can_retreat`, `is_wall_pinned`,
+//! `retreat_space`, `displace_target`), the movement/reach constants above
+//! plus [`step_distance`]/[`leap_distance`], and [`CombatSide`]. Transform
+//! synchronization: fighters spawn at
 //! `arena::staged_fighter_transform(positions.x_of(side))` and
 //! `arena::animation` tweens `Transform.translation.x` to exactly the
 //! authoritative x carried by `CombatEvent::Moved { to, .. }`.
@@ -103,22 +122,55 @@ pub const STAGE_BIAS: f32 = 40.0;
 /// Equals the old `CLOSE` band's gap.
 pub const MIN_SEPARATION: f32 = 140.0;
 
-/// Farthest apart movement can place the fighters. Equals the old `FAR`
-/// band's gap (band saturation); #160 owns replacing this cap with true
-/// wall pinning.
+/// Farthest apart movement can deliberately place the fighters. Equals the
+/// old `FAR` band's gap (band saturation). A fighter can still end up
+/// *closer* than this if its own arena wall binds first (#160's true wall
+/// pinning) — this cap and the wall are independent constraints, and
+/// [`DuelPositions::can_retreat`] checks both.
 pub const MAX_SEPARATION: f32 = 360.0;
 
 /// Separation at or inside which melee strikes connect. Equals the old
 /// "in reach only at `CLOSE`" rule.
 pub const MELEE_REACH: f32 = MIN_SEPARATION;
 
-/// Ground covered by `StepForward`/`StepBack` — the old bands' even
-/// world-unit spacing.
-pub const STEP_DISTANCE: f32 = 110.0;
+/// Baseline ground a step covers before `agilitate` scaling (#160): the
+/// pre-#160 fixed distance, i.e. [`step_distance`]`(1)`.
+pub const STEP_DISTANCE_BASE: f32 = 100.0;
 
-/// Ground covered by `LeapForward` — exactly two steps, as the old
-/// two-band leap was.
-pub const LEAP_DISTANCE: f32 = 2.0 * STEP_DISTANCE;
+/// Extra ground a step covers per point of `agilitate` above zero (#160).
+pub const STEP_DISTANCE_PER_AGILITATE: f32 = 10.0;
+
+/// How many steps a leap is worth, for any fighter's own agility (#160).
+/// Because [`step_distance`] is always positive and this multiplier is
+/// `> 1.0`, a leap is strictly larger than that same fighter's own step
+/// from every legal starting position.
+pub const LEAP_STEP_MULTIPLIER: f32 = 2.0;
+
+/// Ground `StepForward`/`StepBack` cover for a fighter with `agilitate`
+/// points of agility: `100 + 10 * agilitate` world units (#160). A higher-
+/// agility fighter covers strictly more ground with the same action.
+pub const fn step_distance(agilitate: u32) -> f32 {
+    STEP_DISTANCE_BASE + STEP_DISTANCE_PER_AGILITATE * agilitate as f32
+}
+
+/// Ground `LeapForward` covers for a fighter with `agilitate` points of
+/// agility — always [`LEAP_STEP_MULTIPLIER`] times that fighter's own
+/// [`step_distance`] (#160).
+pub const fn leap_distance(agilitate: u32) -> f32 {
+    LEAP_STEP_MULTIPLIER * step_distance(agilitate)
+}
+
+/// Ground covered by `StepForward`/`StepBack` at the baseline `agilitate`
+/// of 1 — every roster hero and enemy's starting agility, and the value
+/// position/arena/render fixtures that don't model a specific fighter's
+/// agility call `advance`/`retreat` with directly. Equals
+/// [`step_distance`]`(1)`; unchanged from the pre-#160 fixed constant.
+pub const STEP_DISTANCE: f32 = step_distance(1);
+
+/// Ground covered by `LeapForward` at the baseline `agilitate` of 1.
+/// Equals [`leap_distance`]`(1)`; unchanged from the pre-#160 fixed
+/// constant.
+pub const LEAP_DISTANCE: f32 = leap_distance(1);
 
 /// Where the two fighters stand, as world x of each fighter's center — the
 /// authoritative duel geometry. The player is always left of the enemy and
@@ -186,21 +238,78 @@ impl DuelPositions {
     }
 
     /// Moves `side` `distance` world units away from its opponent, clamped
-    /// at [`MAX_SEPARATION`]. If the mover's target would cross an arena
-    /// wall, the residual slides *both* fighters (pair slide) so the
-    /// separation stays exact — see the module docs.
+    /// at [`MAX_SEPARATION`] and at the mover's own arena wall — true wall
+    /// pinning (#160): only the mover's position changes, so a fighter that
+    /// has backed itself into a corner simply stops there instead of
+    /// pushing its opponent. Always safe to call (a fully pinned fighter is
+    /// left in place, a no-op); [`Self::can_retreat`] is the legality check
+    /// consumers use to disable the command before it becomes a no-op.
     pub fn retreat(&mut self, side: CombatSide, distance: f32) {
         let separation = (self.separation() + distance).min(MAX_SEPARATION);
-        self.place_at_separation(side, separation);
-        let residual = if self.player_x < ARENA_BOUNDS.min_x {
-            ARENA_BOUNDS.min_x - self.player_x
-        } else if self.enemy_x > ARENA_BOUNDS.max_x {
-            ARENA_BOUNDS.max_x - self.enemy_x
-        } else {
-            0.0
+        let mut next = *self;
+        next.place_at_separation(side, separation);
+        match side {
+            CombatSide::Player => next.player_x = next.player_x.max(ARENA_BOUNDS.min_x),
+            CombatSide::Enemy => next.enemy_x = next.enemy_x.min(ARENA_BOUNDS.max_x),
+        }
+        *self = next;
+    }
+
+    /// Whether `side` is pinned against its own arena wall: zero room left
+    /// to retreat regardless of the [`MAX_SEPARATION`] cap.
+    pub fn is_wall_pinned(&self, side: CombatSide) -> bool {
+        match side {
+            CombatSide::Player => self.player_x <= ARENA_BOUNDS.min_x,
+            CombatSide::Enemy => self.enemy_x >= ARENA_BOUNDS.max_x,
+        }
+    }
+
+    /// Whether `side` can legally retreat at all right now — positive
+    /// [`Self::retreat_space`], i.e. under [`MAX_SEPARATION`] and not
+    /// [`Self::is_wall_pinned`]. `retreat` itself always clamps safely, but
+    /// zero room is not a smaller retreat, it is no retreat:
+    /// [`super::actions::action_disabled_reason`] reads this to reject the
+    /// command and expose a player-readable reason instead of letting it
+    /// silently do nothing.
+    pub fn can_retreat(&self, side: CombatSide) -> bool {
+        self.retreat_space(side) > 0.0
+    }
+
+    /// World units of ground `side` can still open by retreating — the
+    /// tighter of the [`MAX_SEPARATION`] headroom and the room to `side`'s
+    /// own arena wall, never negative. The quantitative form of
+    /// [`Self::can_retreat`] the AI reasons over (#160): how much escape
+    /// room a fighter has left before the corner takes retreat away.
+    pub fn retreat_space(&self, side: CombatSide) -> f32 {
+        let cap_room = MAX_SEPARATION - self.separation();
+        let wall_room = match side {
+            CombatSide::Player => self.player_x - ARENA_BOUNDS.min_x,
+            CombatSide::Enemy => ARENA_BOUNDS.max_x - self.enemy_x,
         };
-        self.player_x += residual;
-        self.enemy_x += residual;
+        cap_room.min(wall_room).max(0.0)
+    }
+
+    /// Displaces `side`'s fighter by a signed world-unit `delta` (positive
+    /// moves it toward `+x`), clamped to the arena's own walls and to the
+    /// no-pass-through minimum separation from the standing opponent — which
+    /// never moves. The one shared clamp later shove/recoil integrations
+    /// (#160 handoff) build on, unlike [`Self::advance`]/[`Self::retreat`]
+    /// this applies no [`MAX_SEPARATION`] cap: an involuntary displacement
+    /// is not the same tactical choice as a voluntary retreat.
+    pub fn displace_target(&mut self, side: CombatSide, delta: f32) {
+        let (min_x, max_x) = match side {
+            CombatSide::Player => (ARENA_BOUNDS.min_x, self.enemy_x - MIN_SEPARATION),
+            CombatSide::Enemy => (self.player_x + MIN_SEPARATION, ARENA_BOUNDS.max_x),
+        };
+        let x = match side {
+            CombatSide::Player => self.player_x + delta,
+            CombatSide::Enemy => self.enemy_x + delta,
+        }
+        .clamp(min_x, max_x);
+        match side {
+            CombatSide::Player => self.player_x = x,
+            CombatSide::Enemy => self.enemy_x = x,
+        }
     }
 
     /// Re-places `side` at exactly `separation` from its standing opponent,
@@ -286,10 +395,12 @@ mod tests {
 
     #[test]
     fn a_leap_covers_two_steps_and_clamps_at_the_minimum_separation() {
-        // From the old FAR equivalent, a leap lands exactly toe-to-toe.
+        // From the old FAR equivalent, a leap lands exactly toe-to-toe. The
+        // enemy retreats (220 units of room to its own wall, unlike the
+        // player's 120) so this reaches MAX_SEPARATION without wall-pinning.
         let mut positions = DuelPositions::starting();
-        positions.retreat(CombatSide::Player, STEP_DISTANCE);
-        positions.retreat(CombatSide::Player, STEP_DISTANCE);
+        positions.retreat(CombatSide::Enemy, STEP_DISTANCE);
+        positions.retreat(CombatSide::Enemy, STEP_DISTANCE);
         assert_eq!(positions.separation(), MAX_SEPARATION);
         positions.advance(CombatSide::Player, LEAP_DISTANCE);
         assert_eq!(positions.separation(), MIN_SEPARATION);
@@ -298,19 +409,27 @@ mod tests {
         // From the old NEAR equivalent, the same leap clamps to the same
         // toe-to-toe stop a single step reaches — the old band saturation.
         let mut positions = DuelPositions::starting();
-        positions.retreat(CombatSide::Player, STEP_DISTANCE);
+        positions.retreat(CombatSide::Enemy, STEP_DISTANCE);
         positions.advance(CombatSide::Player, LEAP_DISTANCE);
         assert_eq!(positions.separation(), MIN_SEPARATION);
     }
 
     #[test]
-    fn retreat_saturates_at_the_maximum_separation() {
-        let mut positions = DuelPositions::starting();
-        positions.retreat(CombatSide::Player, STEP_DISTANCE);
-        positions.retreat(CombatSide::Player, STEP_DISTANCE);
+    fn retreat_saturates_at_the_maximum_separation_away_from_a_wall() {
+        // Shifted 30 units left of the canonical opening so the enemy has
+        // 250 units of room to its own wall (rather than exactly 220): two
+        // retreats reach MAX_SEPARATION with headroom to spare, no wall
+        // pinning involved.
+        let mut positions = DuelPositions {
+            player_x: -60.0,
+            enemy_x: 80.0,
+        };
+        positions.retreat(CombatSide::Enemy, STEP_DISTANCE);
+        positions.retreat(CombatSide::Enemy, STEP_DISTANCE);
         assert_eq!(positions.separation(), MAX_SEPARATION);
+        assert!(!positions.is_wall_pinned(CombatSide::Enemy));
         let before = positions;
-        positions.retreat(CombatSide::Player, STEP_DISTANCE);
+        positions.retreat(CombatSide::Enemy, STEP_DISTANCE);
         assert_eq!(
             positions, before,
             "retreating at max separation holds in place"
@@ -318,31 +437,164 @@ mod tests {
     }
 
     #[test]
-    fn a_left_wall_hit_slides_the_pair_right_keeping_the_separation_exact() {
+    fn a_left_wall_hit_pins_the_mover_alone_the_opponent_never_moves() {
         let mut positions = DuelPositions::starting();
         positions.retreat(CombatSide::Player, STEP_DISTANCE);
-        // Raw target: -140 - 110 = -250, crossing the -150 wall by 100; the
-        // pair slides right together.
+        assert_eq!(positions.player_x, -140.0, "no wall yet");
+        // Raw target: -140 - 110 = -250, crossing the -150 wall by 100; only
+        // the player clamps there, the enemy is untouched (true wall
+        // pinning, #160 — replaces the old pair slide).
         positions.retreat(CombatSide::Player, STEP_DISTANCE);
         assert_eq!(positions.player_x, ARENA_BOUNDS.min_x);
-        assert_eq!(positions.enemy_x, ARENA_BOUNDS.min_x + MAX_SEPARATION);
-        assert_eq!(positions.separation(), MAX_SEPARATION);
+        assert_eq!(
+            positions.enemy_x, 110.0,
+            "the standing opponent never moves"
+        );
+        assert_eq!(positions.separation(), 260.0, "short of the 360 cap");
+        assert!(positions.is_wall_pinned(CombatSide::Player));
+        assert!(!positions.can_retreat(CombatSide::Player));
+
+        // A further retreat attempt is a safe no-op.
+        let before = positions;
+        positions.retreat(CombatSide::Player, STEP_DISTANCE);
+        assert_eq!(positions, before, "a pinned retreat changes nothing");
     }
 
     #[test]
-    fn a_right_wall_hit_slides_the_pair_left_keeping_the_separation_exact() {
+    fn a_right_wall_hit_pins_the_mover_alone_the_opponent_never_moves() {
         // Walk the pair rightwards first: the enemy retreats, the player
         // chases back into reach, leaving the pair at (80, 220).
         let mut positions = DuelPositions::starting();
         positions.retreat(CombatSide::Enemy, STEP_DISTANCE);
         positions.advance(CombatSide::Player, STEP_DISTANCE);
         assert_eq!((positions.player_x, positions.enemy_x), (80.0, 220.0));
-        // Raw target: 80 + 360 = 440, crossing the +330 wall by 110; the
-        // pair slides left together.
+        // Raw target separation 360 (already the cap): 80 + 360 = 440,
+        // crossing the +330 wall by 110; only the enemy clamps there.
         positions.retreat(CombatSide::Enemy, LEAP_DISTANCE);
         assert_eq!(positions.enemy_x, ARENA_BOUNDS.max_x);
-        assert_eq!(positions.player_x, ARENA_BOUNDS.max_x - MAX_SEPARATION);
+        assert_eq!(
+            positions.player_x, 80.0,
+            "the standing opponent never moves"
+        );
+        assert_eq!(positions.separation(), 250.0, "short of the 360 cap");
+        assert!(positions.is_wall_pinned(CombatSide::Enemy));
+        assert!(!positions.can_retreat(CombatSide::Enemy));
+    }
+
+    #[test]
+    fn can_retreat_is_true_away_from_walls_and_under_the_cap() {
+        let positions = DuelPositions::starting();
+        assert!(positions.can_retreat(CombatSide::Player));
+        assert!(positions.can_retreat(CombatSide::Enemy));
+    }
+
+    #[test]
+    fn can_retreat_is_false_once_separation_saturates_even_off_a_wall() {
+        // Shifted 30 units left of the canonical opening (see
+        // `retreat_saturates_at_the_maximum_separation_away_from_a_wall`)
+        // so this reaches MAX_SEPARATION with headroom to spare, no wall
+        // involved.
+        let mut positions = DuelPositions {
+            player_x: -60.0,
+            enemy_x: 80.0,
+        };
+        positions.retreat(CombatSide::Enemy, STEP_DISTANCE);
+        positions.retreat(CombatSide::Enemy, STEP_DISTANCE);
         assert_eq!(positions.separation(), MAX_SEPARATION);
+        assert!(
+            !positions.is_wall_pinned(CombatSide::Enemy),
+            "not against a wall in this scenario"
+        );
+        assert!(
+            !positions.can_retreat(CombatSide::Enemy),
+            "the separation cap alone also disables retreat"
+        );
+    }
+
+    #[test]
+    fn retreat_space_is_the_tighter_of_cap_headroom_and_wall_room() {
+        // Opening placement: separation 140 leaves 220 units of cap
+        // headroom; the player has 120 units to its wall (the binding
+        // constraint), the enemy 220 (cap and wall tie).
+        let positions = DuelPositions::starting();
+        assert_eq!(positions.retreat_space(CombatSide::Player), 120.0);
+        assert_eq!(positions.retreat_space(CombatSide::Enemy), 220.0);
+
+        // Pinned at the wall: zero space, and can_retreat agrees.
+        let mut positions = DuelPositions::starting();
+        positions.retreat(CombatSide::Player, 200.0);
+        assert!(positions.is_wall_pinned(CombatSide::Player));
+        assert_eq!(positions.retreat_space(CombatSide::Player), 0.0);
+        assert!(!positions.can_retreat(CombatSide::Player));
+
+        // Saturated at MAX_SEPARATION off the wall: also zero space.
+        let mut positions = DuelPositions {
+            player_x: -60.0,
+            enemy_x: 80.0,
+        };
+        positions.retreat(CombatSide::Enemy, 220.0);
+        assert_eq!(positions.separation(), MAX_SEPARATION);
+        assert!(!positions.is_wall_pinned(CombatSide::Enemy));
+        assert_eq!(positions.retreat_space(CombatSide::Enemy), 0.0);
+        assert!(!positions.can_retreat(CombatSide::Enemy));
+    }
+
+    #[test]
+    fn step_distance_scales_with_agilitate_and_matches_the_baseline_constant() {
+        assert_eq!(step_distance(1), STEP_DISTANCE);
+        assert_eq!(step_distance(0), 100.0);
+        assert_eq!(step_distance(1), 110.0);
+        assert_eq!(step_distance(5), 150.0);
+        assert!(
+            step_distance(5) > step_distance(1),
+            "a more agile fighter covers more ground with the same step"
+        );
+    }
+
+    #[test]
+    fn leap_distance_matches_the_baseline_constant_and_is_strictly_larger_than_step() {
+        assert_eq!(leap_distance(1), LEAP_DISTANCE);
+        for agilitate in [0, 1, 2, 5, 10, 30] {
+            assert!(
+                leap_distance(agilitate) > step_distance(agilitate),
+                "agilitate {agilitate}: leap must strictly exceed step"
+            );
+        }
+    }
+
+    #[test]
+    fn displace_target_clamps_to_the_arena_wall_and_never_crosses_the_opponent() {
+        let mut positions = DuelPositions::starting();
+        // A huge negative displacement clamps the player at the left wall.
+        positions.displace_target(CombatSide::Player, -10_000.0);
+        assert_eq!(positions.player_x, ARENA_BOUNDS.min_x);
+        assert_eq!(positions.enemy_x, 110.0, "the enemy never moves");
+
+        let mut positions = DuelPositions::starting();
+        // A huge positive displacement clamps the enemy at the right wall.
+        positions.displace_target(CombatSide::Enemy, 10_000.0);
+        assert_eq!(positions.enemy_x, ARENA_BOUNDS.max_x);
+        assert_eq!(positions.player_x, -30.0, "the player never moves");
+
+        let mut positions = DuelPositions::starting();
+        // The enemy retreats first to open some room, then a huge positive
+        // displacement of the player clamps at the no-pass-through minimum
+        // separation from the standing enemy, short of the arena wall.
+        positions.retreat(CombatSide::Enemy, STEP_DISTANCE);
+        positions.displace_target(CombatSide::Player, 10_000.0);
+        assert_eq!(positions.player_x, positions.enemy_x - MIN_SEPARATION);
+        assert_eq!(positions.separation(), MIN_SEPARATION);
+
+        // Unlike retreat, displacement is not capped at MAX_SEPARATION: both
+        // fighters pinned at opposite walls exceed it (480 > 360), while
+        // both stay strictly inside the arena bounds.
+        let mut positions = DuelPositions::starting();
+        positions.displace_target(CombatSide::Player, -10_000.0);
+        positions.displace_target(CombatSide::Enemy, 10_000.0);
+        assert_eq!(positions.separation(), 480.0);
+        assert!(positions.separation() > MAX_SEPARATION);
+        assert!(ARENA_BOUNDS.contains(positions.player_x));
+        assert!(ARENA_BOUNDS.contains(positions.enemy_x));
     }
 
     #[test]
