@@ -1,14 +1,29 @@
 # Romanian Folk Fight
 
-**Play now:** <https://lihor-hub.github.io/romanian-folk-fight/>
-
 A browser-based, turn-based arena RPG in the spirit of *Swords and Sandals* —
-remastered, and cast entirely from Romanian folklore. Build your hero, step
-into the arena, and fight your way through strigoi, vârcolaci, and zmei until
-you face Zmeul Zmeilor himself.
+remastered, and cast entirely from Romanian folklore.
+
+[![CI](https://github.com/lihor-hub/romanian-folk-fight/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lihor-hub/romanian-folk-fight/actions/workflows/ci.yml)
+[![Deploy](https://github.com/lihor-hub/romanian-folk-fight/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/lihor-hub/romanian-folk-fight/actions/workflows/deploy.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![▶ Play now](https://img.shields.io/badge/%E2%96%B6_Play_now-lihor--hub.github.io-2ea44f)](https://lihor-hub.github.io/romanian-folk-fight/)
+
+Build your hero, step into the arena, and fight your way through strigoi,
+vârcolaci, and zmei until you face Zmeul Zmeilor himself.
+
+![The arena mid-fight, hero facing a folklore opponent across the sand](docs/media/fight.png)
 
 **Core loop:** fight → earn galbeni → buy gear at the prăvălie → level up →
 fight a stronger foe. A boss awaits every 5 fights.
+
+<details>
+<summary>More screenshots: character creation and the shop</summary>
+
+| Character creation | Shop (Prăvălia lui Moș Pintea) |
+| --- | --- |
+| ![Character creation screen with attribute allocation and a live cutout preview](docs/media/creation.png) | ![Shop screen offering folk-themed gear for galbeni](docs/media/shop.png) |
+
+</details>
 
 ## Tech stack
 
@@ -73,6 +88,28 @@ polish. See the
 [milestones](https://github.com/lihor-hub/romanian-folk-fight/milestones) and
 [issues](https://github.com/lihor-hub/romanian-folk-fight/issues) for the
 full plan.
+
+## Contributing
+
+Contributions are welcome — code, art, folklore expertise, and playtesting
+all help. Start with [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, and
+please follow the [Code of Conduct](CODE_OF_CONDUCT.md); see
+[SECURITY.md](SECURITY.md) to report a vulnerability privately.
+
+We're especially looking for:
+
+- Rust/Bevy code — gameplay systems, UI, tooling
+- Art & audio in the folk-textile visual style (see `docs/art-direction.md`)
+- Romanian folklore and language review (names, flavor text, announcer lines)
+- Playtesting and game design feedback
+- Documentation
+
+Good places to start:
+
+- [`good first issue`](https://github.com/lihor-hub/romanian-folk-fight/labels/good%20first%20issue) label
+- [Welcome discussion](https://github.com/lihor-hub/romanian-folk-fight/discussions/350)
+- [Design ideas thread](https://github.com/lihor-hub/romanian-folk-fight/discussions/351)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — a newcomer's tour of the codebase
 
 ## License
 
