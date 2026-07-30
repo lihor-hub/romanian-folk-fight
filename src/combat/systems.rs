@@ -396,8 +396,14 @@ fn enemy_turn(
         warn!("no unique enemy AiProfile ({error}); using the default");
         AiProfile::default()
     });
-    let action =
-        ai::choose_action_at_separation(&me, &foe, &profile, positions.separation(), &mut rng.0);
+    let action = ai::choose_action_at_separation(
+        &me,
+        &foe,
+        &profile,
+        positions.separation(),
+        positions.retreat_space(CombatSide::Enemy),
+        &mut rng.0,
+    );
     apply_action(
         action,
         CombatSide::Enemy,
@@ -821,14 +827,14 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn movement_actions_update_positions_and_pass_the_turn() {
-        use crate::combat::position::{MIN_SEPARATION, STEP_DISTANCE};
+        use crate::combat::position::{MIN_SEPARATION, step_distance};
 
         let mut app = test_app();
         press_vs_resting_enemy(&mut app, KeyCode::Digit6);
         assert_eq!(
             positions(&app).separation(),
-            MIN_SEPARATION + STEP_DISTANCE,
-            "the step back opened exactly one step"
+            MIN_SEPARATION + step_distance(PLAYER_ATTRIBUTES.agilitate),
+            "the step back opened exactly one of the player's own agility-scaled steps"
         );
         assert_eq!(
             positions(&app).enemy_x,
@@ -850,11 +856,14 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn enemy_advances_back_after_the_player_opens_distance() {
-        use crate::combat::position::{MIN_SEPARATION, STEP_DISTANCE};
+        use crate::combat::position::{MIN_SEPARATION, step_distance};
 
         let mut app = test_app();
         press(&mut app, KeyCode::Digit6);
-        assert_eq!(positions(&app).separation(), MIN_SEPARATION + STEP_DISTANCE);
+        assert_eq!(
+            positions(&app).separation(),
+            MIN_SEPARATION + step_distance(PLAYER_ATTRIBUTES.agilitate)
+        );
         assert_eq!(turn(&app).side, CombatSide::Enemy);
 
         advance_presentation(&mut app);

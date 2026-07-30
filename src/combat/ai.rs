@@ -14,7 +14,7 @@ use super::engine::{
     CombatAction, FighterState, HEAVY_DAMAGE_MULTIPLIER, HEAVY_STRIKE_COST, NORMAL_STRIKE_COST,
     QUICK_STRIKE_COST, roll,
 };
-use super::position::{MIN_SEPARATION, STEP_DISTANCE, in_melee_reach};
+use super::position::{MIN_SEPARATION, in_melee_reach, step_distance};
 
 /// Per-archetype tuning knob for the enemy decision policy, attached as a
 /// component to enemy fighters. The folklore roster issue tunes it per
@@ -49,11 +49,16 @@ const BLOCK_WEIGHT_SCALE: f32 = 0.6;
 ///
 /// Priority ladder, first match wins:
 /// 1. Cannot afford any strike (stamina < quick cost): Rest.
-/// 2. Low stamina (< heavy cost) and hurt (hp < 30% of max): 70% Rest,
-///    30% Block.
-/// 3. Foe in kill range (hp within one heavy strike's damage): the
+/// 2. Low stamina (< heavy cost) and hurt (hp < 30% of max): disengage —
+///    StepBack when its own agility-scaled step and the remaining retreat
+///    space carry it out of the foe's melee reach (#160); Rest in safety
+///    when already out of that reach; otherwise (cornered, or too little
+///    room for the retreat to matter) 70% Rest, 30% Block in place.
+/// 3. Out of the foe: close the gap with its own agility-scaled step, or a
+///    leap when one step still leaves the foe out of reach.
+/// 4. Foe in kill range (hp within one heavy strike's damage): the
 ///    strongest affordable strike (Heavy > Normal > Quick).
-/// 4. Weighted pick — HeavyStrike weight `aggression` (0 if unaffordable),
+/// 5. Weighted pick — HeavyStrike weight `aggression` (0 if unaffordable),
 ///    NormalStrike weight 0.9 (0 if unaffordable), QuickStrike weight 1.0,
 ///    Block weight `0.6 * (1.0 - aggression)`, Rest weight the
 ///    missing-stamina fraction (0 at full stamina, so a rested fighter
@@ -64,38 +69,58 @@ pub fn choose_action(
     profile: &AiProfile,
     rng: &mut impl Rng,
 ) -> CombatAction {
-    choose_action_at_separation(me, foe, profile, MIN_SEPARATION, rng)
+    choose_action_at_separation(me, foe, profile, MIN_SEPARATION, 0.0, rng)
 }
 
-/// Chooses an action while accounting for the duel's current spacing, given
-/// as the derived world-unit separation between the two fighters.
+/// Chooses an action while accounting for the duel's current spacing:
+/// `separation` is the derived world-unit gap between the two fighters and
+/// `retreat_space` how much ground this fighter can still legally open by
+/// retreating (`DuelPositions::retreat_space` for its own side, #160 — 0.0
+/// models a cornered fighter, which is also what [`choose_action`]'s
+/// spacing-free close-range form assumes).
 pub fn choose_action_at_separation(
     me: &FighterState,
     foe: &FighterState,
     profile: &AiProfile,
     separation: f32,
+    retreat_space: f32,
     rng: &mut impl Rng,
 ) -> CombatAction {
     // 1. Cannot pay for any strike: recover.
     if me.stamina < QUICK_STRIKE_COST {
         return CombatAction::Rest;
     }
-    // 2. Out of reach: close the gap instead of wasting a melee strike —
-    //    leaping only when a single step would still leave the foe out of
-    //    reach, otherwise the measured step suffices.
-    if !in_melee_reach(separation) {
-        return if !in_melee_reach(separation - STEP_DISTANCE) {
-            CombatAction::LeapForward
-        } else {
-            CombatAction::StepForward
-        };
-    }
-    // 3. Running dry while badly hurt: mostly recover, sometimes turtle.
+    // 2. Running dry while badly hurt: reason over the foe's reach and the
+    //    room left behind (#160). Inside the foe's reach with enough of its
+    //    own step and retreat space to actually escape, disengage; already
+    //    safely out of reach, recover instead of walking back in; cornered
+    //    (or with too little room for retreating to change anything),
+    //    mostly recover, sometimes turtle.
     if me.stamina < HEAVY_STRIKE_COST && 10 * me.hp < 3 * stats::max_hp(&me.attributes) {
+        if !in_melee_reach(separation) {
+            return CombatAction::Rest;
+        }
+        let achievable_retreat = step_distance(me.attributes.agilitate).min(retreat_space);
+        if !in_melee_reach(separation + achievable_retreat) {
+            return CombatAction::StepBack;
+        }
         return if roll(rng, EXHAUSTED_REST_PERCENT) {
             CombatAction::Rest
         } else {
             CombatAction::Block
+        };
+    }
+    // 3. Out of reach: close the gap instead of wasting a melee strike —
+    //    reasoned over *this fighter's own* world-unit reach (#160:
+    //    `agilitate` scales how far its own step covers), leaping only when
+    //    a single one of its own steps would still leave the foe out of
+    //    reach, otherwise the measured step suffices.
+    if !in_melee_reach(separation) {
+        let my_step = step_distance(me.attributes.agilitate);
+        return if !in_melee_reach(separation - my_step) {
+            CombatAction::LeapForward
+        } else {
+            CombatAction::StepForward
         };
     }
     // 4. Foe in kill range: go for the strongest strike we can pay for.
@@ -254,17 +279,21 @@ mod tests {
 
     #[test]
     fn out_of_reach_enemy_advances_before_attacking() {
-        // One step out of reach: a measured step suffices. Two steps out:
-        // only a leap closes it — the old NEAR/FAR movement policy, now
-        // expressed over the derived world-unit separation.
-        let one_step_out = MIN_SEPARATION + STEP_DISTANCE;
-        let two_steps_out = MIN_SEPARATION + 2.0 * STEP_DISTANCE;
+        // One of `fighter()`'s own steps out of reach: a measured step
+        // suffices. Two of its own steps out: only a leap closes it — the
+        // old NEAR/FAR movement policy, now expressed over the derived
+        // world-unit separation and the mover's own agility-scaled step
+        // (#160).
+        let my_step = step_distance(fighter().attributes.agilitate);
+        let one_step_out = MIN_SEPARATION + my_step;
+        let two_steps_out = MIN_SEPARATION + 2.0 * my_step;
         for seed in 0..20 {
             let action = choose_action_at_separation(
                 &fighter(),
                 &fighter(),
                 &profile(1.0),
                 one_step_out,
+                0.0,
                 &mut rng(seed),
             );
             assert_eq!(action, CombatAction::StepForward, "seed {seed}: near gap");
@@ -274,9 +303,107 @@ mod tests {
                 &fighter(),
                 &profile(1.0),
                 two_steps_out,
+                0.0,
                 &mut rng(seed),
             );
             assert_eq!(action, CombatAction::LeapForward, "seed {seed}: far gap");
+        }
+    }
+
+    /// #160's acceptance criterion: the AI reasons about *its own*
+    /// world-unit reach, not a fixed step. At the same separation, a more
+    /// agile fighter's single step already closes the gap while a less
+    /// agile fighter's does not and must leap instead.
+    #[test]
+    fn a_more_agile_fighter_closes_a_larger_gap_with_a_single_step() {
+        let agile = FighterState::new(attrs(4, 6, 5, 1));
+        let sluggish = FighterState::new(attrs(4, 0, 5, 1));
+        let gap = MIN_SEPARATION + step_distance(6);
+        for seed in 0..20 {
+            assert_eq!(
+                choose_action_at_separation(
+                    &agile,
+                    &fighter(),
+                    &profile(1.0),
+                    gap,
+                    0.0,
+                    &mut rng(seed)
+                ),
+                CombatAction::StepForward,
+                "seed {seed}: the agile fighter's own step closes this gap"
+            );
+            assert_eq!(
+                choose_action_at_separation(
+                    &sluggish,
+                    &fighter(),
+                    &profile(1.0),
+                    gap,
+                    0.0,
+                    &mut rng(seed)
+                ),
+                CombatAction::LeapForward,
+                "seed {seed}: the sluggish fighter's own step falls short, needing a leap"
+            );
+        }
+    }
+
+    /// #160: the AI reasons about the foe's reach and its own remaining
+    /// retreat space. Hurt and exhausted inside the foe's reach, it
+    /// disengages when its own step and the room behind actually clear that
+    /// reach; with too little room to escape (cornered), it turtles in
+    /// place instead of wasting the turn on a retreat that leaves it
+    /// hittable; already out of reach, it recovers rather than advancing
+    /// back into danger.
+    #[test]
+    fn a_hurt_exhausted_fighter_disengages_only_when_retreat_space_clears_the_foes_reach() {
+        // fighter(): agilitate 2, so its own step covers 120 world units;
+        // max hp 100, heavy cost above 10.
+        let mut me = fighter();
+        me.stamina = 10;
+        me.hp = 29;
+        let foe = fighter();
+        let my_step = step_distance(me.attributes.agilitate);
+        for seed in 0..20 {
+            assert_eq!(
+                choose_action_at_separation(
+                    &me,
+                    &foe,
+                    &profile(0.5),
+                    MIN_SEPARATION,
+                    my_step,
+                    &mut rng(seed)
+                ),
+                CombatAction::StepBack,
+                "seed {seed}: room for a full step clears the foe's reach — disengage"
+            );
+            let cornered = choose_action_at_separation(
+                &me,
+                &foe,
+                &profile(0.5),
+                MIN_SEPARATION,
+                // Pinned: no room at all, so no retreat clears the foe's
+                // reach. (With MELEE_REACH equal to MIN_SEPARATION any
+                // positive room escapes today; the escape check still
+                // guards a future reach wider than the minimum gap.)
+                0.0,
+                &mut rng(seed),
+            );
+            assert!(
+                matches!(cornered, CombatAction::Rest | CombatAction::Block),
+                "seed {seed}: cornered, it turtles in place, got {cornered:?}"
+            );
+            assert_eq!(
+                choose_action_at_separation(
+                    &me,
+                    &foe,
+                    &profile(0.5),
+                    MIN_SEPARATION + my_step,
+                    my_step,
+                    &mut rng(seed)
+                ),
+                CombatAction::Rest,
+                "seed {seed}: already out of the foe's reach, it recovers in safety"
+            );
         }
     }
 

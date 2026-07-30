@@ -1229,7 +1229,10 @@ mod tests {
         let mut positions = DuelPositions::starting();
         let close_peak = lunge_x(positions.player_x, positions.enemy_x, 0.5, false);
         assert!((close_peak - positions.player_x - MIN_SEPARATION * LUNGE_FRACTION).abs() < 1e-3);
-        positions.retreat(CombatSide::Player, LEAP_DISTANCE);
+        // The enemy has 220 units of room to its own wall (unlike the
+        // player's 120, #160's real corner pressure), so this reaches
+        // MAX_SEPARATION without wall-pinning.
+        positions.retreat(CombatSide::Enemy, LEAP_DISTANCE);
         assert_eq!(positions.separation(), MAX_SEPARATION);
         let far_peak = lunge_x(positions.player_x, positions.enemy_x, 0.5, false);
         assert!(
@@ -1965,7 +1968,7 @@ mod tests {
     }
 
     #[test]
-    fn a_wall_hit_slides_both_fighters_keeping_the_separation_exact() {
+    fn a_wall_hit_pins_the_mover_alone_the_rendered_opponent_never_moves() {
         let mut app = test_app();
         // First retreat: player retreats to 110 - 250 = -140.
         write_move(
@@ -1976,7 +1979,8 @@ mod tests {
         );
         advance_past_footwork(&mut app);
         // Second retreat: the raw target -140 - 110 = -250 crosses the left
-        // wall; the residual slides the pair right together.
+        // wall; true wall pinning (#160) clamps only the mover there, the
+        // standing enemy's rendered transform never moves.
         write_move(
             &mut app,
             CombatSide::Player,
@@ -1988,10 +1992,11 @@ mod tests {
         let player_x = player_transform_x(&mut app);
         let enemy_x = enemy_transform_x(&mut app);
         assert_eq!(player_x, ARENA_BOUNDS.min_x);
+        assert_eq!(enemy_x, 110.0, "the standing opponent never moves");
         assert_eq!(
             enemy_x - player_x,
-            MAX_SEPARATION,
-            "the separation stays exact"
+            260.0,
+            "short of the 360 cap, pinned at the wall instead"
         );
         let positions = *app.world().resource::<DuelPositions>();
         assert_eq!(

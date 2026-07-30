@@ -2755,6 +2755,7 @@ mod tests {
                     &player,
                     &profile,
                     positions.separation(),
+                    positions.retreat_space(CombatSide::Enemy),
                     &mut rng,
                 );
                 let events = engine::resolve_action_positioned(

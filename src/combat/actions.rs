@@ -188,6 +188,12 @@ pub struct DescriptorContext {
     /// projection of `combat::position::DuelPositions` every reach/movement
     /// legality check reads (#159); never a stored band.
     pub separation: f32,
+    /// Whether the player is pinned against their own arena wall with zero
+    /// room left to retreat (#160) — the projection of
+    /// `combat::position::DuelPositions::is_wall_pinned` `StepBack`'s
+    /// legality and disabled reason read, so a corner never silently no-ops
+    /// the command instead of disabling it.
+    pub player_wall_pinned: bool,
     pub player_stamina: i32,
     pub player_attributes: Attributes,
     pub enemy_attributes: Attributes,
@@ -219,6 +225,7 @@ impl DescriptorContext {
                 enemy_blocking: false,
             },
             separation: MIN_SEPARATION,
+            player_wall_pinned: false,
             player_stamina: i32::MAX,
             player_attributes: Attributes::default(),
             enemy_attributes: Attributes::default(),
@@ -304,14 +311,18 @@ pub fn action_cost(action: CombatAction) -> ActionCost {
 /// [`in_melee_reach`]/[`MIN_SEPARATION`]/[`MAX_SEPARATION`] directly, the
 /// same primitives `combat::engine::resolve_action_positioned` itself gates
 /// and clamps on, so this can never drift from the resolver's own rules.
-fn position_legal(action: CombatAction, separation: f32) -> bool {
+/// `wall_pinned` is the projection of
+/// [`super::position::DuelPositions::is_wall_pinned`] (#160): a fighter
+/// backed into its own corner cannot retreat at all, even under
+/// [`MAX_SEPARATION`].
+fn position_legal(action: CombatAction, separation: f32, wall_pinned: bool) -> bool {
     match action {
         CombatAction::QuickStrike | CombatAction::NormalStrike | CombatAction::HeavyStrike => {
             in_melee_reach(separation)
         }
         CombatAction::Block | CombatAction::Rest => true,
         CombatAction::StepForward | CombatAction::LeapForward => separation > MIN_SEPARATION,
-        CombatAction::StepBack => separation < MAX_SEPARATION,
+        CombatAction::StepBack => separation < MAX_SEPARATION && !wall_pinned,
     }
 }
 
@@ -454,7 +465,12 @@ fn hit_chance(action: CombatAction, attacker: &Attributes, defender: &Attributes
 ///      1–3 pass (no reach or stamina gate).
 ///    - Movement ([`CombatAction::StepForward`]/[`CombatAction::StepBack`]/
 ///      [`CombatAction::LeapForward`]): a single **distance-bound** check
-///      (already at the closest/farthest band).
+///      (already at the closest/farthest band) — for `StepBack`, **wall
+///      pinned** (zero room left against the actor's own arena wall, #160)
+///      is checked before the farther **at maximum distance** cap, since
+///      the wall is the more fundamental constraint (no amount of
+///      separation headroom helps a fighter with literally nowhere left to
+///      stand).
 ///
 /// A future action (spell, consumable, ranged attack, taunt/shove) that adds
 /// a *new* kind of constraint (e.g. a mana or item-count gate) extends step 4
@@ -464,6 +480,7 @@ fn hit_chance(action: CombatAction, attacker: &Attributes, defender: &Attributes
 pub fn action_disabled_reason(
     turn: &CombatTurn,
     separation: f32,
+    wall_pinned: bool,
     stamina: i32,
     presentation_busy: bool,
     action: CombatAction,
@@ -499,7 +516,9 @@ pub fn action_disabled_reason(
             }
         }
         CombatAction::StepBack => {
-            if separation >= MAX_SEPARATION {
+            if wall_pinned {
+                Some("Ești blocat de perete; nu te mai poți retrage.".to_string())
+            } else if separation >= MAX_SEPARATION {
                 Some("Ești deja la distanță maximă.".to_string())
             } else {
                 None
@@ -516,11 +535,20 @@ pub fn action_disabled_reason(
 pub fn action_enabled(
     turn: &CombatTurn,
     separation: f32,
+    wall_pinned: bool,
     stamina: i32,
     presentation_busy: bool,
     action: CombatAction,
 ) -> bool {
-    action_disabled_reason(turn, separation, stamina, presentation_busy, action).is_none()
+    action_disabled_reason(
+        turn,
+        separation,
+        wall_pinned,
+        stamina,
+        presentation_busy,
+        action,
+    )
+    .is_none()
 }
 
 /// Builds one descriptor for `action` from `ctx` — every field derived by
@@ -529,6 +557,7 @@ fn descriptor_for(action: CombatAction, ctx: &DescriptorContext) -> ActionDescri
     let disabled_reason = action_disabled_reason(
         &ctx.turn,
         ctx.separation,
+        ctx.player_wall_pinned,
         ctx.player_stamina,
         ctx.presentation_busy,
         action,
@@ -541,7 +570,7 @@ fn descriptor_for(action: CombatAction, ctx: &DescriptorContext) -> ActionDescri
         pictogram_id: id,
         cost: action_cost(action),
         hit_chance: hit_chance(action, &ctx.player_attributes, &ctx.enemy_attributes),
-        position_legal: position_legal(action, ctx.separation),
+        position_legal: position_legal(action, ctx.separation, ctx.player_wall_pinned),
         enabled: disabled_reason.is_none(),
         disabled_reason,
         intent: action,
@@ -583,9 +612,19 @@ mod tests {
     }
 
     fn ctx_at(turn: CombatTurn, separation: f32, stamina: i32) -> DescriptorContext {
+        ctx_at_wall(turn, separation, false, stamina)
+    }
+
+    fn ctx_at_wall(
+        turn: CombatTurn,
+        separation: f32,
+        wall_pinned: bool,
+        stamina: i32,
+    ) -> DescriptorContext {
         DescriptorContext {
             turn,
             separation,
+            player_wall_pinned: wall_pinned,
             player_stamina: stamina,
             player_attributes: Attributes {
                 putere: 4,
@@ -839,18 +878,18 @@ mod tests {
         ];
         for (turn, separation, stamina, action, expected, why) in cases {
             assert_eq!(
-                action_enabled(&turn, separation, stamina, false, action),
+                action_enabled(&turn, separation, false, stamina, false, action),
                 expected,
                 "{why}"
             );
             assert_eq!(
-                action_disabled_reason(&turn, separation, stamina, false, action).is_none(),
+                action_disabled_reason(&turn, separation, false, stamina, false, action).is_none(),
                 expected,
                 "disabled_reason must agree with action_enabled: {why}"
             );
         }
         assert!(
-            !action_enabled(&PLAYER_TURN, CLOSE, 50, true, QuickStrike),
+            !action_enabled(&PLAYER_TURN, CLOSE, false, 50, true, QuickStrike),
             "presentation busy disables otherwise-valid actions"
         );
     }
@@ -889,13 +928,20 @@ mod tests {
         ];
         for (turn, separation, stamina, action, expected) in cases {
             assert_eq!(
-                action_disabled_reason(&turn, separation, stamina, false, action),
+                action_disabled_reason(&turn, separation, false, stamina, false, action),
                 Some(expected.to_string()),
                 "{action:?}"
             );
         }
         assert_eq!(
-            action_disabled_reason(&PLAYER_TURN, CLOSE, 50, true, CombatAction::QuickStrike),
+            action_disabled_reason(
+                &PLAYER_TURN,
+                CLOSE,
+                false,
+                50,
+                true,
+                CombatAction::QuickStrike
+            ),
             Some("Se așteaptă finalizarea acțiunii precedente.".to_string())
         );
         let enemy_turn = CombatTurn {
@@ -903,7 +949,14 @@ mod tests {
             ..PLAYER_TURN
         };
         assert_eq!(
-            action_disabled_reason(&enemy_turn, CLOSE, 50, false, CombatAction::QuickStrike),
+            action_disabled_reason(
+                &enemy_turn,
+                CLOSE,
+                false,
+                50,
+                false,
+                CombatAction::QuickStrike
+            ),
             Some("Nu e rândul tău.".to_string())
         );
         let over = CombatTurn {
@@ -911,7 +964,7 @@ mod tests {
             ..PLAYER_TURN
         };
         assert_eq!(
-            action_disabled_reason(&over, CLOSE, 50, false, CombatAction::Rest),
+            action_disabled_reason(&over, CLOSE, false, 50, false, CombatAction::Rest),
             Some("Lupta s-a încheiat.".to_string())
         );
     }
@@ -931,7 +984,14 @@ mod tests {
         // Presentation-busy outranks every turn/reach/stamina condition,
         // even when all of them also apply (out of reach, out of stamina).
         assert_eq!(
-            action_disabled_reason(&enemy_turn_over, FAR, 0, true, CombatAction::QuickStrike),
+            action_disabled_reason(
+                &enemy_turn_over,
+                FAR,
+                false,
+                0,
+                true,
+                CombatAction::QuickStrike
+            ),
             Some("Se așteaptă finalizarea acțiunii precedente.".to_string()),
             "presentation-busy must win over every other simultaneous cause"
         );
@@ -939,7 +999,14 @@ mod tests {
         // With presentation clear, turn-over outranks not-your-turn and
         // reach/stamina.
         assert_eq!(
-            action_disabled_reason(&enemy_turn_over, FAR, 0, false, CombatAction::QuickStrike),
+            action_disabled_reason(
+                &enemy_turn_over,
+                FAR,
+                false,
+                0,
+                false,
+                CombatAction::QuickStrike
+            ),
             Some("Lupta s-a încheiat.".to_string()),
             "turn-over must win over not-your-turn and reach/stamina"
         );
@@ -950,7 +1017,7 @@ mod tests {
         };
         // With the duel still live, not-your-turn outranks reach/stamina.
         assert_eq!(
-            action_disabled_reason(&enemy_turn, FAR, 0, false, CombatAction::QuickStrike),
+            action_disabled_reason(&enemy_turn, FAR, false, 0, false, CombatAction::QuickStrike),
             Some("Nu e rândul tău.".to_string()),
             "not-your-turn must win over reach/stamina"
         );
@@ -958,7 +1025,14 @@ mod tests {
         // On the player's live turn, out of reach *and* out of stamina:
         // reach is checked first.
         assert_eq!(
-            action_disabled_reason(&PLAYER_TURN, FAR, 0, false, CombatAction::QuickStrike),
+            action_disabled_reason(
+                &PLAYER_TURN,
+                FAR,
+                false,
+                0,
+                false,
+                CombatAction::QuickStrike
+            ),
             Some("Prea departe pentru lovitură.".to_string()),
             "reach must win over stamina within a strike's own check"
         );
@@ -980,20 +1054,48 @@ mod tests {
 
     #[test]
     fn position_legal_matches_separation_gated_actions() {
-        assert!(position_legal(CombatAction::QuickStrike, CLOSE));
-        assert!(!position_legal(CombatAction::QuickStrike, FAR));
-        assert!(position_legal(CombatAction::NormalStrike, CLOSE));
-        assert!(!position_legal(CombatAction::NormalStrike, FAR));
-        assert!(position_legal(CombatAction::HeavyStrike, CLOSE));
-        assert!(!position_legal(CombatAction::HeavyStrike, FAR));
-        assert!(position_legal(CombatAction::Block, FAR));
-        assert!(position_legal(CombatAction::Rest, FAR));
-        assert!(!position_legal(CombatAction::StepForward, CLOSE));
-        assert!(position_legal(CombatAction::StepForward, FAR));
-        assert!(!position_legal(CombatAction::LeapForward, CLOSE));
-        assert!(position_legal(CombatAction::LeapForward, FAR));
-        assert!(position_legal(CombatAction::StepBack, CLOSE));
-        assert!(!position_legal(CombatAction::StepBack, FAR));
+        assert!(position_legal(CombatAction::QuickStrike, CLOSE, false));
+        assert!(!position_legal(CombatAction::QuickStrike, FAR, false));
+        assert!(position_legal(CombatAction::NormalStrike, CLOSE, false));
+        assert!(!position_legal(CombatAction::NormalStrike, FAR, false));
+        assert!(position_legal(CombatAction::HeavyStrike, CLOSE, false));
+        assert!(!position_legal(CombatAction::HeavyStrike, FAR, false));
+        assert!(position_legal(CombatAction::Block, FAR, false));
+        assert!(position_legal(CombatAction::Rest, FAR, false));
+        assert!(!position_legal(CombatAction::StepForward, CLOSE, false));
+        assert!(position_legal(CombatAction::StepForward, FAR, false));
+        assert!(!position_legal(CombatAction::LeapForward, CLOSE, false));
+        assert!(position_legal(CombatAction::LeapForward, FAR, false));
+        assert!(position_legal(CombatAction::StepBack, CLOSE, false));
+        assert!(!position_legal(CombatAction::StepBack, FAR, false));
+    }
+
+    /// #160's acceptance criterion: a pinned fighter cannot emit a retreat
+    /// command at all, even at a separation well under the `MAX_SEPARATION`
+    /// cap that would otherwise leave `StepBack` legal.
+    #[test]
+    fn wall_pinned_disables_step_back_with_its_own_reason_regardless_of_separation() {
+        assert!(!position_legal(CombatAction::StepBack, CLOSE, true));
+        assert_eq!(
+            action_disabled_reason(&PLAYER_TURN, CLOSE, true, 50, false, CombatAction::StepBack),
+            Some("Ești blocat de perete; nu te mai poți retrage.".to_string())
+        );
+        // The wall-pinned reason wins over the separation-cap reason when
+        // both apply simultaneously (the more fundamental constraint,
+        // matching `action_disabled_reason`'s documented priority order).
+        assert_eq!(
+            action_disabled_reason(&PLAYER_TURN, FAR, true, 50, false, CombatAction::StepBack),
+            Some("Ești blocat de perete; nu te mai poți retrage.".to_string())
+        );
+        for descriptor in generate_action_descriptors(&ctx_at_wall(PLAYER_TURN, CLOSE, true, 50)) {
+            if descriptor.intent == CombatAction::StepBack {
+                assert!(!descriptor.enabled);
+                assert_eq!(
+                    descriptor.disabled_reason,
+                    Some("Ești blocat de perete; nu te mai poți retrage.".to_string())
+                );
+            }
+        }
     }
 
     #[test]
@@ -1003,7 +1105,7 @@ mod tests {
             for descriptor in generate_action_descriptors(&ctx_at(PLAYER_TURN, separation, 50)) {
                 assert_eq!(
                     descriptor.position_legal,
-                    position_legal(descriptor.intent, separation),
+                    position_legal(descriptor.intent, separation, false),
                     "{} at separation {separation}",
                     descriptor.id
                 );
