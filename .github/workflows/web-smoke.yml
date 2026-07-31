@@ -95,7 +95,7 @@ jobs:
         shared-key: "sccache"
 
     - name: Install Trunk
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@v2.85.2
       with:
         tool: trunk
 
@@ -174,7 +174,7 @@ jobs:
         shared-key: "sccache"
 
     - name: Install Trunk
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@v2.85.2
       with:
         tool: trunk
 
@@ -234,7 +234,7 @@ jobs:
         shared-key: "sccache"
 
     - name: Install Trunk
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@v2.85.2
       with:
         tool: trunk
 
@@ -280,7 +280,7 @@ jobs:
         shared-key: "sccache"
 
     - name: Install Trunk
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@v2.85.2
       with:
         tool: trunk
 
@@ -329,7 +329,7 @@ jobs:
         shared-key: "sccache"
 
     - name: Install Trunk
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@v2.85.2
       with:
         tool: trunk
 
@@ -377,7 +377,7 @@ jobs:
         shared-key: "sccache"
 
     - name: Install Trunk
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@v2.85.2
       with:
         tool: trunk
 
@@ -433,7 +433,7 @@ jobs:
         shared-key: "sccache"
 
     - name: Install Trunk
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@v2.85.2
       with:
         tool: trunk
 
@@ -483,7 +483,7 @@ jobs:
         shared-key: "sccache"
 
     - name: Install Trunk
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@v2.85.2
       with:
         tool: trunk
 
@@ -551,7 +551,7 @@ jobs:
         shared-key: "sccache"
 
     - name: Install Trunk
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@v2.85.2
       with:
         tool: trunk
 
@@ -606,7 +606,7 @@ jobs:
         shared-key: "sccache"
 
     - name: Install Trunk
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@v2.85.2
       with:
         tool: trunk
 
@@ -650,7 +650,7 @@ jobs:
         shared-key: "sccache"
 
     - name: Install Trunk
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@v2.85.2
       with:
         tool: trunk
 
@@ -708,7 +708,7 @@ jobs:
         shared-key: "sccache"
 
     - name: Install Trunk
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@v2.85.2
       with:
         tool: trunk
 
@@ -752,7 +752,7 @@ jobs:
         shared-key: "sccache"
 
     - name: Install Trunk
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@v2.85.2
       with:
         tool: trunk
 
@@ -800,7 +800,7 @@ jobs:
         shared-key: "sccache"
 
     - name: Install Trunk
-      uses: taiki-e/install-action@v2
+      uses: taiki-e/install-action@v2.85.2
       with:
         tool: trunk
 
