@@ -47,7 +47,7 @@ ttf-parser = { version = "0.25", default-features = false, features = ["std", "v
 # dependency of the shipped game. Already in the dependency graph transitively
 # (bevy's own derive macros use it), so this just enables the "full"/"visit"
 # features this scan needs on top of the version already resolved.
-syn = { version = "2", features = ["full", "visit"] }
+syn = { version = "3", features = ["full", "visit"] }
 
 [features]
 # Fast incremental native builds; never enable for release or wasm builds.
