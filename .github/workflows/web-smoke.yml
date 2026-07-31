@@ -87,7 +87,7 @@ jobs:
       run: rustup target add wasm32-unknown-unknown
 
     - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.8
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
@@ -166,7 +166,7 @@ jobs:
       run: rustup target add wasm32-unknown-unknown
 
     - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.8
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
@@ -226,7 +226,7 @@ jobs:
       run: rustup target add wasm32-unknown-unknown
 
     - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.8
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
@@ -272,7 +272,7 @@ jobs:
       run: rustup target add wasm32-unknown-unknown
 
     - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.8
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
@@ -321,7 +321,7 @@ jobs:
       run: rustup target add wasm32-unknown-unknown
 
     - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.8
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
@@ -369,7 +369,7 @@ jobs:
       run: rustup target add wasm32-unknown-unknown
 
     - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.8
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
@@ -425,7 +425,7 @@ jobs:
       run: rustup target add wasm32-unknown-unknown
 
     - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.8
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
@@ -475,7 +475,7 @@ jobs:
       run: rustup target add wasm32-unknown-unknown
 
     - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.8
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
@@ -543,7 +543,7 @@ jobs:
       run: rustup target add wasm32-unknown-unknown
 
     - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.8
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
@@ -598,7 +598,7 @@ jobs:
       run: rustup target add wasm32-unknown-unknown
 
     - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.8
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
@@ -642,7 +642,7 @@ jobs:
       run: rustup target add wasm32-unknown-unknown
 
     - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.8
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
@@ -700,7 +700,7 @@ jobs:
       run: rustup target add wasm32-unknown-unknown
 
     - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.8
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
@@ -744,7 +744,7 @@ jobs:
       run: rustup target add wasm32-unknown-unknown
 
     - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.8
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
@@ -792,7 +792,7 @@ jobs:
       run: rustup target add wasm32-unknown-unknown
 
     - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.8
+      uses: mozilla-actions/sccache-action@v0.0.10
 
     - name: Set up Rust cache
       uses: Swatinem/rust-cache@v2
