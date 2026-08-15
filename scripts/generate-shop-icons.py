@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Usage: python3 scripts/generate-shop-icons.py
 """Generate small folk-themed shop UI icons under assets/ui/.
 
 The icons are self-generated placeholder art in the project palette and are

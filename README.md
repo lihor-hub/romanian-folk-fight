@@ -121,3 +121,7 @@ Dual-licensed under either:
 at your option.
 
 Assets are licensed separately per-file; see [CREDITS.md](assets/CREDITS.md) for details.
+
+## Automatic Scripts
+For more details on running our asset collection pipelines, see our [Scripts Directory Index](scripts/README.md).
+
