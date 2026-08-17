@@ -51,7 +51,7 @@ jobs:
 
       - name: Upload focused gallery + diagnostics (always, for post-mortem on failure)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: asset-review-changed
           # Both paths keep their repo-relative layout inside the artifact,
