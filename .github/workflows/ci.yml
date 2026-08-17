@@ -125,7 +125,7 @@ jobs:
       run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
 
     - name: Install Trunk
-      uses: taiki-e/install-action@v2.85.2
+      uses: taiki-e/install-action@v2.85.11
       with:
         tool: trunk
 
