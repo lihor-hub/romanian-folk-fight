@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Usage: python3 scripts/stylize-fighter-parts.py [--check]
 """Apply the phase-4 folk stylization pass to fighter runtime part art.
 
 One deterministic, idempotent surface treatment over the human and strigoi

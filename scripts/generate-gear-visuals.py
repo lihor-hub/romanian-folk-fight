@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Usage: python3 scripts/generate-gear-visuals.py
 """Generate transparent equipment overlay sprites under assets/gear/.
 
 Each image is a 128x128 transparent layer aligned to the fighter frame. The

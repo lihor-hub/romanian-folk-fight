@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Usage: python3 scripts/generate-pictogram.py
 """Generate the combat action pictograms under assets/ui/pictograms/.
 
 Same pipeline as scripts/generate-shop-icons.py: self-generated placeholder

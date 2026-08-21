@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Usage: python3 scripts/generate-ui-panel.py
 """Generate the embroidery-motif 9-slice UI panel border under assets/ui/.
 
 Self-contained (Python 3 stdlib only, no PIL), following
