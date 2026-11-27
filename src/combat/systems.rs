@@ -106,6 +106,10 @@ pub struct CombatLogEvent {
     pub event: CombatEvent,
 }
 
+/// Resolves this frame's actions and authoritative positions before presentation.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct CombatResolution;
+
 pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
@@ -153,6 +157,7 @@ impl Plugin for CombatPlugin {
                         enemy_turn,
                     )
                         .chain()
+                        .in_set(CombatResolution)
                         .run_if(in_state(PauseState::Running)),
                     hud::collect_log_lines,
                     action_palette::update_button_backgrounds,
@@ -951,6 +956,32 @@ mod tests {
         press(&mut app, KeyCode::Digit1);
         assert_eq!((player_pools(&mut app), enemy_pools(&mut app)), before);
         assert!(turn(&app).over);
+    }
+
+    #[test]
+    fn reduced_motion_movement_is_rendered_in_the_resolution_frame() {
+        let mut app = test_app_with_motion(PLAYER_ATTRIBUTES, true);
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::ZERO,
+        ));
+        drain_enemy_stamina(&mut app);
+        let before = positions(&app);
+        app.world_mut()
+            .write_message(PlayerActionEvent(CombatAction::StepBack));
+        app.update();
+        let after = positions(&app);
+        assert_ne!(before.player_x, after.player_x, "the action really moved");
+        let rendered = app
+            .world_mut()
+            .query_filtered::<&Transform, With<PlayerFighter>>()
+            .single(app.world())
+            .unwrap()
+            .translation
+            .x;
+        assert_eq!(
+            rendered, after.player_x,
+            "reduced motion must snap to combat truth before the frame is published"
+        );
     }
 
     /// #159's transform-synchronization acceptance, end to end through the

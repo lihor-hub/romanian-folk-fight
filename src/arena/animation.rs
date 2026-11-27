@@ -1131,6 +1131,10 @@ impl Plugin for AnimationPlugin {
             )
                 .chain()
                 .in_set(AnimationSet::Apply)
+                // A movement changes combat truth immediately. Consume its event
+                // and snap/tween the transform in that same frame, before review
+                // telemetry observes the staged and rendered positions together.
+                .after(crate::combat::systems::CombatResolution)
                 .run_if(in_state(crate::core::GameState::Fight)),
         );
     }
