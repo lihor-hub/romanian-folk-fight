@@ -739,7 +739,7 @@ fn cycle_value<T: Copy + Eq>(value: T, all: &[T], direction: CycleDirection) -> 
     let index = all
         .iter()
         .position(|candidate| *candidate == value)
-        .map_or(0, |index| index);
+        .unwrap_or(0);
     match direction {
         CycleDirection::Previous => all[(index + all.len() - 1) % all.len()],
         CycleDirection::Next => all[(index + 1) % all.len()],
@@ -771,6 +771,15 @@ mod tests {
             "../../assets/fighters/catalog/human-foundation.json"
         ))
         .expect("human foundation fixture is valid JSON")
+    }
+
+    #[test]
+    fn cycle_value_preserves_wrapping_and_missing_value_fallback() {
+        let all = [10, 20, 30];
+        for (value, previous, next) in [(10, 30, 20), (20, 10, 30), (30, 20, 10), (99, 30, 20)] {
+            assert_eq!(cycle_value(value, &all, CycleDirection::Previous), previous);
+            assert_eq!(cycle_value(value, &all, CycleDirection::Next), next);
+        }
     }
 
     #[test]
