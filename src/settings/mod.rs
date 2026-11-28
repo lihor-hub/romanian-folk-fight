@@ -291,6 +291,7 @@ impl Plugin for SettingsPlugin {
                 (
                     spawn_overlay.run_if(resource_added::<SettingsOpen>),
                     autofocus_settings_overlay.run_if(resource_added::<SettingsOpen>),
+                    close_on_escape.run_if(resource_exists::<SettingsOpen>),
                     handle_settings_buttons
                         .after(FocusNavigationSet)
                         .run_if(resource_exists::<SettingsOpen>),
@@ -563,6 +564,17 @@ fn autofocus_settings_overlay(
     }
 }
 
+/// Consumes Escape before removing the modal: deferred removal can make the
+/// pause plugin's `not(SettingsOpen)` guard eligible later in this same Update.
+/// That later consumer must not see the keypress that closed settings.
+fn close_on_escape(mut commands: Commands, keys: Option<ResMut<ButtonInput<KeyCode>>>) {
+    if let Some(mut keys) = keys
+        && keys.clear_just_pressed(KeyCode::Escape)
+    {
+        commands.remove_resource::<SettingsOpen>();
+    }
+}
+
 /// Applies a clicked settings action: step a volume (clamped at 0/10), flip
 /// the mute or an accessibility toggle, or close the overlay. Audio changes
 /// go through [`AudioSettings`], which the audio plugin applies to live
@@ -630,7 +642,7 @@ fn update_labels(
 mod tests {
     use super::*;
     use crate::audio::AudioSettings;
-    use crate::core::CorePlugin;
+    use crate::core::{CorePlugin, GameState};
     use crate::save::MemoryBackend;
     use bevy::state::app::StatesPlugin;
     use std::sync::{Arc, Mutex};
@@ -855,6 +867,159 @@ mod tests {
         app.update();
         assert_eq!(audio(&app), AudioSettings::default());
         assert_eq!(accessibility(&app), AccessibilityPreferences::default());
+    }
+
+    /// Real menu, combat/pause, and settings schedules, in both plugin orders.
+    fn escape_test_app(settings_first: bool) -> App {
+        use rand::SeedableRng;
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            CorePlugin,
+            crate::flow::FlowPlugin,
+        ));
+        app.init_resource::<AudioSettings>();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        let (store, _) = in_memory_store();
+        app.insert_resource(store);
+        if settings_first {
+            app.add_plugins(SettingsPlugin);
+        }
+        app.add_plugins((
+            crate::menu::MenuPlugin,
+            crate::arena::ArenaPlugin,
+            crate::combat::CombatPlugin,
+        ));
+        if !settings_first {
+            app.add_plugins(SettingsPlugin);
+        }
+        app.insert_resource(crate::creation::PlayerCharacter {
+            name: "Făt-Frumos".to_string(),
+            attributes: crate::character::Attributes::default(),
+            appearance: crate::character::PlayerAppearance::default(),
+            definition: crate::character::CharacterDefinition::legacy_human(
+                crate::character::PlayerAppearance::default(),
+            ),
+        });
+        app.insert_resource(crate::combat::CombatRng(
+            rand_chacha::ChaCha8Rng::seed_from_u64(7),
+        ));
+        app.update();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::MainMenu
+        );
+        app
+    }
+
+    fn release_escape(app: &mut App) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::Escape);
+        keys.clear();
+        app.update(); // Apply any queued pause transition from the Escape frame.
+    }
+
+    fn close_settings_with_escape(app: &mut App) {
+        assert!(app.world().contains_resource::<SettingsOpen>());
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        app.update();
+        assert!(!app.world().contains_resource::<SettingsOpen>());
+        assert_eq!(overlay_count(app), 0);
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .just_pressed(KeyCode::Escape),
+            "consume Escape before deferred removal lets a later pause guard run"
+        );
+        release_escape(app);
+        app.update();
+    }
+
+    #[test]
+    fn escape_closes_settings_opened_from_the_real_menu() {
+        for settings_first in [false, true] {
+            let mut app = escape_test_app(settings_first);
+            let open = app
+                .world_mut()
+                .query_filtered::<(Entity, &crate::menu::MenuAction), With<Button>>()
+                .iter(app.world())
+                .find_map(|(entity, action)| {
+                    matches!(action, crate::menu::MenuAction::Settings).then_some(entity)
+                })
+                .expect("menu settings button");
+            click(&mut app, open);
+            close_settings_with_escape(&mut app);
+            assert_eq!(
+                *app.world().resource::<State<GameState>>().get(),
+                GameState::MainMenu
+            );
+            assert_eq!(app.world().resource::<InputFocus>().get(), None);
+        }
+    }
+
+    #[test]
+    fn escape_closes_settings_without_unpausing_the_real_fight() {
+        use crate::combat::pause::{PauseAction, PauseState};
+
+        for settings_first in [false, true] {
+            let mut app = escape_test_app(settings_first);
+            app.world_mut()
+                .resource_mut::<NextState<GameState>>()
+                .set(GameState::Fight);
+            app.update();
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::Escape);
+            app.update();
+            release_escape(&mut app);
+            assert_eq!(
+                *app.world().resource::<State<PauseState>>().get(),
+                PauseState::Paused
+            );
+            let open = app
+                .world_mut()
+                .query_filtered::<(Entity, &PauseAction), With<Button>>()
+                .iter(app.world())
+                .find_map(|(entity, action)| {
+                    matches!(action, PauseAction::Settings).then_some(entity)
+                })
+                .expect("pause settings button");
+            click(&mut app, open);
+            close_settings_with_escape(&mut app);
+            assert_eq!(
+                *app.world().resource::<State<PauseState>>().get(),
+                PauseState::Paused
+            );
+            assert_eq!(
+                *app.world().resource::<State<GameState>>().get(),
+                GameState::Fight
+            );
+            let resume = app
+                .world_mut()
+                .query_filtered::<(Entity, &PauseAction), With<Button>>()
+                .iter(app.world())
+                .find_map(|(entity, action)| {
+                    matches!(action, PauseAction::Resume).then_some(entity)
+                })
+                .expect("pause overlay survives");
+            assert_eq!(app.world().resource::<InputFocus>().get(), Some(resume));
+
+            // Without settings, a fresh Escape must still resume the fight.
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::Escape);
+            app.update();
+            release_escape(&mut app);
+            assert_eq!(
+                *app.world().resource::<State<PauseState>>().get(),
+                PauseState::Running
+            );
+        }
     }
 
     #[test]
