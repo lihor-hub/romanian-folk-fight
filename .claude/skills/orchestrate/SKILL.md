@@ -20,10 +20,10 @@ implement in the orchestrator session.
 - **Model choice per issue:** well-specified leaf issues (spec is
   implementable cold, bounded file set) go to Sonnet agents; only
   cross-cutting or underspecified issues need the orchestrator's own model.
-- Verification is the expensive part (`pre-push` ~4 min, web-smoke ~10 min per
-  scenario, full baseline capture ~30 min — see `AGENTS.md`). Stagger agent
-  launches so two agents are not both in a browser-matrix capture at the same
-  time.
+- Verification is the expensive part (see `AGENTS.md` for current host costs).
+  Assign the full gate to the canonical push hook, not a manual run followed
+  by the identical hook. Stagger agent launches so two agents are not both in
+  a browser-matrix capture at the same time.
 
 ## Conflict-aware scheduling
 

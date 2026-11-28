@@ -131,7 +131,12 @@ In a fresh worktree, run `scripts/bootstrap-worktree.sh` first to verify path an
 
 Push only after the relevant tests and type/lint gates pass locally.
 
-Before every push, run `cargo xtask pre-push`. Run additional browser scenarios
+The installed unconditional pre-push hook runs `cargo xtask pre-push` once for
+every push; its success satisfies the required full gate. Do not automatically
+run it manually first at the same inputs. Manual preflight is optional for
+earlier feedback (the hook still reruns), or required when hooks are unavailable.
+Never bypass installed hooks or use cached-success receipts. Finish edits before
+the authoritative push-hook run and retain its logs. Run additional browser scenarios
 only when directly affected. Do not run `cargo xtask web-smoke --all` locally
 unless shared theme/layout infrastructure changed, visual baselines across
 multiple screens changed, or the user explicitly requests the full browser
@@ -171,8 +176,9 @@ behavior in the delivery contract and test it explicitly.
 
 ### 5. Rebase on `origin/main`, open or update the PR, and queue when applicable
 
-Rebase immediately before pushing, re-run gates if the rebase changes the base,
-push, then open a new PR or update the existing PR. Queue auto-merge only when
+Rebase immediately before pushing. The canonical push hook verifies the current
+rebased inputs; prior evidence is not a reason to skip it. Push normally, then
+open a new PR or update the existing PR. Queue auto-merge only when
 the delivery contract's terminal state is merge:
 
 ```bash

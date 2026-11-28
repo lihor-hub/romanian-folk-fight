@@ -1,11 +1,12 @@
 //! `cargo xtask pre-push` -- the full repository-native gate.
 //!
-//! Runs, in order, stopping at the first failure: `cargo fmt --check`,
-//! `cargo clippy -D warnings`, `cargo test` (the whole suite), the same
+//! Runs, in order, stopping at the first failure: `cargo fmt --all -- --check`,
+//! workspace/all-target Clippy, workspace tests (the whole suite), the same
 //! clippy/test pair again with `--features review` (#294), then the
 //! build-feature matrix (native/release/wasm, no `dev`/`review` leakage).
-//! This is the same gate the git `pre-push` hook and CI expect a clean tree
-//! to pass.
+//! The unconditional git `pre-push` hook delegates here once per push; no
+//! duplicate manual invocation is required. CI independently covers the
+//! default/review workspace lint/tests and production wasm build.
 //!
 //! ## Why a review-feature clippy/test pair (#294)
 //!
@@ -143,4 +144,79 @@ fn cargo_test_review_cmd() -> Command {
     let mut cmd = Command::new("cargo");
     cmd.args(["test", "--workspace", "--features", "review"]);
     cmd
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_hook_policy_keeps_commits_cheap_and_the_push_gate_unconditional() {
+        // Pin the small local policy without adding a YAML dependency to xtask.
+        // scripts/test-hooks.py additionally exercises real pre-commit semantics.
+        let config = include_str!("../../../.pre-commit-config.yaml");
+        let (_, local) = config.split_once("  - repo: local\n").expect("local hooks");
+        assert_eq!(config.matches("entry: cargo ").count(), 2);
+        assert_eq!(
+            local.trim(),
+            r#"hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        description: Format Rust code
+        entry: cargo fmt --all -- --check
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      # One authoritative full gate, including config-only / non-Rust pushes.
+      - id: cargo-pre-push
+        name: cargo xtask pre-push (full gate)
+        description: Workspace default/review lint and tests plus build matrix
+        entry: cargo xtask pre-push
+        language: system
+        verbose: true
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]"#
+        );
+    }
+
+    #[test]
+    fn native_commands_keep_workspace_default_review_and_verbatim_ci_docs() {
+        let ci = include_str!("../../../.github/workflows/ci.yml");
+        let readme = include_str!("../../../README.md");
+        let contributing = include_str!("../../../CONTRIBUTING.md");
+        let commands = [
+            fmt_check_cmd(),
+            clippy_cmd(),
+            clippy_review_cmd(),
+            cargo_test_cmd(),
+            cargo_test_review_cmd(),
+        ];
+        let expected = [
+            "cargo fmt --all -- --check",
+            "cargo clippy --workspace --all-targets -- -D warnings",
+            "cargo clippy --workspace --all-targets --features review -- -D warnings",
+            "cargo test --workspace",
+            "cargo test --workspace --features review",
+        ];
+        for (command, expected) in commands.into_iter().zip(expected) {
+            let actual = std::iter::once(command.get_program())
+                .chain(command.get_args())
+                .map(|arg| arg.to_str().expect("UTF-8 command"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert_eq!(actual, expected);
+            assert!(ci.contains(&format!("run: {expected}\n")), "CI: {expected}");
+            assert!(
+                readme.lines().any(|line| line == expected),
+                "README: {expected}"
+            );
+            assert!(
+                contributing.lines().any(|line| line == expected),
+                "CONTRIBUTING: {expected}"
+            );
+        }
+    }
 }

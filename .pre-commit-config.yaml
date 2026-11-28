@@ -1,5 +1,6 @@
-# Run `pre-commit install` once after cloning; hooks then run on every commit.
-# Run all hooks manually with: pre-commit run --all-files
+# Install both stages: pre-commit install --hook-type pre-commit --hook-type pre-push
+# Commit hygiene: pre-commit run --all-files
+# Optional full preflight: pre-commit run --hook-stage pre-push --all-files
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -22,25 +23,19 @@ repos:
       - id: cargo-fmt
         name: cargo fmt
         description: Format Rust code
-        entry: cargo fmt -- --check
+        entry: cargo fmt --all -- --check
         language: system
-        files: \.rs$
         pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
 
-      - id: cargo-clippy
-        name: cargo clippy
-        description: Lint Rust code
-        entry: cargo clippy --all-targets -- -D warnings
+      # One authoritative full gate, including config-only / non-Rust pushes.
+      - id: cargo-pre-push
+        name: cargo xtask pre-push (full gate)
+        description: Workspace default/review lint and tests plus build matrix
+        entry: cargo xtask pre-push
         language: system
-        files: \.rs$
+        verbose: true
         pass_filenames: false
-
-      # ── pre-push: full quality gate before code leaves the machine ─────────
-      - id: cargo-test
-        name: cargo test (pre-push)
-        description: Run Rust unit tests
-        entry: cargo test
-        language: system
-        files: \.rs$
-        pass_filenames: false
+        always_run: true
         stages: [pre-push]
