@@ -16,6 +16,7 @@
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Romanian Folk Fight" />
+    <meta property="og:site_name" content="Romanian Folk Fight" />
     <meta
       property="og:description"
       content="Un beat 'em up folcloric românesc — a Romanian folklore beat 'em up, playable in the browser."
@@ -25,6 +26,7 @@
       property="og:image"
       content="https://lihor-hub.github.io/romanian-folk-fight/assets/web/og-image.png"
     />
+    <meta property="og:image:alt" content="Romanian Folk Fight title and shield on a dark background with red and gold borders" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta property="og:locale" content="ro_RO" />
@@ -41,7 +43,10 @@
       content="https://lihor-hub.github.io/romanian-folk-fight/assets/web/og-image.png"
     />
 
+    <meta name="twitter:image:alt" content="Romanian Folk Fight title and shield on a dark background with red and gold borders" />
+
     <!-- Favicons (relative paths keep this subpath-safe on GitHub Pages) -->
+    <link rel="manifest" href="manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="assets/web/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="assets/web/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="assets/web/apple-touch-icon.png" />
@@ -78,6 +83,7 @@
 
     <link data-trunk rel="rust" data-wasm-opt="z" />
     <link data-trunk rel="copy-dir" href="assets" />
+    <link data-trunk rel="copy-file" href="manifest.webmanifest" />
     <style>
       html,
       body {

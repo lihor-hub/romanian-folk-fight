@@ -449,17 +449,20 @@ fn identity(
         .iter()
         .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
         .collect();
-    if html.to_ascii_lowercase().matches("data-trunk").count() != 2
-        || normalized.len() != 2
+    if html.to_ascii_lowercase().matches("data-trunk").count() != 3
+        || normalized.len() != 3
         || !normalized
             .iter()
             .any(|s| s == "data-trunk rel=\"rust\" data-wasm-opt=\"z\" /")
         || !normalized
             .iter()
             .any(|s| s == "data-trunk rel=\"copy-dir\" href=\"assets\" /")
+        || !normalized
+            .iter()
+            .any(|s| s == "data-trunk rel=\"copy-file\" href=\"manifest.webmanifest\" /")
     {
         return Err(error(
-            "unsupported HTML build pipelines; expected Rust -Oz and assets copy",
+            "unsupported HTML build pipelines; expected Rust -Oz, assets and root manifest copy",
         ));
     }
     let mut inputs = BTreeMap::new();
@@ -472,6 +475,7 @@ fn identity(
         "xtask/Cargo.toml",
         "Trunk.toml",
         "index.html",
+        "manifest.webmanifest",
     ] {
         add_file(root, file, &mut inputs)?;
     }
@@ -545,7 +549,9 @@ fn validate(path: &Path, expected: &Identity) -> Result<Bundle> {
         || expected
             .inputs
             .iter()
-            .filter(|(path, _)| path.starts_with("assets/"))
+            .filter(|(path, _)| {
+                path.starts_with("assets/") || path.as_str() == "manifest.webmanifest"
+            })
             .any(|(path, checksum)| outputs.get(path) != Some(checksum))
     {
         return Err(error("missing/partial/tampered bundle outputs"));
@@ -731,8 +737,9 @@ mod tests {
                 ("Trunk.toml", "[build]\ntarget='index.html'\ndist='dist'\n"),
                 (
                     "index.html",
-                    "<link data-trunk rel=\"rust\" data-wasm-opt=\"z\" /><link data-trunk rel=\"copy-dir\" href=\"assets\" />",
+                    "<link data-trunk rel=\"rust\" data-wasm-opt=\"z\" /><link data-trunk rel=\"copy-dir\" href=\"assets\" /><link data-trunk rel=\"copy-file\" href=\"manifest.webmanifest\" />",
                 ),
+                ("manifest.webmanifest", "{}"),
                 ("src/main.rs", "fn main() {}"),
                 ("assets/example.txt", "asset"),
                 ("xtask/src/main.rs", "fn main() {}"),
@@ -772,9 +779,208 @@ mod tests {
         for file in ["index.html", "game.js", "game.wasm"] {
             io(fs::write(dist.join(file), file))?;
         }
+        io(fs::write(dist.join("manifest.webmanifest"), "{}"))?;
         io(fs::create_dir(dist.join("assets")))?;
         io(fs::write(dist.join("assets/example.txt"), "asset"))?;
         Ok(())
+    }
+
+    #[test]
+    fn web_manifest_metadata_uses_relative_links_and_existing_png_sizes() {
+        let root = crate::web_smoke::workspace_root();
+        let html = fs::read_to_string(root.join("index.html")).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("manifest.webmanifest")).unwrap()).unwrap();
+        assert_eq!(manifest["name"], "Romanian Folk Fight");
+        assert_eq!(manifest["short_name"], "Folk Fight");
+        assert_eq!(manifest["start_url"], ".");
+        assert_eq!(manifest["display"], "standalone");
+        assert_eq!(manifest["background_color"], "#1a1214");
+        assert_eq!(manifest["theme_color"], "#7a1f1f");
+        assert!(html.contains("background: #1a1214;"));
+        assert!(html.contains("<meta name=\"theme-color\" content=\"#7a1f1f\" />"));
+        assert!(html.contains("<link rel=\"manifest\" href=\"manifest.webmanifest\" />"));
+        assert!(
+            html.contains("<link data-trunk rel=\"copy-file\" href=\"manifest.webmanifest\" />")
+        );
+        for (attribute, field) in [
+            ("property", "og:site_name"),
+            ("property", "og:image:alt"),
+            ("name", "twitter:image:alt"),
+        ] {
+            let tag = html
+                .split("<meta")
+                .filter_map(|part| part.split('>').next())
+                .find(|tag| tag.contains(&format!("{attribute}=\"{field}\"")))
+                .unwrap();
+            let content = tag
+                .split_once("content=\"")
+                .unwrap()
+                .1
+                .split('"')
+                .next()
+                .unwrap();
+            assert!(!content.trim().is_empty(), "{field}");
+            if field == "og:site_name" {
+                assert_eq!(content, manifest["name"].as_str().unwrap());
+            }
+        }
+        let icons = manifest["icons"].as_array().unwrap();
+        let sources = [
+            "assets/web/favicon-32.png",
+            "assets/web/apple-touch-icon.png",
+            "assets/web/og-image.png",
+        ];
+        assert_eq!(icons.len(), sources.len());
+        for (icon, source) in icons.iter().zip(sources) {
+            assert_eq!(icon["src"], source);
+            assert!(
+                Path::new(source)
+                    .components()
+                    .all(|part| matches!(part, std::path::Component::Normal(_)))
+            );
+            assert_eq!(icon["type"], "image/png");
+            let (width, height) = image::image_dimensions(root.join(source)).unwrap();
+            assert_eq!(icon["sizes"], format!("{width}x{height}"));
+        }
+    }
+
+    #[test]
+    fn web_manifest_bytes_invalidate_and_missing_or_changed_copies_reject() {
+        let f = Fixture::new();
+        let expected = f.ready();
+        let manifest = f.0.join("manifest.webmanifest");
+        fs::write(&manifest, "{ }").unwrap();
+        let changed = f.identity(Variant::Production);
+        assert_ne!(changed, expected);
+        assert!(validate(&f.destination(), &changed).is_err());
+        fs::write(manifest, "{}").unwrap();
+        for wrong in [None, Some("{ }")] {
+            assert!(
+                publish(
+                    &f.destination(),
+                    expected.clone(),
+                    |dist| {
+                        fake_build(dist)?;
+                        let output = dist.join("manifest.webmanifest");
+                        match wrong {
+                            None => io(fs::remove_file(output))?,
+                            Some(bytes) => io(fs::write(output, bytes))?,
+                        }
+                        Ok(())
+                    },
+                    || Ok(expected.clone()),
+                )
+                .is_err()
+            );
+            assert!(validate(&f.destination(), &expected).is_ok());
+        }
+    }
+
+    #[test]
+    fn web_manifest_copy_recipe_rejects_unknown_sources_and_attributes() {
+        let f = Fixture::new();
+        let path = f.0.join("index.html");
+        let html = fs::read_to_string(&path).unwrap();
+        assert!(
+            identity(
+                &f.0,
+                Variant::Production,
+                BTreeMap::new(),
+                Provenance::Local
+            )
+            .is_ok()
+        );
+        for replacement in [
+            "data-trunk rel=\"copy-file\" href=\"other.webmanifest\" /",
+            "data-trunk rel=\"copy-file\" href=\"../manifest.webmanifest\" /",
+            "data-trunk rel=\"copy-file\" href=\"/manifest.webmanifest\" /",
+            "data-trunk rel=\"copy-file\" href=\"assets/manifest.webmanifest\" /",
+            "data-trunk rel=\"copy-file\" href=\"manifest\\webmanifest\" /",
+            "data-trunk rel=\"copy-file\" href=\"manifest.webmanifest\" data-target-path=\"elsewhere\" /",
+            "data-trunk rel=\"copy-dir\" href=\"manifest.webmanifest\" /",
+        ] {
+            fs::write(
+                &path,
+                html.replace(
+                    "data-trunk rel=\"copy-file\" href=\"manifest.webmanifest\" /",
+                    replacement,
+                ),
+            )
+            .unwrap();
+            assert!(
+                identity(
+                    &f.0,
+                    Variant::Production,
+                    BTreeMap::new(),
+                    Provenance::Local
+                )
+                .is_err()
+            );
+        }
+        fs::write(
+            &path,
+            format!("{html}<link data-trunk rel=\"copy-file\" href=\"manifest.webmanifest\" />"),
+        )
+        .unwrap();
+        assert!(
+            identity(
+                &f.0,
+                Variant::Production,
+                BTreeMap::new(),
+                Provenance::Local
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn web_manifest_source_must_be_regular_and_not_a_symlink() {
+        let f = Fixture::new();
+        assert!(
+            identity(
+                &f.0,
+                Variant::Production,
+                BTreeMap::new(),
+                Provenance::Local
+            )
+            .is_ok()
+        );
+        let manifest = f.0.join("manifest.webmanifest");
+        fs::remove_file(&manifest).unwrap();
+        assert!(
+            identity(
+                &f.0,
+                Variant::Production,
+                BTreeMap::new(),
+                Provenance::Local
+            )
+            .is_err()
+        );
+        fs::create_dir(&manifest).unwrap();
+        assert!(
+            identity(
+                &f.0,
+                Variant::Production,
+                BTreeMap::new(),
+                Provenance::Local
+            )
+            .is_err()
+        );
+        fs::remove_dir(&manifest).unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(f.0.join("Cargo.toml"), &manifest).unwrap();
+            assert!(
+                identity(
+                    &f.0,
+                    Variant::Production,
+                    BTreeMap::new(),
+                    Provenance::Local
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]
