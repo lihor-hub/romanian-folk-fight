@@ -29,7 +29,7 @@ pub enum ItemId {
 
 impl ItemId {
     /// Every catalog id, for integrity tests and catalog-listing UIs.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: &[Self] = &[
         Self::BataCiobaneasca,
         Self::ToporDePadurar,
         Self::Palos,
@@ -45,8 +45,11 @@ impl ItemId {
         Self::CizmeDeVoinic,
     ];
 
+    /// Number of catalog items; sizes the catalog and visual metadata tables.
+    pub const COUNT: usize = Self::ALL.len();
+
     /// The catalog entry for this id. Infallible: the enum discriminant is
-    /// the [`CATALOG`] index, and both have exactly 13 entries.
+    /// the [`CATALOG`] index, with one entry per id in [`Self::ALL`].
     pub fn item(self) -> &'static Item {
         &CATALOG[self as usize]
     }
@@ -72,7 +75,7 @@ const fn item(
 }
 
 /// The full starter catalog, in [`ItemId`] discriminant order.
-pub static CATALOG: [Item; 13] = [
+pub static CATALOG: [Item; ItemId::COUNT] = [
     item(
         ItemId::BataCiobaneasca,
         "Bâtă ciobănească",
@@ -137,8 +140,20 @@ mod tests {
     #[test]
     fn every_id_resolves_to_its_own_catalog_entry() {
         // Pins the invariant behind `ItemId::item`: discriminant == index.
-        for id in ItemId::ALL {
+        for &id in ItemId::ALL {
             assert_eq!(id.item().id, id, "{id:?} must sit at its own index");
+        }
+    }
+
+    #[test]
+    fn inventory_sizes_and_orders_both_item_tables() {
+        let visuals = &crate::items::visuals::ITEM_VISUALS;
+        assert_eq!(CATALOG.len(), ItemId::COUNT);
+        assert_eq!(visuals.len(), ItemId::COUNT);
+        for (index, &id) in ItemId::ALL.iter().enumerate() {
+            assert_eq!(id as usize, index, "{id:?} must follow discriminant order");
+            assert_eq!(CATALOG[index].id, id);
+            assert_eq!(visuals[index].id, id);
         }
     }
 
@@ -251,7 +266,7 @@ mod tests {
 
     #[test]
     fn every_visual_metadata_entry_matches_its_catalog_item() {
-        for id in ItemId::ALL {
+        for &id in ItemId::ALL {
             let visual = crate::items::visuals::item_visual(id).expect("visual metadata exists");
             assert_eq!(visual.id, id);
             assert_eq!(visual.slot, id.item().slot);
@@ -261,7 +276,7 @@ mod tests {
     #[test]
     fn every_visual_asset_exists_on_disk() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        for id in ItemId::ALL {
+        for &id in ItemId::ALL {
             let visual = crate::items::visuals::item_visual(id).expect("visual metadata exists");
             let path = manifest.join("assets").join(visual.asset_path);
             assert!(
