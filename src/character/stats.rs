@@ -12,6 +12,30 @@
 
 use super::Attributes;
 
+/// Flat base of maximum hit points.
+pub const BASE_HP: i32 = 50;
+
+/// Hit points granted per point of `vitalitate`.
+pub const HP_PER_VITALITATE: i32 = 10;
+
+/// Flat base of maximum stamina.
+pub const BASE_STAMINA: i32 = 30;
+
+/// Stamina granted per point of `vitalitate`.
+pub const STAMINA_PER_VITALITATE: i32 = 5;
+
+/// Flat base damage before attribute scaling and modifiers.
+pub const BASE_DAMAGE_FLAT: i32 = 2;
+
+/// Base damage added per point of `putere`.
+pub const DAMAGE_PER_PUTERE: i32 = 1;
+
+/// Flat base of the critical-hit chance in percent.
+pub const CRIT_PERCENT_BASE: i32 = 5;
+
+/// Critical-hit chance percent added per point of `noroc`.
+pub const CRIT_PERCENT_PER_NOROC: i32 = 2;
+
 /// Maximum critical-hit chance in percent.
 pub const CRIT_PERCENT_CAP: i32 = 50;
 
@@ -40,12 +64,12 @@ pub const TAUNT_PERCENT_CAP: i32 = 60;
 
 /// Maximum hit points: `50 + 10 * vitalitate`.
 pub fn max_hp(attrs: &Attributes) -> i32 {
-    50 + 10 * attrs.vitalitate as i32
+    BASE_HP + HP_PER_VITALITATE * attrs.vitalitate as i32
 }
 
 /// Maximum stamina: `30 + 5 * vitalitate`.
 pub fn max_stamina(attrs: &Attributes) -> i32 {
-    30 + 5 * attrs.vitalitate as i32
+    BASE_STAMINA + STAMINA_PER_VITALITATE * attrs.vitalitate as i32
 }
 
 /// Maximum mana: `10 * magie`. Zero for a `magie == 0` non-caster — there is
@@ -58,12 +82,12 @@ pub fn max_mana(attrs: &Attributes) -> i32 {
 
 /// Base damage dealt before modifiers: `2 + putere`.
 pub fn base_damage(attrs: &Attributes) -> i32 {
-    2 + attrs.putere as i32
+    BASE_DAMAGE_FLAT + DAMAGE_PER_PUTERE * attrs.putere as i32
 }
 
 /// Critical-hit chance in percent: `5 + 2 * noroc`, capped at 50.
 pub fn crit_percent(attrs: &Attributes) -> i32 {
-    (5 + 2 * attrs.noroc as i32).min(CRIT_PERCENT_CAP)
+    (CRIT_PERCENT_BASE + CRIT_PERCENT_PER_NOROC * attrs.noroc as i32).min(CRIT_PERCENT_CAP)
 }
 
 /// Taunt success chance in percent: `5 + 3 * carismă`, capped at 60. The
