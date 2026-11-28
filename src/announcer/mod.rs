@@ -109,7 +109,8 @@ impl AnnouncerState {
 /// announcement pool fails the build here.
 pub fn event_key(event: CombatEvent) -> (LineKey, i32) {
     match event {
-        CombatEvent::Missed | CombatEvent::OutOfReach => (LineKey::Missed, 0),
+        CombatEvent::Missed => (LineKey::Missed, 0),
+        CombatEvent::OutOfReach => (LineKey::OutOfReach, 0),
         CombatEvent::Hit { dmg } => (LineKey::Hit, dmg),
         CombatEvent::Crit { dmg } => (LineKey::Crit, dmg),
         CombatEvent::Blocked { dmg } => (LineKey::Blocked, dmg),
@@ -474,6 +475,32 @@ mod tests {
     }
 
     #[test]
+    fn out_of_reach_explains_distance_and_fills_fighter_names() {
+        let (key, value) = event_key(CombatEvent::OutOfReach);
+        assert_ne!(
+            key,
+            LineKey::Missed,
+            "reach failure is not an ordinary miss"
+        );
+        assert_eq!(value, 0);
+        for template in lines::pool(key) {
+            assert!(template.contains("{actor}") && template.contains("{opponent}"));
+            let wording = template.to_lowercase();
+            assert!(
+                ["departe", "distanț", "aprop"]
+                    .iter()
+                    .any(|cue| wording.contains(cue)),
+                "out-of-reach line must explain distance: {template}"
+            );
+            for (actor, opponent) in [("Făt-Frumos", "Strigoi"), ("Strigoi", "Făt-Frumos")] {
+                let line = fill_placeholders(template, actor, opponent, value);
+                assert!(line.contains(actor) && line.contains(opponent));
+                assert!(!line.contains('{') && !line.contains('}'));
+            }
+        }
+    }
+
+    #[test]
     fn movement_uses_its_own_actor_named_pool() {
         let (key, value) = event_key(CombatEvent::Moved {
             from: far_positions(),
@@ -509,7 +536,7 @@ mod tests {
                 LineKey::Moved,
                 0,
             ),
-            (CombatEvent::OutOfReach, LineKey::Missed, 0),
+            (CombatEvent::OutOfReach, LineKey::OutOfReach, 0),
             (CombatEvent::OutOfStamina, LineKey::OutOfStamina, 0),
             (CombatEvent::Defeated, LineKey::Defeated, 0),
         ];
