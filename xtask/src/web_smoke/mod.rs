@@ -63,10 +63,8 @@
 //! reachable via an opt-in env var -- see `gold_journey`'s module docs'
 //! "Desktop-only default scope (#284)" section for the selection mechanism
 //! and reactivation path. `cargo xtask web-smoke --all` runs every
-//! [`SCENARIOS`] entry (`cold-menu`, `gold-journey`,
-//! `accessibility-settings-reload`, `reduced-motion-fight`,
-//! `fight-palette-desktop`) in one invocation via [`run_all`], stopping at
-//! the first failure like every other multi-step `xtask` command; the same
+//! [`SCENARIOS`] entry in registry order via [`run_all`], stopping at the
+//! first failure like every other multi-step `xtask` command; the same
 //! narrowed `gold-journey` default applies inside `--all` too.
 //!
 //! ## Visual-diff review gating (#198)
@@ -94,8 +92,10 @@
 //! SmokeError>` -- scenarios without screenshot baselines may ignore both
 //! flags, like `accessibility_settings_reload` does -- its own
 //! `CheckpointSpec`s, its own assertions), one match arm in [`run_scenario`]
-//! below, and one entry in [`SCENARIOS`] (so `--all` picks it up). Nothing
-//! else changes: not the CLI surface (`--scenario <name>` already accepts
+//! below, and one entry in [`SCENARIOS`] (so `--all` picks it up). Document
+//! its command in `xtask/README.md`'s Commands block; a unit test checks that
+//! every registry entry has a command there. No other dispatch changes:
+//! not the CLI surface (`--scenario <name>` already accepts
 //! any name), not `commands::web_smoke_cmd`, not the dispatcher registration
 //! in `commands::mod.rs`, and not the shared `browser`/`server`/`artifacts`/
 //! `baseline` building blocks this module already provides.
@@ -153,15 +153,12 @@ pub const SCENARIOS: &[&str] = &[
     "romanian-paper-doll-library",
 ];
 
-/// Dispatches `--scenario <name>` to the matching scenario module. Known
-/// scenarios: `cold-menu` (#168), `gold-journey` (#187/#198),
-/// `accessibility-settings-reload` (#191), `reduced-motion-fight` (#200),
-/// `fight-palette-desktop` (#189), `fight-palette-phone` (#199),
-/// `high-contrast` (#214), `fight-palette-accessible` (#213),
-/// `corrupt-save-recovery` (#201), and `save-reload`/`abandon-forfeit`
-/// (#217) -- each one the exact extension pattern the module docs above
-/// describe: a new module plus one match arm here, nothing else touched
-/// upstream. `strict_visual` (#198) is forwarded to the scenarios with
+/// Dispatches `--scenario <name>` to the matching scenario module; see
+/// [`SCENARIOS`] for the complete registry and this module's docs for the
+/// extension pattern. Without `artifact_root`, produces or exactly reuses
+/// the required production/review bundle; with it, consumes only a verified
+/// existing bundle and never rebuilds on validation failure.
+/// `strict_visual` (#198) is forwarded to the scenarios with
 /// screenshot baselines so a baseline diff can optionally fail the run
 /// instead of the default non-fatal report -- see `baseline`'s module docs;
 /// the baseline-free scenarios (including both #217 additions) have nothing
@@ -222,13 +219,10 @@ fn scenario_variant(scenario: &str) -> Result<build::Variant, SmokeError> {
 /// `cargo xtask web-smoke --all` (#198): runs every [`SCENARIOS`] entry in
 /// order, stopping at the first failure -- the same "stop at first failure"
 /// convention every other multi-step `xtask` command uses (see
-/// `xtask/README.md`'s "Process/result conventions"). `cold-menu` (2
-/// checkpoints) plus `gold-journey`'s checkpoints (6 by default since #284's
-/// desktop-only narrowing, or 36 with its full DPR matrix opted back in --
-/// see that module's docs) plus `accessibility-settings-reload`'s,
-/// `reduced-motion-fight`'s, and `fight-palette-desktop`'s checkpoints; a
-/// later registered scenario adds its own on top without this function
-/// changing.
+/// `xtask/README.md`'s "Process/result conventions"). Each scenario owns its
+/// checkpoints and viewport policy; later registry entries are included
+/// automatically. Bundle production/reuse or explicit artifact consumption
+/// follows [`run_scenario`], sharing the fixed production/review recipes.
 pub fn run_all(
     update_baselines: bool,
     strict_visual: bool,
@@ -244,4 +238,97 @@ pub fn run_all(
 /// `trunk build --release`'s working directory and the `dist/` it produces.
 pub(crate) fn workspace_root() -> PathBuf {
     crate::process::workspace_root()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SCENARIOS;
+
+    const README: &str = include_str!("../../README.md");
+
+    fn scenario_command(line: &str) -> Option<&str> {
+        let mut words = line.split_whitespace();
+        match (words.next(), words.next(), words.next(), words.next()) {
+            (Some("cargo"), Some("xtask"), Some("web-smoke"), Some("--scenario")) => {
+                words.next().filter(|name| !name.starts_with('#'))
+            }
+            _ => None,
+        }
+    }
+
+    fn missing_readme_scenarios<'a>(readme: &str, scenarios: &[&'a str]) -> Vec<&'a str> {
+        let section = readme
+            .split_once("\n## Commands\n")
+            .map_or("", |(_, rest)| rest.split("\n### ").next().unwrap_or(""));
+        let commands = section
+            .split_once("\n```\n")
+            .and_then(|(_, rest)| rest.split_once("\n```"))
+            .map_or("", |(commands, _)| commands);
+        let documented: Vec<_> = commands.lines().filter_map(scenario_command).collect();
+        scenarios
+            .iter()
+            .copied()
+            .filter(|scenario| !documented.contains(scenario))
+            .collect()
+    }
+
+    #[test]
+    fn readme_commands_document_every_registered_scenario() {
+        let missing = missing_readme_scenarios(README, SCENARIOS);
+        assert!(
+            missing.is_empty(),
+            "README Commands missing scenarios: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn readme_commands_detect_each_removed_entry_despite_incidental_mentions() {
+        for scenario in SCENARIOS {
+            let command = format!("cargo xtask web-smoke --scenario {scenario}");
+            let mutated = README
+                .lines()
+                .filter(|line| scenario_command(line) != Some(*scenario))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let mutated =
+                format!("{mutated}\n\n## Incidental mention\n{command}\n\n```\n{command}\n```\n");
+            assert_eq!(
+                missing_readme_scenarios(&mutated, SCENARIOS),
+                vec![*scenario],
+                "removing {scenario} must fail even with a later command example"
+            );
+        }
+        let mut extended_registry = SCENARIOS.to_vec();
+        extended_registry.push("future-scenario");
+        assert_eq!(
+            missing_readme_scenarios(README, &extended_registry),
+            vec!["future-scenario"],
+            "a newly registered scenario needs its own README command"
+        );
+    }
+
+    #[test]
+    fn readme_commands_reject_comments_prefixes_and_undocumented_future_scenarios() {
+        let fixture = "\n## Commands\n\n```\ncargo xtask web-smoke --scenario documented # example\n# cargo xtask web-smoke --scenario comment-only\necho cargo xtask web-smoke --scenario echoed\ncargo xtask web-smoke --scenario prefix-extra\n```\n\n### Details\ncargo xtask web-smoke --scenario prose-only\n";
+        assert_eq!(
+            missing_readme_scenarios(
+                fixture,
+                &[
+                    "documented",
+                    "comment-only",
+                    "echoed",
+                    "prefix",
+                    "prose-only",
+                    "future-scenario"
+                ]
+            ),
+            vec![
+                "comment-only",
+                "echoed",
+                "prefix",
+                "prose-only",
+                "future-scenario"
+            ]
+        );
+    }
 }

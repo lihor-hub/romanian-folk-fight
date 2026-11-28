@@ -55,6 +55,8 @@ cargo xtask web-smoke --scenario touch-targets # every current screen at desktop
 cargo xtask web-smoke --scenario corrupt-save-recovery  # seed a corrupt/future-version save, verify the Romanian recovery action (#201)
 cargo xtask web-smoke --scenario save-reload   # result -> shop -> real reload -> Continuă resumes at Shop with every run value intact (#217)
 cargo xtask web-smoke --scenario abandon-forfeit  # Abandonează clears the run snapshot, returns to Main Menu, disables Continuă (#217)
+cargo xtask web-smoke --scenario hybrid-2-5d-character  # preserve identity/silhouette across screens and verify optional-material fallback (#321)
+cargo xtask web-smoke --scenario romanian-paper-doll-library  # desktop/phone Romanian presets across creation, combat, shop and reload (#323)
 cargo xtask web-smoke --all                    # every registered scenario back to back (#198)
 cargo xtask pre-push            # fmt check, clippy (default + review feature), cargo test (default + review feature), build-matrix -- stops at first failure
 ```
@@ -652,15 +654,12 @@ screenshot against the committed baseline by hand.
 
 ### `web-smoke --all` (#198)
 
-Runs every registered scenario back to back in one process, stopping at the
-first failure like every other multi-step `xtask` command: `cold-menu` (2
-checkpoints), then `gold-journey` (5 checkpoints by default since #284's
-desktop-only narrowing, or its full matrix -- 30 checkpoints -- with
-`XTASK_WEB_SMOKE_GOLD_JOURNEY_FULL_MATRIX=1` set), then
-`accessibility-settings-reload` and `reduced-motion-fight` (assertion-only
-scenarios with no screenshot baselines -- see their module docs), then
-`fight-palette-desktop` (1 baseline checkpoint), `fight-palette-phone` (5
-baseline states), and `high-contrast` (4 baseline checkpoints).
+Runs every entry in [`web_smoke::SCENARIOS`](src/web_smoke/mod.rs) in
+registry order, stopping at the first failure like every other multi-step
+`xtask` command. The Commands block above lists each registered scenario;
+a unit test requires an actual command line there for every registry entry.
+Each scenario's module owns its checkpoints and viewport policy. The shared
+production/review build and explicit artifact-consumption rules above apply.
 `--update-baselines` and `--strict-visual` both apply to every scenario run
 this way (the baseline-free scenarios accept and ignore them, printing a
 note). `--all` is a local/manual command, not part of the CI default
