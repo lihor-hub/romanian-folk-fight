@@ -323,7 +323,8 @@ fn prefetch_paper_doll_gear(
         return;
     };
     prefetch._handles = ItemId::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .filter_map(item_visual)
         .map(|visual| asset_server.load(visual.fallback_asset_path()))
         .collect();
@@ -1524,7 +1525,8 @@ enum ReviewButton {
 fn parse_button(name: &str) -> Option<ReviewButton> {
     if let Some(item_name) = name.strip_prefix("ShopItem:") {
         return ItemId::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .find(|id| format!("{id:?}") == item_name)
             .map(|id| ReviewButton::Shop(ShopAction::Item(id)));
     }
@@ -2488,7 +2490,7 @@ mod tests {
     /// survives a reload.
     #[test]
     fn parse_button_resolves_every_catalog_item_by_its_shop_item_command() {
-        for id in ItemId::ALL {
+        for &id in ItemId::ALL {
             let name = format!("ShopItem:{id:?}");
             assert_eq!(
                 parse_button(&name),

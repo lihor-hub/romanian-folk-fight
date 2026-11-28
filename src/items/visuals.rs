@@ -105,7 +105,7 @@ pub const fn attachment_for_slot(slot: Slot) -> GearAttachment {
 
 /// Every starter item currently has a simple self-generated overlay. The
 /// order matches [`ItemId::ALL`] and the catalog discriminants.
-pub static ITEM_VISUALS: [ItemVisual; 13] = [
+pub static ITEM_VISUALS: [ItemVisual; ItemId::COUNT] = [
     visual(
         ItemId::BataCiobaneasca,
         Slot::Weapon,
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn visual_metadata_matches_catalog_slots_and_motion() {
-        for id in ItemId::ALL {
+        for &id in ItemId::ALL {
             let visual = item_visual(id).expect("visual metadata exists");
             assert_eq!(visual.id, id);
             assert_eq!(visual.slot, id.item().slot);
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn missing_animated_gear_art_falls_back_to_static_asset() {
-        for id in ItemId::ALL {
+        for &id in ItemId::ALL {
             let visual = item_visual(id).expect("visual metadata exists");
             assert_eq!(visual.animated_asset_path, None);
             assert_eq!(visual.fallback_asset_path(), visual.asset_path);

@@ -204,7 +204,10 @@ fn item_name(id: ItemId) -> String {
 /// Resolves a save name back to its catalog id; `None` for unknown names
 /// (which invalidate the whole save — see [`SaveGame::from_json`]).
 fn parse_item(name: &str) -> Option<ItemId> {
-    ItemId::ALL.into_iter().find(|id| item_name(*id) == name)
+    ItemId::ALL
+        .iter()
+        .copied()
+        .find(|id| item_name(*id) == name)
 }
 
 /// A screen safe to resume a run into via **Continuă** — deliberately a
