@@ -113,7 +113,8 @@ pub fn event_key(event: CombatEvent) -> (LineKey, i32) {
         CombatEvent::Hit { dmg } => (LineKey::Hit, dmg),
         CombatEvent::Crit { dmg } => (LineKey::Crit, dmg),
         CombatEvent::Blocked { dmg } => (LineKey::Blocked, dmg),
-        CombatEvent::Guarded | CombatEvent::Moved { .. } => (LineKey::Guarded, 0),
+        CombatEvent::Guarded => (LineKey::Guarded, 0),
+        CombatEvent::Moved { .. } => (LineKey::Moved, 0),
         CombatEvent::Rested { amount } => (LineKey::Rested, amount),
         CombatEvent::OutOfStamina => (LineKey::OutOfStamina, 0),
         CombatEvent::Defeated => (LineKey::Defeated, 0),
@@ -473,6 +474,25 @@ mod tests {
     }
 
     #[test]
+    fn movement_uses_its_own_actor_named_pool() {
+        let (key, value) = event_key(CombatEvent::Moved {
+            from: far_positions(),
+            to: near_positions(),
+        });
+        assert_ne!(key, LineKey::Guarded, "movement must not announce a guard");
+        assert_eq!(value, 0);
+        for template in lines::pool(key) {
+            assert!(
+                template.contains("{actor}"),
+                "movement line must name its actor"
+            );
+            let line = fill_placeholders(template, "Făt-Frumos", "Strigoi", value);
+            assert!(line.contains("Făt-Frumos"));
+            assert!(!line.contains('{') && !line.contains('}'));
+        }
+    }
+
+    #[test]
     fn every_combat_event_maps_to_a_pool_and_carries_its_number() {
         let cases = [
             (CombatEvent::Missed, LineKey::Missed, 0),
@@ -486,7 +506,7 @@ mod tests {
                     from: far_positions(),
                     to: near_positions(),
                 },
-                LineKey::Guarded,
+                LineKey::Moved,
                 0,
             ),
             (CombatEvent::OutOfReach, LineKey::Missed, 0),
