@@ -32,9 +32,12 @@ scripts/bootstrap-worktree.sh   # verifies cargo, wires the cargo xtask alias, i
 ```
 
 `scripts/bootstrap-worktree.sh` also installs the pre-commit hooks defined in
-`.pre-commit-config.yaml` (`cargo fmt`/`cargo clippy` on commit, `cargo test`
-on push, plus generic hygiene checks). Run `pre-commit run --all-files` any
-time to check everything by hand.
+`.pre-commit-config.yaml`: generic hygiene plus `cargo fmt --all -- --check`
+on commit, and one unconditional `cargo xtask pre-push` full gate on push.
+This also covers non-Rust/config-only pushes. `pre-commit run --all-files`
+runs commit-stage hygiene, not the push gate. To install both stages without
+rerunning bootstrap, use
+`pre-commit install --hook-type pre-commit --hook-type pre-push`.
 
 ### Native loop (fastest iteration)
 
@@ -58,24 +61,44 @@ trunk serve                # serves on http://localhost:8080
 
 ## Verification before pushing
 
-CI runs these on every PR; run them locally first so you're not waiting on
-CI to find a problem:
+With both hooks installed, use normal `git commit` and `git push`. The push
+hook is the authoritative local full gate: workspace fmt, default/review
+workspace lint/tests, then the native/release/wasm check matrix. It stops on
+failure and blocks the push. These are the native CI commands it covers:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --features review -- -D warnings
+cargo test --workspace
+cargo test --workspace --features review
 ```
 
-`cargo xtask pre-push` runs the equivalent full gate in one step
-(fmt, clippy, test — each run twice, once with default features and once
-with `--features review` so `src/review/mod.rs` stays covered — plus the
-native/release/wasm build matrix). Budget roughly 4 minutes for it; it's
-required before every push, and CI enforces the same checks it runs.
+Both feature configurations stay in the local gate; neither is CI-only.
+The additional check matrix stays free of `dev` and `review`. CI's separate
+production wasm build, browser checks, and asset checks remain required.
 
-While iterating on pure game-rule changes, `cargo xtask test logic` is a much
-faster inner loop (runs only the modules that don't spin up a Bevy `App`).
-Save the full `pre-push` gate for before you actually push.
+Do not automatically run a manual full gate and then repeat it in the hook.
+The hook's successful `cargo xtask pre-push` satisfies the before-push
+requirement. If hooks are unavailable, run that command manually before
+pushing; never bypass installed hooks. An explicit manual preflight is also
+available when earlier full feedback is worth the extra run, but there is
+no success receipt/cache: the push hook still reruns the full gate. Restage
+and recommit any hook edits before retrying; each attempted push gets a fresh
+full check of its current inputs.
+
+Choose one relevant inner loop while editing (a focused test, or
+`cargo xtask test logic` for broad pure-rule changes), rather than stacking
+redundant suites. Observed local full-gate steps on the Linux worker took
+12–14 minutes, plus roughly 6 minutes of Cargo/xtask launcher compilation in
+several runs; timings vary by host and cache. These are planning observations,
+not new budgets or a measured speedup.
+
+Hook-policy regression tests: `python3 scripts/test-hooks.py` (requires
+pre-commit and its PyYAML dependency). They run real commit/amend/push stages
+in temporary repositories with a recording Cargo stub, covering config-only
+pushes, failures/retry, and formatter edits. They do not build Rust or replace
+the real canonical gate on your project push.
 
 If your change touches anything under `assets/`, also run
 `cargo xtask assets check` to validate manifests and credits. If it touches

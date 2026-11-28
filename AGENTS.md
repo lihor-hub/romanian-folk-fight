@@ -14,12 +14,12 @@
 
 Budget for these before starting; they dominate wall-clock time.
 
-- `cargo xtask pre-push` (fmt, clippy, test, build-matrix — clippy and test each run twice, default features then again with `--features review` so `src/review/mod.rs` stays covered, #294) — ~4 min; required before every push. The review-feature pair adds only single-digit-to-~25s once bevy's own dependency graph is already warm from the preceding default-feature steps.
+- Every push requires the full `cargo xtask pre-push` gate: workspace fmt, default/review workspace clippy+tests, then the native/release/wasm check matrix without `dev`/`review`. The installed unconditional pre-push hook runs it once, including config/docs-only pushes; its success satisfies this requirement. Do not duplicate it with an automatic manual run first. Manual preflight is optional for earlier feedback (the hook still reruns); if hooks are unavailable, run the command manually. Never bypass installed hooks or reuse a cached-success receipt. Observed Linux full-gate steps took 12–14 min, with ~6 min of launcher compilation in several runs; host/cache costs vary, and target budgets are unchanged.
 - `cargo xtask web-smoke --scenario gold-journey` — the fast browser loop: one 1440x900 DPR-1 journey across all five current screens; ~10 min from a cold wasm build.
 - `cargo xtask web-smoke --scenario <name>` — runs one specialized phone, zoom, touch, accessibility, persistence, or rendering scenario; ~10 min per scenario.
 - `cargo xtask web-smoke --all` — runs every registered scenario; reserve it for explicit broad verification.
 - Rebase onto `origin/main` **before** capturing or re-accepting visual baselines, never after — a rebase that changes rendered UI invalidates baselines and forces a full re-capture.
-- `cargo xtask test logic` is the fast loop for pure game-rule changes; use it while iterating, save the full gate for the end.
+- Choose one relevant inner loop: a focused test or `cargo xtask test logic` for broad pure-rule changes. Do not append redundant suites to equivalent passing evidence at unchanged inputs. Save the full gate for the canonical push hook; retain logs and preserve warm targets/flags.
 
 ## Parallel Agent Work
 

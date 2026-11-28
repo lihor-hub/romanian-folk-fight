@@ -682,11 +682,26 @@ artifacts under `target/xtask-artifacts/web-smoke/abandon-forfeit/journey/`.
 ### `pre-push`
 
 The full repository-native gate, in order, stopping at the first failure:
-`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo clippy --all-targets --features review -- -D warnings`, `cargo
-test`, `cargo test --features review`, then `check build-matrix`. This
-mirrors what the git `pre-push` hook and CI's `build_and_test` job expect a
-clean tree to pass. It does not run `assets check` or `web-smoke`, which
+`cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo clippy --workspace --all-targets --features review -- -D warnings`,
+`cargo test --workspace`, `cargo test --workspace --features review`, then
+`check build-matrix`. The installed git pre-push hook delegates here
+unconditionally, including non-Rust/config-only pushes, with no filenames
+passed through. Commit hooks retain workspace format checking and generic
+hygiene, not duplicate lint/tests.
+
+The successful hook satisfies the required full local gate; do not add an
+automatic manual run before the same push. `cargo xtask pre-push` remains
+available as an explicit early preflight, but does not suppress the next
+hook invocation. A failed gate blocks the push; fix/recommit and retry normally.
+There is no success receipt or input-based skip. Hook configuration is pinned
+by unit tests; `python3 scripts/test-hooks.py` additionally exercises real Git
+stages in temporary repositories using a recording Cargo stub (requires
+pre-commit/PyYAML). These fixtures do not replace the real project gate.
+
+CI independently runs the default/review workspace lint/test commands and
+its production wasm build; it does not literally duplicate the local matrix. It does not run `assets check` or `web-smoke`, which
 have their own dedicated workflows (`.github/workflows/assets.yml`,
 `.github/workflows/web-smoke.yml`).
 
