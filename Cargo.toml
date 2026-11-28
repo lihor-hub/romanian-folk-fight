@@ -3,6 +3,13 @@ name = "romanian-folk-fight"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
+description = "Turn-based arena RPG cast from Romanian folklore, built with Rust and Bevy for the browser"
+repository = "https://github.com/lihor-hub/romanian-folk-fight"
+homepage = "https://lihor-hub.github.io/romanian-folk-fight/"
+readme = "README.md"
+keywords = ["game", "bevy"]
+categories = ["games"]
+rust-version = "1.96"
 
 # The game binary stays the workspace root package (implicitly a member, per
 # Cargo's rules for a manifest that has both `[package]` and `[workspace]`).
