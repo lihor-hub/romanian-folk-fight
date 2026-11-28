@@ -71,6 +71,10 @@ pub enum MusicTrack {
 }
 
 impl MusicTrack {
+    /// Every music loop, for audio asset-coverage checks.
+    /// Keep this inventory in sync when adding variants.
+    pub const ALL: [Self; 3] = [Self::Menu, Self::Arena, Self::Boss];
+
     /// Asset path of the loop.
     pub fn path(self) -> &'static str {
         match self {
@@ -129,6 +133,22 @@ pub enum Sfx {
 }
 
 impl Sfx {
+    /// Every sound effect, for audio asset-coverage checks.
+    /// Keep this inventory in sync when adding variants.
+    pub const ALL: [Self; 11] = [
+        Self::Hit,
+        Self::Crit,
+        Self::Block,
+        Self::Whoosh,
+        Self::Rest,
+        Self::Fail,
+        Self::Defeated,
+        Self::Click,
+        Self::Coin,
+        Self::VictorySting,
+        Self::DefeatSting,
+    ];
+
     /// Asset path of the effect.
     pub fn path(self) -> &'static str {
         match self {
@@ -547,24 +567,10 @@ mod tests {
     #[test]
     fn every_audio_asset_path_exists_on_disk() {
         let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
-        let tracks = [MusicTrack::Menu, MusicTrack::Arena, MusicTrack::Boss];
-        let sfx = [
-            Sfx::Hit,
-            Sfx::Crit,
-            Sfx::Block,
-            Sfx::Whoosh,
-            Sfx::Rest,
-            Sfx::Fail,
-            Sfx::Defeated,
-            Sfx::Click,
-            Sfx::Coin,
-            Sfx::VictorySting,
-            Sfx::DefeatSting,
-        ];
-        for path in tracks
-            .iter()
-            .map(|t| t.path())
-            .chain(sfx.iter().map(|s| s.path()))
+        for path in MusicTrack::ALL
+            .into_iter()
+            .map(MusicTrack::path)
+            .chain(Sfx::ALL.into_iter().map(Sfx::path))
         {
             assert!(assets.join(path).is_file(), "missing asset: {path}");
         }
