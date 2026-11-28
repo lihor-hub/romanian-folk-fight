@@ -56,7 +56,8 @@ use crate::menu::DisabledButton;
 use crate::settings::AccessibilityPreferences;
 use crate::theme::{
     ACTION_BUTTON_TOUCH_TARGET, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED,
-    CREAM, GOLD, MIN_TOUCH_TARGET, PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, panel_bundle,
+    ButtonStyle, CREAM, GOLD, MIN_TOUCH_TARGET, PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT,
+    panel_bundle,
 };
 use crate::ui_widgets::focus::{Focusable, TabGroup, TabIndex, redirect_focus_if_inside};
 
@@ -857,11 +858,7 @@ pub(super) fn update_button_backgrounds(
     mut buttons: Query<(&Interaction, &mut BackgroundColor), ChangedEnabledButton>,
 ) {
     for (interaction, mut background) in &mut buttons {
-        background.0 = match interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
-        };
+        background.0 = ButtonStyle::default_style().background_for(*interaction);
     }
 }
 

@@ -12,8 +12,7 @@ use crate::creation::PlayerCharacter;
 use crate::flow::FlowIntent;
 use crate::save::{ResumeDestination, SaveRequested};
 use crate::theme::{
-    BAR_TRACK, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, NIGHT_BLACK, PanelTexture,
-    STAMINA_FILL, panel_bundle,
+    BAR_TRACK, ButtonStyle, CREAM, NIGHT_BLACK, PanelTexture, STAMINA_FILL, panel_bundle,
 };
 use crate::ui_widgets::focus::TabGroup;
 use crate::ui_widgets::{
@@ -508,11 +507,7 @@ pub(super) fn update_button_backgrounds(
     mut buttons: Query<(&Interaction, &mut BackgroundColor), ChangedButton>,
 ) {
     for (interaction, mut background) in &mut buttons {
-        background.0 = match interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
-        };
+        background.0 = ButtonStyle::default_style().background_for(*interaction);
     }
 }
 

@@ -34,9 +34,10 @@
 //! panel text, and the combat log ([`crate::combat::hud`]). Token *values*
 //! for disabled button text and normal button text are defined and
 //! contrast-tested here but not yet wired to every screen's buttons (menu,
-//! shop, creation, pause, settings, and the combat action palette each keep
-//! their own fixed-palette `update_button_backgrounds` system) — tracked as
-//! a follow-up; see the #214 PR's "surfaces deferred" note.
+//! shop, creation, pause, settings, and the combat action palette use the
+//! shared default [`super::ButtonStyle`] rather than the runtime palette).
+//! Runtime-palette wiring remains a follow-up; see the #214 PR's "surfaces
+//! deferred" note.
 //!
 //! ## Prospective #150 contract
 //!

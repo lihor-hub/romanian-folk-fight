@@ -39,9 +39,7 @@ use serde::{Deserialize, Serialize};
 use crate::audio::AudioSettings;
 use crate::core::UiFont;
 use crate::save::{SaveBackend, platform_backend};
-use crate::theme::{
-    BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, PanelTexture, SCRIM_HEAVY, panel_bundle,
-};
+use crate::theme::{ButtonStyle, CREAM, PanelTexture, SCRIM_HEAVY, panel_bundle};
 use crate::ui_widgets::focus::{
     FocusNavigationPlugin, FocusNavigationSet, InputFocus, PendingAutofocus, TabGroup,
     TabNavigation, autofocus_first_in_group,
@@ -491,11 +489,7 @@ fn update_button_backgrounds(
     mut buttons: Query<(&Interaction, &mut BackgroundColor), ChangedSettingsActionButton>,
 ) {
     for (interaction, mut background) in &mut buttons {
-        background.0 = match interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
-        };
+        background.0 = ButtonStyle::default_style().background_for(*interaction);
     }
 }
 
