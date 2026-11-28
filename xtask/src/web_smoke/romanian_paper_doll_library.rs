@@ -6,11 +6,9 @@
 //! reload-persistent ECS facts prove identity in the non-captured scenes and
 //! prove the prepared Hoț de codru identity is the one on the live enemy rig.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::process::run_step;
 use crate::web_smoke::browser::{self, Checkpoint, PageStatus, ResourceEntry};
 use crate::web_smoke::error::SmokeError;
 use crate::web_smoke::{artifacts, baseline, server::StaticServer};
@@ -205,8 +203,12 @@ impl FactSlot {
     }
 }
 
-pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError> {
-    let dist_dir = build_review_release()?;
+pub fn run(
+    bundle: &super::build::Bundle,
+    update_baselines: bool,
+    strict_visual: bool,
+) -> Result<(), SmokeError> {
+    let dist_dir = bundle.dist_dir();
     let server = StaticServer::start(dist_dir).map_err(|error| {
         SmokeError::scenario(
             format!("web-smoke {SCENARIO}: serve review bundle"),
@@ -245,27 +247,6 @@ pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError
         );
     }
     Ok(())
-}
-
-fn build_review_release() -> Result<PathBuf, SmokeError> {
-    let mut command = Command::new("trunk");
-    command
-        .arg("build")
-        .arg("--release")
-        .arg("--features")
-        .arg("review")
-        .arg("--dist")
-        .arg("dist-romanian-paper-doll-library");
-    command.current_dir(workspace_root());
-    run_step(
-        "web-smoke: trunk build --release --features review (romanian-paper-doll-library)",
-        command,
-    )?;
-    Ok(workspace_root().join("dist-romanian-paper-doll-library"))
-}
-
-fn workspace_root() -> PathBuf {
-    crate::process::workspace_root()
 }
 
 fn run_viewport(

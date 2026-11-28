@@ -406,12 +406,96 @@ check` on every PR and additionally `assets review --changed` on
 `assets/` so the artifact's relative image links resolve standalone) and
 the `assets check` diagnostics log as artifacts with `if: always()`.
 
+### Shared browser bundles (#413)
+
+`web_smoke::build` owns two fixed recipes: production (`trunk build
+--release`) and review (the same command plus `--features review`). Both
+retain the existing `index.html` Rust pipeline's `data-wasm-opt="z"` release
+optimizer and configured public URL; neither enables `dev`. Trunk's staging
+`--dist` is the only output-location override. Browsers, profiles, storage,
+assertions, baselines, and per-checkpoint diagnostics remain scenario-owned.
+
+Existing commands build or reuse an **exactly validated** local bundle under
+`target/web-smoke-bundles/{production,review}/`. `--all` shares these two
+configurations, rather than building once per scenario. Baseline updates do
+not invalidate a game bundle. Explicit producer/consumer paths are also available:
+
+```sh
+cargo xtask web-smoke --build production --artifact-root target/web-smoke-bundles
+cargo xtask web-smoke --build review --artifact-root target/web-smoke-bundles
+cargo xtask web-smoke --scenario gold-journey --artifact-root target/web-smoke-bundles
+cargo xtask web-smoke --all --artifact-root target/web-smoke-bundles --strict-visual
+```
+
+For scenario/`--all` commands, supplying `--artifact-root` means
+**validation-only consumption**: missing, corrupt, mismatched, partial, or
+tampered bundles fail; no fallback build and no unchecked skip-build mode.
+
+The versioned manifest binds:
+
+- BLAKE3 inventories of every file (including dirty/untracked files) in
+  `src/`, `assets/`, and `xtask/src/`; root/xtask manifests, `Cargo.lock`,
+  `Trunk.toml`, `index.html`, and present `rust-toolchain` files. Paths and contents both
+  matter. Targets, logs, `.local/`, docs, and visual baselines are not inputs.
+- The fixed variant/release/wasm/optimizer recipe and configured public URL.
+  Trunk's target/pipelines are validated; the complete tracked Trunk config
+  is conservatively bound too. This is a bounded repository-specific recipe,
+  not a generic build-input discovery framework.
+- `rustc -Vv`, `cargo -V`, `trunk --version`, Trunk's reported installed/default wasm tool
+  versions, the wasm-bindgen version selected from the lockfile, and the
+  sccache version when that wrapper is configured. The existing CI
+  `CARGO_INCREMENTAL=0` setting is explicitly supported and bound separately
+  from unset/Cargo-profile defaults; enabled/unknown overrides still reject. The installed toolchain
+  and Trunk's pinned tool resolver are trusted; the manifest does not attest
+  tool binary contents or authenticate a malicious compiler/builder.
+- Local provenance separately from GitHub repository/run/attempt/SHA. Local
+  exact-input reuse needs no CI run ID; CI rejects local/foreign-run receipts.
+- A separate manifest checksum, the exact served-output inventory, and every
+  output checksum. Missing
+  HTML/JS/wasm, missing assets, extra files, and changed output bytes fail.
+
+Applicable workspace/ancestor/Cargo-home configuration is checked before
+reuse. Only aliases, target-dir, jobs, safe network settings, and the known
+`sccache` wrapper are supported; these cache/dispatch settings are not hashed.
+Unknown compiler/profile/Trunk overrides, hooks, custom build scripts, path
+or patched dependencies, alternate targets, and pipeline/feature overrides
+are rejected until explicitly supported. Standard Cargo registry credentials
+and sccache service/cache environment are not manifest inputs; credential
+files are not read. Unsupported Cargo configuration errors omit excerpts,
+and environment errors show names only, never values or secret hashes.
+The supported source recipe keeps build-time file inputs in the inventoried
+trees; extending that boundary requires extending this module and its tests.
+
+Builds use a private staging directory. A ready manifest is written only
+after successful build, stable input recapture, and output validation; the
+completed directory is then renamed into place. A failed build leaves any
+old receipt untouched, and consumers still reject it if inputs changed.
+Input/output walking rejects symlinks, non-regular entries, and artifact
+path traversal/overlap. Local use assumes a trusted, single-writer filesystem
+(no concurrent mutation during validation/browser serving). Checksums detect
+staleness/corruption, not an attacker rewriting both outputs and manifest.
+
+`web-smoke.yml` has two same-workflow producers feeding the existing scenario
+fan-out: production for cold-menu/accessibility-settings-reload, review for
+the others. This structurally replaces **11 default bundle pipelines
+(2 production + 9 review) with 2**; it is not an elapsed-time speedup claim.
+Completed bundles are uploaded only after producer success; a failure uploads
+only its sanitized rejection log for diagnosis. Downloads use the current
+run, named with run/attempt. A later-attempt rerun must include its producers;
+consumer-only reruns cannot substitute an earlier attempt's bundle. Required
+consumers explicitly fail on producer failure rather than becoming
+successful/skipped dependencies. The three
+manual/full-matrix jobs remain opt-in, strict-visual inputs stay unchanged,
+and every browser still starts fresh. No native executable is transferred,
+no privileged workflow is introduced, and Rust CI/merge-group protection and
+Pages deployment remain separate.
+
 ### `web-smoke --scenario cold-menu` (#168, a child of #144)
 
 Owned by `xtask/src/web_smoke/` (the dispatcher shim is
-`commands/web_smoke_cmd.rs`), independent of every module above. Builds the
-release wasm bundle (`trunk build --release`, never with the `dev` feature),
-serves `dist/` on a random free `127.0.0.1` port, launches a headless
+`commands/web_smoke_cmd.rs`), independent of every module above. Builds
+or validates/reuses the production release wasm bundle (never with `dev`),
+serves its verified `dist/` on a random free `127.0.0.1` port, launches a headless
 system Chrome/Chromium with a **fresh profile** (genuinely cold cache) via
 CDP (`headless_chrome`; no chromedriver install/version-matching), and
 verifies the first-painted main menu at two checkpoints: 1280x800 desktop
@@ -437,8 +521,8 @@ the harness core.
 Extends `web-smoke` per the pattern above: a new module
 (`xtask/src/web_smoke/gold_journey.rs`) plus one match arm, no dispatcher/
 CLI/harness-core change. Drives a **deterministic** review-only build
-(`trunk build --release --features review`, served from its own
-`dist-gold-journey/`, never `dist/`, built exactly once per run) through the
+(`trunk build --release --features review`, shared only with other review
+scenarios after exact validation, never the production bundle) through the
 full player loop -- menu -> character creation (a preset selected) -> first
 fight -> fight result -> shop -- via `src/review/mod.rs`'s
 `window.localStorage`-based seam: seed the combat RNG, pick a named preset,

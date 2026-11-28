@@ -49,18 +49,14 @@
 //! scenario's pass/fail gate is exact `localStorage` reads, not a pixel diff.
 //! Screenshots are still captured as artifacts for human review.
 //!
-//! ## Separate build, separate `dist/`
+//! ## Verified review bundle
 //!
-//! [`build_review_release`] runs `trunk build --release --features review`
-//! into its own `dist-save-reload/`, mirroring every other review-seam
-//! scenario, so concurrent scenario runs never clobber each other's build
-//! output.
+//! The dispatcher supplies a validated [`super::build::Bundle`] from the
+//! shared release/review recipe, never the production bundle. Bundle reuse
+//! does not share browser profiles, storage, or checkpoint state.
 
-use std::path::PathBuf;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::process::run_step;
 use crate::web_smoke::browser::{self, Checkpoint, PageStatus};
 use crate::web_smoke::error::SmokeError;
 use crate::web_smoke::{artifacts, server::StaticServer};
@@ -159,14 +155,14 @@ where
     unreachable!("the bounded attempt loop always returns")
 }
 
-pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
+pub fn run(bundle: &super::build::Bundle, update_baselines: bool) -> Result<(), SmokeError> {
     if update_baselines {
         println!(
             "{SCENARIO}: --update-baselines has no effect here -- this scenario has no screenshot baselines (its pass/fail gate is exact localStorage reads, see its module docs)."
         );
     }
 
-    let dist_dir = build_review_release()?;
+    let dist_dir = bundle.dist_dir();
     let server = StaticServer::start(dist_dir).map_err(|e| {
         SmokeError::scenario(
             format!("web-smoke {SCENARIO}: serve dist-save-reload/"),
@@ -201,26 +197,6 @@ pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
             artifacts::scenario_dir(SCENARIO),
         )),
     }
-}
-
-fn build_review_release() -> Result<PathBuf, SmokeError> {
-    let mut cmd = Command::new("trunk");
-    cmd.arg("build")
-        .arg("--release")
-        .arg("--features")
-        .arg("review")
-        .arg("--dist")
-        .arg("dist-save-reload");
-    cmd.current_dir(workspace_root());
-    run_step(
-        "web-smoke: trunk build --release --features review (save-reload)",
-        cmd,
-    )?;
-    Ok(workspace_root().join("dist-save-reload"))
-}
-
-fn workspace_root() -> PathBuf {
-    crate::process::workspace_root()
 }
 
 /// Only the fields this scenario needs from `save::snapshot::SaveGame`'s JSON

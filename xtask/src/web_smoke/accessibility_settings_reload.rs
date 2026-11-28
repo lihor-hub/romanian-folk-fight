@@ -146,15 +146,14 @@ const MIN_RUN_WIDTH: u32 = 180;
 /// audio and accessibility preferences share.
 const SETTINGS_LOCAL_STORAGE_KEY: &str = "rff_settings_v1";
 
-pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
+pub fn run(bundle: &super::build::Bundle, update_baselines: bool) -> Result<(), SmokeError> {
     if update_baselines {
         println!(
             "{SCENARIO}: --update-baselines has no effect here -- this scenario has no screenshot baselines (see its module docs)."
         );
     }
 
-    let dist_dir =
-        crate::web_smoke::build_release(&format!("web-smoke {SCENARIO}: trunk build --release"))?;
+    let dist_dir = bundle.dist_dir();
     let server = StaticServer::start(dist_dir).map_err(|e| {
         SmokeError::scenario(
             format!("web-smoke {SCENARIO}: serve dist/"),

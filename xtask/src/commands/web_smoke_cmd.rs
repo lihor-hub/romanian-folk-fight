@@ -62,6 +62,10 @@ const STRICT_VISUAL_ENV_VAR: &str = "XTASK_WEB_SMOKE_STRICT_VISUAL";
 
 pub const SUBCOMMANDS: &[(&str, &str)] = &[
     (
+        "--build",
+        "Build a validated browser bundle only. Usage: cargo xtask web-smoke --build production|review [--artifact-root <directory>]",
+    ),
+    (
         "--scenario",
         "Run a named scenario (cold-menu, gold-journey, hybrid-2-5d-character, romanian-paper-doll-library, accessibility-settings-reload, reduced-motion-fight, fight-palette-desktop, fight-palette-phone, high-contrast). Usage: cargo xtask web-smoke --scenario cold-menu [--update-baselines] [--strict-visual]",
     ),
@@ -72,9 +76,17 @@ pub const SUBCOMMANDS: &[(&str, &str)] = &[
 ];
 
 pub fn run(sub: &str) -> Result<(), StepError> {
+    let full_args: Vec<String> = std::env::args().collect();
+    let (args, artifact_root) =
+        extract_artifact_root(&full_args).map_err(crate::web_smoke::SmokeError::usage)?;
     match sub {
+        "--build" => {
+            let variant = parse_build_args(&args).map_err(crate::web_smoke::SmokeError::usage)?;
+            let root = artifact_root.unwrap_or_else(crate::web_smoke::build::default_root);
+            crate::web_smoke::build::produce(variant, &root)?;
+            Ok(())
+        }
         "--scenario" => {
-            let args: Vec<String> = std::env::args().collect();
             let (scenario, update_baselines, strict_visual) = match parse_scenario_args(&args) {
                 Ok(parsed) => parsed,
                 Err(message) => {
@@ -83,8 +95,13 @@ pub fn run(sub: &str) -> Result<(), StepError> {
                 }
             };
             let start = std::time::Instant::now();
-            let result = crate::web_smoke::run_scenario(&scenario, update_baselines, strict_visual)
-                .map_err(StepError::from);
+            let result = crate::web_smoke::run_scenario(
+                &scenario,
+                update_baselines,
+                strict_visual,
+                artifact_root.as_deref(),
+            )
+            .map_err(StepError::from);
             if result.is_ok() {
                 warn_if_over_budget(
                     &format!("web-smoke {scenario}"),
@@ -95,7 +112,6 @@ pub fn run(sub: &str) -> Result<(), StepError> {
             result
         }
         "--all" => {
-            let args: Vec<String> = std::env::args().collect();
             let (update_baselines, strict_visual) = match parse_flag_only_args(&args) {
                 Ok(parsed) => parsed,
                 Err(message) => {
@@ -104,8 +120,12 @@ pub fn run(sub: &str) -> Result<(), StepError> {
                 }
             };
             let start = std::time::Instant::now();
-            let result =
-                crate::web_smoke::run_all(update_baselines, strict_visual).map_err(StepError::from);
+            let result = crate::web_smoke::run_all(
+                update_baselines,
+                strict_visual,
+                artifact_root.as_deref(),
+            )
+            .map_err(StepError::from);
             if result.is_ok() {
                 warn_if_over_budget(
                     "web-smoke --all",
@@ -117,6 +137,40 @@ pub fn run(sub: &str) -> Result<(), StepError> {
         }
         other => unreachable!("dispatch validates subcommands before calling run; got {other}"),
     }
+}
+
+/// Strip only the new artifact option, preserving the existing parsers/flag semantics.
+/// For scenario/all modes its presence selects validation-only consumption.
+fn extract_artifact_root(
+    args: &[String],
+) -> Result<(Vec<String>, Option<std::path::PathBuf>), String> {
+    let mut filtered = Vec::new();
+    let mut root = None;
+    let mut tokens = args.iter();
+    while let Some(token) = tokens.next() {
+        if token == "--artifact-root" {
+            if root.is_some() {
+                return Err("duplicate --artifact-root".into());
+            }
+            let value = tokens
+                .next()
+                .filter(|v| !v.starts_with("--"))
+                .ok_or("--artifact-root requires a directory")?;
+            root = Some(std::path::PathBuf::from(value));
+        } else {
+            filtered.push(token.clone());
+        }
+    }
+    Ok((filtered, root))
+}
+
+fn parse_build_args(args: &[String]) -> Result<crate::web_smoke::build::Variant, String> {
+    if args.len() != 4 {
+        return Err(
+            "usage: web-smoke --build production|review [--artifact-root <directory>]".into(),
+        );
+    }
+    crate::web_smoke::build::Variant::parse(&args[3]).map_err(|e| e.to_string())
 }
 
 /// True if `--strict-visual` was passed on the command line, or the
@@ -199,6 +253,81 @@ mod tests {
 
     fn argv(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn artifact_consumer_and_build_modes_preserve_flags_and_reject_missing_options() {
+        let (filtered, root) = extract_artifact_root(&argv(&[
+            "xtask",
+            "web-smoke",
+            "--scenario",
+            "gold-journey",
+            "--artifact-root",
+            "target/bundles",
+            "--strict-visual",
+            "--update-baselines",
+        ]))
+        .unwrap();
+        assert_eq!(root.unwrap(), std::path::PathBuf::from("target/bundles"));
+        assert_eq!(
+            parse_scenario_args(&filtered).unwrap(),
+            ("gold-journey".into(), true, true)
+        );
+        let (filtered, _) = extract_artifact_root(&argv(&[
+            "xtask",
+            "web-smoke",
+            "--all",
+            "--artifact-root",
+            "bundles",
+            "--strict-visual",
+        ]))
+        .unwrap();
+        assert_eq!(parse_flag_only_args(&filtered).unwrap(), (false, true));
+        assert!(
+            extract_artifact_root(&argv(&["xtask", "web-smoke", "--all", "--artifact-root"]))
+                .is_err()
+        );
+        assert!(
+            extract_artifact_root(&argv(&[
+                "xtask",
+                "web-smoke",
+                "--all",
+                "--artifact-root",
+                "--strict-visual"
+            ]))
+            .is_err()
+        );
+        assert!(
+            extract_artifact_root(&argv(&[
+                "xtask",
+                "web-smoke",
+                "--all",
+                "--artifact-root",
+                "a",
+                "--artifact-root",
+                "b"
+            ]))
+            .is_err()
+        );
+        for variant in ["production", "review"] {
+            assert_eq!(
+                parse_build_args(&argv(&["xtask", "web-smoke", "--build", variant]))
+                    .unwrap()
+                    .name(),
+                variant
+            );
+        }
+        assert!(parse_build_args(&argv(&["xtask", "web-smoke", "--build", "dev"])).is_err());
+        assert!(
+            parse_build_args(&argv(&[
+                "xtask",
+                "web-smoke",
+                "--build",
+                "review",
+                "--strict-visual"
+            ]))
+            .is_err()
+        );
     }
 
     #[test]

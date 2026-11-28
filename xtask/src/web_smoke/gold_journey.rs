@@ -99,13 +99,11 @@
 //! either way -- `fight`'s pixel-count tolerance is unaffected by this
 //! change, by design (see the issue's own scope note on the `fight` cell).
 //!
-//! ## Separate build, separate `dist/`
+//! ## Verified review bundle
 //!
-//! [`build_review_release`] runs `trunk build --release --features review`
-//! into its own `dist-gold-journey/` directory (never `dist/`, which
-//! `cold-menu` builds without the `review` feature) -- so a `cold-menu` run
-//! and a `gold-journey` run never clobber each other's build output, and the
-//! ordinary release artifact is never the one this scenario serves.
+//! The dispatcher supplies a validated [`super::build::Bundle`] from the
+//! shared release/review recipe, never the production bundle. Bundle reuse
+//! does not share browser profiles, storage, or checkpoint state.
 //!
 //! ## Checkpoints and the DPR matrix (#198)
 //!
@@ -171,11 +169,8 @@
 //! untouched. Reactivating broader coverage remains a one-line env var, not
 //! a code change.
 
-use std::path::PathBuf;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::process::run_step;
 use crate::web_smoke::browser::{self, Checkpoint, PageStatus};
 use crate::web_smoke::error::SmokeError;
 use crate::web_smoke::{artifacts, baseline, server::StaticServer};
@@ -394,8 +389,12 @@ const STABLE_FRAMES_REQUIRED: usize = 3;
 /// beforehand.
 const SETTLE_TIME_ADVANCE_SECONDS: f32 = 5.0;
 
-pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError> {
-    let dist_dir = build_review_release()?;
+pub fn run(
+    bundle: &super::build::Bundle,
+    update_baselines: bool,
+    strict_visual: bool,
+) -> Result<(), SmokeError> {
+    let dist_dir = bundle.dist_dir();
     let server = StaticServer::start(dist_dir).map_err(|e| {
         SmokeError::scenario(
             "web-smoke: serve dist-gold-journey/",
@@ -444,26 +443,6 @@ pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError
         println!("\ngold-journey: all checkpoints passed against their accepted baselines.");
     }
     Ok(())
-}
-
-fn build_review_release() -> Result<PathBuf, SmokeError> {
-    let mut cmd = Command::new("trunk");
-    cmd.arg("build")
-        .arg("--release")
-        .arg("--features")
-        .arg("review")
-        .arg("--dist")
-        .arg("dist-gold-journey");
-    cmd.current_dir(workspace_root());
-    run_step(
-        "web-smoke: trunk build --release --features review (gold-journey)",
-        cmd,
-    )?;
-    Ok(workspace_root().join("dist-gold-journey"))
-}
-
-fn workspace_root() -> PathBuf {
-    crate::process::workspace_root()
 }
 
 /// Writes one review command (see the module docs) as JSON into

@@ -15,10 +15,11 @@
 //!
 //! ## Server lifecycle
 //!
-//! [`build_release`] (shared by every scenario) runs `trunk build --release`
-//! (through `crate::process::run_step`, so it gets the same artifact-log/
-//! timing treatment as every other xtask step). `server::StaticServer` then
-//! serves the resulting `dist/` on `127.0.0.1:<random free port>`
+//! [`build`] owns the fixed production/review release recipes and validates
+//! inputs, tools, provenance, and every output before passing a [`build::Bundle`]
+//! to a scenario. Explicit artifact consumers never rebuild on validation
+//! failure. `server::StaticServer` serves the verified bundle's `dist/` on
+//! `127.0.0.1:<random free port>`
 //! (`TcpListener` bound to port 0 -- no manual port picking) from its own
 //! background thread until dropped, which happens automatically at the end
 //! of a scenario's `run` (including on an early failure) since it's a plain
@@ -89,7 +90,7 @@
 //! ## Adding a later scenario
 //!
 //! A later scenario adds its own module here (mirroring `cold_menu.rs`: a
-//! `pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(),
+//! `pub fn run(bundle: &build::Bundle, update_baselines: bool, strict_visual: bool) -> Result<(),
 //! SmokeError>` -- scenarios without screenshot baselines may ignore both
 //! flags, like `accessibility_settings_reload` does -- its own
 //! `CheckpointSpec`s, its own assertions), one match arm in [`run_scenario`]
@@ -104,6 +105,7 @@ mod accessibility_settings_reload;
 pub mod artifacts;
 pub mod baseline;
 pub mod browser;
+pub mod build;
 mod cold_menu;
 mod corrupt_save_recovery;
 mod desktop_fight_freeze;
@@ -120,10 +122,11 @@ mod romanian_paper_doll_library;
 mod save_reload;
 pub mod server;
 mod touch_targets;
+#[cfg(test)]
+mod workflow_tests;
 mod zoom_200;
 
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
 
 pub use error::SmokeError;
 
@@ -167,28 +170,48 @@ pub fn run_scenario(
     scenario: &str,
     update_baselines: bool,
     strict_visual: bool,
+    artifact_root: Option<&Path>,
 ) -> Result<(), SmokeError> {
+    let variant = scenario_variant(scenario)?;
+    let bundle = match artifact_root {
+        Some(root) => build::consume(variant, root)?,
+        None => build::produce(variant, &build::default_root())?,
+    };
     match scenario {
-        "cold-menu" => cold_menu::run(update_baselines, strict_visual),
-        "gold-journey" => gold_journey::run(update_baselines, strict_visual),
-        "accessibility-settings-reload" => accessibility_settings_reload::run(update_baselines),
-        "reduced-motion-fight" => reduced_motion_fight::run(update_baselines),
-        "fight-palette-desktop" => fight_palette_desktop::run(update_baselines, strict_visual),
-        "fight-palette-phone" => fight_palette_phone::run(update_baselines, strict_visual),
-        "high-contrast" => high_contrast::run(update_baselines, strict_visual),
+        "cold-menu" => cold_menu::run(&bundle, update_baselines, strict_visual),
+        "gold-journey" => gold_journey::run(&bundle, update_baselines, strict_visual),
+        "accessibility-settings-reload" => {
+            accessibility_settings_reload::run(&bundle, update_baselines)
+        }
+        "reduced-motion-fight" => reduced_motion_fight::run(&bundle, update_baselines),
+        "fight-palette-desktop" => {
+            fight_palette_desktop::run(&bundle, update_baselines, strict_visual)
+        }
+        "fight-palette-phone" => fight_palette_phone::run(&bundle, update_baselines, strict_visual),
+        "high-contrast" => high_contrast::run(&bundle, update_baselines, strict_visual),
         "fight-palette-accessible" => {
-            fight_palette_accessible::run(update_baselines, strict_visual)
+            fight_palette_accessible::run(&bundle, update_baselines, strict_visual)
         }
-        "keyboard-accessibility" => keyboard_accessibility::run(update_baselines),
-        "zoom-200" => zoom_200::run(update_baselines),
-        "touch-targets" => touch_targets::run(update_baselines),
-        "corrupt-save-recovery" => corrupt_save_recovery::run(update_baselines),
-        "save-reload" => save_reload::run(update_baselines),
-        "abandon-forfeit" => abandon_forfeit::run(update_baselines),
-        "hybrid-2-5d-character" => hybrid_2_5d_character::run(update_baselines, strict_visual),
+        "keyboard-accessibility" => keyboard_accessibility::run(&bundle, update_baselines),
+        "zoom-200" => zoom_200::run(&bundle, update_baselines),
+        "touch-targets" => touch_targets::run(&bundle, update_baselines),
+        "corrupt-save-recovery" => corrupt_save_recovery::run(&bundle, update_baselines),
+        "save-reload" => save_reload::run(&bundle, update_baselines),
+        "abandon-forfeit" => abandon_forfeit::run(&bundle, update_baselines),
+        "hybrid-2-5d-character" => {
+            hybrid_2_5d_character::run(&bundle, update_baselines, strict_visual)
+        }
         "romanian-paper-doll-library" => {
-            romanian_paper_doll_library::run(update_baselines, strict_visual)
+            romanian_paper_doll_library::run(&bundle, update_baselines, strict_visual)
         }
+        _ => unreachable!("scenario_variant validates registration"),
+    }
+}
+
+fn scenario_variant(scenario: &str) -> Result<build::Variant, SmokeError> {
+    match scenario {
+        "cold-menu" | "accessibility-settings-reload" => Ok(build::Variant::Production),
+        other if SCENARIOS.contains(&other) => Ok(build::Variant::Review),
         other => Err(SmokeError::usage(format!(
             "unknown --scenario `{other}` (known scenarios: {})",
             SCENARIOS.join(", ")
@@ -206,9 +229,13 @@ pub fn run_scenario(
 /// `reduced-motion-fight`'s, and `fight-palette-desktop`'s checkpoints; a
 /// later registered scenario adds its own on top without this function
 /// changing.
-pub fn run_all(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError> {
+pub fn run_all(
+    update_baselines: bool,
+    strict_visual: bool,
+    artifact_root: Option<&Path>,
+) -> Result<(), SmokeError> {
     for scenario in SCENARIOS {
-        run_scenario(scenario, update_baselines, strict_visual)?;
+        run_scenario(scenario, update_baselines, strict_visual, artifact_root)?;
     }
     Ok(())
 }
@@ -217,23 +244,4 @@ pub fn run_all(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeE
 /// `trunk build --release`'s working directory and the `dist/` it produces.
 pub(crate) fn workspace_root() -> PathBuf {
     crate::process::workspace_root()
-}
-
-/// Runs `trunk build --release` (through `crate::process::run_step`, so it
-/// gets the same artifact-log/timing treatment as every other xtask step)
-/// and returns the `dist/` directory it produced. Shared by every scenario
-/// that serves the plain release bundle (`cold_menu`,
-/// `accessibility_settings_reload`); `gold_journey` deliberately keeps its
-/// own `build_review_release` (a `--features review` build into its own
-/// `dist-gold-journey/`) instead.
-pub(crate) fn build_release(label: &str) -> Result<PathBuf, SmokeError> {
-    let mut cmd = Command::new("trunk");
-    cmd.arg("build").arg("--release");
-    cmd.current_dir(workspace_root());
-    // Deliberately not `--features dev`: that Cargo feature (Bevy dynamic
-    // linking) exists only for fast native iteration and must never leak
-    // into a release/wasm artifact (see `AGENTS.md`); `Trunk.toml` and this
-    // invocation never pass it.
-    crate::process::run_step(label, cmd)?;
-    Ok(workspace_root().join("dist"))
 }
