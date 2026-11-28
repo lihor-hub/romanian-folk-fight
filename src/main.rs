@@ -1,6 +1,12 @@
+//! Romanian Folk Fight — binary entry point.
+//!
+//! This binary only configures the window and adds [`GamePlugin`]; game logic
+//! lives in the library.
+
 use bevy::asset::AssetMetaCheck;
 use bevy::prelude::*;
 use romanian_folk_fight::GamePlugin;
+use romanian_folk_fight::core::{LOGICAL_HEIGHT, LOGICAL_WIDTH};
 
 fn main() {
     App::new()
@@ -16,7 +22,7 @@ fn main() {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "Romanian Folk Fight".into(),
-                        resolution: (800, 600).into(),
+                        resolution: (LOGICAL_WIDTH as u32, LOGICAL_HEIGHT as u32).into(),
                         canvas: Some("#game-canvas".into()),
                         fit_canvas_to_parent: true,
                         prevent_default_event_handling: false,
