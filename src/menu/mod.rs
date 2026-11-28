@@ -8,8 +8,8 @@ use crate::flow::FlowIntent;
 use crate::save::{ResumeDestination, SaveStore, SnapshotLoad, load_save, load_save_outcome};
 use crate::settings::SettingsOpen;
 use crate::theme::{
-    ARENA_BROWN, BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, CREAM, GOLD,
-    PANEL_LINEN, PanelTexture, TEXT_DISABLED, WALNUT, motif_band, motif_emblem, panel_bundle,
+    ARENA_BROWN, BUTTON_DISABLED, BUTTON_NORMAL, ButtonStyle, CREAM, GOLD, PANEL_LINEN,
+    PanelTexture, TEXT_DISABLED, WALNUT, motif_band, motif_emblem, panel_bundle,
 };
 use crate::ui_widgets::focus::{
     FocusNavigationPlugin, FocusNavigationSet, Focusable, TabGroup, TabIndex,
@@ -484,11 +484,7 @@ fn update_button_backgrounds(
     mut buttons: Query<(&Interaction, &mut BackgroundColor), ChangedEnabledButton>,
 ) {
     for (interaction, mut background) in &mut buttons {
-        background.0 = match interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
-        };
+        background.0 = ButtonStyle::default_style().background_for(*interaction);
     }
 }
 
@@ -496,6 +492,7 @@ fn update_button_backgrounds(
 mod tests {
     use super::*;
     use crate::core::CorePlugin;
+    use crate::theme::{BUTTON_HOVERED, BUTTON_PRESSED};
     use crate::ui_widgets::focus::InputFocus;
     use bevy::state::app::StatesPlugin;
 
