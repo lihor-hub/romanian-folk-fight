@@ -20,6 +20,8 @@ pub enum LineKey {
     BossIntro,
     /// A strike missed.
     Missed,
+    /// A melee strike could not reach the opponent at the current distance.
+    OutOfReach,
     /// A normal hit for `{dmg}`.
     Hit,
     /// A critical hit for `{dmg}`.
@@ -42,10 +44,11 @@ pub enum LineKey {
 
 impl LineKey {
     /// Every key, for coverage tests and per-key bookkeeping.
-    pub const ALL: [LineKey; 12] = [
+    pub const ALL: [LineKey; 13] = [
         LineKey::FightStart,
         LineKey::BossIntro,
         LineKey::Missed,
+        LineKey::OutOfReach,
         LineKey::Hit,
         LineKey::Crit,
         LineKey::Blocked,
@@ -90,6 +93,13 @@ pub const fn pool(key: LineKey) -> &'static [&'static str] {
             "Pe lângă! {attacker} ar nimeri mai ușor un țânțar cu furca.",
             "{attacker} ratează de parcă ar ținti cu ochii închiși la horă.",
             "Vântul zice mersi: {attacker} l-a pieptănat frumos.",
+        ],
+        LineKey::OutOfReach => &[
+            "{actor} taie aerul: {opponent} e prea departe, tocmai la celălalt capăt de horă!",
+            "{actor} întinde brațul, dar {opponent} e prea departe. Mai fă un pas, voinicule!",
+            "De la distanța asta, {actor} nu ajunge până la {opponent} nici cu furca bunicului.",
+            "{actor} trebuie să se apropie de {opponent}; de peste deal nu se împart lovituri!",
+            "{actor} lovește de prea departe: până la {opponent} mai încape o horă!",
         ],
         LineKey::Hit => &[
             "{attacker} lovește zdravăn: {dmg} daune, ca la carte!",
