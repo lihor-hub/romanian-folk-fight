@@ -25,6 +25,53 @@ fight a stronger foe. A boss awaits every 5 fights.
 
 </details>
 
+## Controls
+
+In the browser, give the game focus if keys are going to the browser's own
+controls. Click or tap the on-screen buttons, or use the gold focus ring to
+select them with the keyboard. **The published release web build uses these
+UI controls for combat, not the debug number shortcuts below.**
+
+| Key | Action | Where it applies |
+| --- | --- | --- |
+| `Tab` / `Shift+Tab` | Focus the next / previous control. | Menu, creation, town, fight, result, shop, victory/game-over screens, and open overlays. |
+| `Right` / `Down` | Focus the next control in the same linear order as `Tab`. | The same UI controls; these keys do **not** move the fighter directly. |
+| `Left` / `Up` | Focus the previous control, like `Shift+Tab`. | The same UI controls; this is not two-dimensional directional navigation. |
+| `Enter` / `Space` | Activate the focused button, like a click. | UI controls, including combat actions and phone action categories. Disabled controls stay focusable but do not perform their action. |
+| `Escape` | Close settings and return to the underlying screen/overlay. | While settings are open. If opened from a paused fight, the fight **stays paused**; this keypress does not also resume it. |
+| `Escape` | Pause / resume the fight. | During a fight with settings closed. Use a separate press after closing settings to resume. It is not a general Back shortcut on other screens. |
+| `M` | Toggle master mute. | All screens, including overlays; saved with the audio settings for later visits on this browser/device, separately from the run save. |
+
+An open settings or pause overlay confines focus to its controls. Moving
+focus also scrolls a focused control into view when needed. In creation,
+choose a custom hero's name with the on-screen `<` / `>` buttons (focus and
+activate them with the keys above): names cycle through a curated list,
+not free-text entry. Pressing `M` does not type a name.
+
+With a recognized gamepad, D-pad right/down selects the next control,
+left/up selects the previous one, and the south (bottom face) button
+activates it. Mouse wheel/trackpad scrolling and touch dragging also scroll
+the creation/shop panels on short viewports.
+
+### Debug-build combat shortcuts
+
+**Debug builds only** (`debug_assertions` enabled, such as a normal native
+development run), **not the published release web build**. These top-row
+keys request actions only during an unpaused, unfinished duel on the
+player's turn, while combat animations are idle. Normal play uses the HUD
+buttons via pointer/touch or focus navigation instead.
+
+| Key | Action | Context |
+| --- | --- | --- |
+| `1` | Quick strike — Lovitură iute | Debug fight only |
+| `2` | Heavy strike — Lovitură grea | Debug fight only |
+| `3` | Block — Apărare | Debug fight only |
+| `4` | Rest — Odihnă | Debug fight only |
+| `5` | Step forward — Pas înainte | Debug fight only |
+| `6` | Step back — Pas înapoi | Debug fight only |
+| `7` | Leap forward — Salt înainte | Debug fight only |
+| `8` | Normal strike — Lovitură dreaptă | Debug fight only |
+
 ## Tech stack
 
 - [Rust](https://www.rust-lang.org/) + [Bevy 0.19](https://bevy.org/) — ECS
