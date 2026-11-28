@@ -61,6 +61,8 @@ struct Identity {
     profile: String,
     target: String,
     optimizer: String,
+    /// None follows Cargo/profile defaults; Some(false) is the existing CI disable.
+    cargo_incremental: Option<bool>,
     public_url: String,
     inputs: BTreeMap<String, String>,
     tools: BTreeMap<String, String>,
@@ -254,10 +256,15 @@ fn cargo_config(path: &Path) -> Result<bool> {
     Ok(wrapper)
 }
 
-fn check_environment(env: &BTreeMap<String, String>) -> Result<bool> {
+fn check_environment(env: &BTreeMap<String, String>) -> Result<(bool, Option<bool>)> {
     let mut wrapper = false;
+    let mut cargo_incremental = None;
     for (key, value) in env {
         if value.is_empty() {
+            continue;
+        }
+        if key == "CARGO_INCREMENTAL" && value == "0" {
+            cargo_incremental = Some(false);
             continue;
         }
         if key == "RUSTC_WRAPPER" && value == "sccache" {
@@ -299,7 +306,7 @@ fn check_environment(env: &BTreeMap<String, String>) -> Result<bool> {
             )));
         }
     }
-    Ok(wrapper)
+    Ok((wrapper, cargo_incremental))
 }
 
 fn version(root: &Path, program: &str, args: &[&str]) -> Result<String> {
@@ -357,7 +364,7 @@ fn capture(root: &Path, variant: Variant) -> Result<Identity> {
             ))
         })
         .collect::<Result<_>>()?;
-    let mut wrapper = check_environment(&env)?;
+    let (mut wrapper, cargo_incremental) = check_environment(&env)?;
     for ancestor in root.ancestors() {
         for file in ["config", "config.toml"] {
             wrapper |= cargo_config(&ancestor.join(".cargo").join(file))?;
@@ -397,7 +404,9 @@ fn capture(root: &Path, variant: Variant) -> Result<Identity> {
     } else {
         Provenance::Local
     };
-    identity(root, variant, tools, provenance)
+    let mut captured = identity(root, variant, tools, provenance)?;
+    captured.cargo_incremental = cargo_incremental;
+    Ok(captured)
 }
 
 fn identity(
@@ -494,6 +503,7 @@ fn identity(
         profile: "release".into(),
         target: "wasm32-unknown-unknown".into(),
         optimizer: "-Oz".into(),
+        cargo_incremental: None,
         public_url,
         inputs,
         tools,
@@ -808,6 +818,24 @@ mod tests {
     }
 
     #[test]
+    fn existing_ci_incremental_disable_is_supported_but_other_overrides_still_reject() {
+        assert_eq!(
+            check_environment(&BTreeMap::from([("CARGO_INCREMENTAL".into(), "0".into())])).unwrap(),
+            (false, Some(false))
+        );
+        assert_eq!(check_environment(&BTreeMap::new()).unwrap(), (false, None));
+        for value in ["1", "unsupported"] {
+            assert!(
+                check_environment(&BTreeMap::from([(
+                    "CARGO_INCREMENTAL".into(),
+                    value.into()
+                )]))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn cargo_home_supports_system_home_fallback_without_environment_mutation() {
         let f = Fixture::new();
         assert_eq!(
@@ -883,6 +911,9 @@ mod tests {
         let f = Fixture::new();
         let expected = f.ready();
         let mut cases = vec![f.identity(Variant::Review)];
+        let mut ci_incremental = expected.clone();
+        ci_incremental.cargo_incremental = Some(false);
+        cases.push(ci_incremental);
         let mut tools = expected.clone();
         tools.tools.insert("rustc".into(), "another".into());
         cases.push(tools);

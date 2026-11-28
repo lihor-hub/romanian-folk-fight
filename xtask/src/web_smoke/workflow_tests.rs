@@ -99,6 +99,10 @@ fn two_same_run_producers_feed_the_existing_named_fanout_without_dependency_skip
         assert!(producer.contains("if-no-files-found: error"));
         assert!(!producer.contains("if: always()"));
         assert!(!producer.contains("--scenario"));
+        assert!(producer.contains("name: Upload producer failure diagnosis\n      if: failure()"));
+        assert!(producer.contains("path: target/xtask-artifacts/web-smoke-failure.log"));
+        assert!(producer.contains("tail -n 40 target/xtask-artifacts/web-smoke-failure.log"));
+        assert!(!producer.contains("printenv"));
         assert!(producer.contains(&format!(
             "name: web-smoke-bundle-{kind}-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}"
         )));

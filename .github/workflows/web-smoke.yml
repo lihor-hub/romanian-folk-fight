@@ -96,6 +96,23 @@ jobs:
         tool: trunk
     - name: Build production bundle only
       run: cargo run --locked --package xtask -- web-smoke --build production --artifact-root target/web-smoke-bundles
+    - name: Report producer rejection
+      if: failure()
+      run: |
+        echo '::error::Production bundle producer failed before validated publication'
+        mkdir -p target/xtask-artifacts
+        if ! test -f target/xtask-artifacts/web-smoke-failure.log; then
+          printf 'Producer failed before smoke validation; see failed step output\n' > target/xtask-artifacts/web-smoke-failure.log
+        fi
+        tail -n 40 target/xtask-artifacts/web-smoke-failure.log
+    - name: Upload producer failure diagnosis
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: web-smoke-build-production-failure-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/xtask-artifacts/web-smoke-failure.log
+        if-no-files-found: ignore
+        retention-days: 14
     - name: Publish completed production bundle
       uses: actions/upload-artifact@v7
       with:
@@ -127,6 +144,23 @@ jobs:
         tool: trunk
     - name: Build review bundle only
       run: cargo run --locked --package xtask -- web-smoke --build review --artifact-root target/web-smoke-bundles
+    - name: Report producer rejection
+      if: failure()
+      run: |
+        echo '::error::Review bundle producer failed before validated publication'
+        mkdir -p target/xtask-artifacts
+        if ! test -f target/xtask-artifacts/web-smoke-failure.log; then
+          printf 'Producer failed before smoke validation; see failed step output\n' > target/xtask-artifacts/web-smoke-failure.log
+        fi
+        tail -n 40 target/xtask-artifacts/web-smoke-failure.log
+    - name: Upload producer failure diagnosis
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: web-smoke-build-review-failure-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/xtask-artifacts/web-smoke-failure.log
+        if-no-files-found: ignore
+        retention-days: 14
     - name: Publish completed review bundle
       uses: actions/upload-artifact@v7
       with:

@@ -443,7 +443,9 @@ The versioned manifest binds:
   not a generic build-input discovery framework.
 - `rustc -Vv`, `cargo -V`, `trunk --version`, Trunk's reported installed/default wasm tool
   versions, the wasm-bindgen version selected from the lockfile, and the
-  sccache version when that wrapper is configured. The installed toolchain
+  sccache version when that wrapper is configured. The existing CI
+  `CARGO_INCREMENTAL=0` setting is explicitly supported and bound separately
+  from unset/Cargo-profile defaults; enabled/unknown overrides still reject. The installed toolchain
   and Trunk's pinned tool resolver are trusted; the manifest does not attest
   tool binary contents or authenticate a malicious compiler/builder.
 - Local provenance separately from GitHub repository/run/attempt/SHA. Local
@@ -477,7 +479,8 @@ staleness/corruption, not an attacker rewriting both outputs and manifest.
 fan-out: production for cold-menu/accessibility-settings-reload, review for
 the others. This structurally replaces **11 default bundle pipelines
 (2 production + 9 review) with 2**; it is not an elapsed-time speedup claim.
-Artifacts are uploaded only after producer success; downloads use the current
+Completed bundles are uploaded only after producer success; a failure uploads
+only its sanitized rejection log for diagnosis. Downloads use the current
 run, named with run/attempt. A later-attempt rerun must include its producers;
 consumer-only reruns cannot substitute an earlier attempt's bundle. Required
 consumers explicitly fail on producer failure rather than becoming
