@@ -26,6 +26,8 @@ pub enum LineKey {
     Crit,
     /// The defender's guard halved the hit to `{dmg}`.
     Blocked,
+    /// The actor stepped or leapt to a new arena position.
+    Moved,
     /// The actor raised a guard.
     Guarded,
     /// The actor rested for `{amount}` stamina.
@@ -40,13 +42,14 @@ pub enum LineKey {
 
 impl LineKey {
     /// Every key, for coverage tests and per-key bookkeeping.
-    pub const ALL: [LineKey; 11] = [
+    pub const ALL: [LineKey; 12] = [
         LineKey::FightStart,
         LineKey::BossIntro,
         LineKey::Missed,
         LineKey::Hit,
         LineKey::Crit,
         LineKey::Blocked,
+        LineKey::Moved,
         LineKey::Guarded,
         LineKey::Rested,
         LineKey::OutOfStamina,
@@ -108,6 +111,13 @@ pub const fn pool(key: LineKey) -> &'static [&'static str] {
             "Scut de nădejde: {defender} oprește aproape tot. {dmg} daune, atât.",
             "{defender} stă ca poarta maramureșeană: doar {dmg} daune printre stâlpi.",
             "Degeaba bate {attacker}: {defender} e zid de mănăstire. {dmg} daune.",
+        ],
+        LineKey::Moved => &[
+            "{actor} își schimbă locul în arenă, de parcă ar căuta umbră la târg.",
+            "{actor} joacă un pas de horă; praful ține isonul.",
+            "Cu pași de voinic, {actor} își caută locul potrivit în arenă.",
+            "{actor} se mișcă sprinten, ca flăcăul când se deschide hora.",
+            "{actor} își mută pasul; nici la horă nu stă lumea pe loc!",
         ],
         LineKey::Guarded => &[
             "{actor} ridică garda cum ridică gospodarul gardul: temeinic.",
