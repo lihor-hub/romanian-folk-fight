@@ -17,11 +17,11 @@
 //! logical (CSS) pixel unit the 44px floor is expressed in -- exact ground
 //! truth, not a pixel-color guess.
 //!
-//! ## Separate build, separate `dist/`
+//! ## Verified review bundle
 //!
-//! [`build_review_release`] runs `trunk build --release --features review`
-//! into its own `dist-touch-targets/` directory, mirroring every other
-//! review-seam scenario.
+//! The dispatcher supplies a validated [`super::build::Bundle`] from the
+//! shared release/review recipe, never the production bundle. Bundle reuse
+//! does not share browser profiles, storage, or checkpoint state.
 //!
 //! ## No screenshot baselines
 //!
@@ -29,11 +29,8 @@
 //! exact telemetry, not a pixel diff. Screenshots are still captured as
 //! artifacts for human review.
 
-use std::path::PathBuf;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::process::run_step;
 use crate::web_smoke::browser::{self, Checkpoint};
 use crate::web_smoke::error::SmokeError;
 use crate::web_smoke::{artifacts, server::StaticServer};
@@ -76,14 +73,14 @@ const VIEWPORTS: &[ViewportSpec] = &[
     },
 ];
 
-pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
+pub fn run(bundle: &super::build::Bundle, update_baselines: bool) -> Result<(), SmokeError> {
     if update_baselines {
         println!(
             "{SCENARIO}: --update-baselines has no effect here -- this scenario has no screenshot baselines (see its module docs)."
         );
     }
 
-    let dist_dir = build_review_release()?;
+    let dist_dir = bundle.dist_dir();
     let server = StaticServer::start(dist_dir).map_err(|e| {
         SmokeError::scenario(
             format!("web-smoke {SCENARIO}: serve dist-touch-targets/"),
@@ -105,26 +102,6 @@ pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
          CSS px at any viewport."
     );
     Ok(())
-}
-
-fn build_review_release() -> Result<PathBuf, SmokeError> {
-    let mut cmd = Command::new("trunk");
-    cmd.arg("build")
-        .arg("--release")
-        .arg("--features")
-        .arg("review")
-        .arg("--dist")
-        .arg("dist-touch-targets");
-    cmd.current_dir(workspace_root());
-    run_step(
-        "web-smoke: trunk build --release --features review (touch-targets)",
-        cmd,
-    )?;
-    Ok(workspace_root().join("dist-touch-targets"))
-}
-
-fn workspace_root() -> PathBuf {
-    crate::process::workspace_root()
 }
 
 fn send_command(checkpoint: &Checkpoint, payload: serde_json::Value) -> Result<(), String> {

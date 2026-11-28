@@ -45,6 +45,10 @@ description = "Root cargo-xtask dispatcher: focused Rust verification gates for 
 # new transitive dependencies to the lockfile -- just a second edge to a
 # crate already resolved.
 [dependencies]
+# Cryptographic content identity for validated smoke bundles; already in Cargo.lock.
+blake3 = "1.8"
+# Cargo-home discovery must also work when HOME is absent; already resolved.
+dirs = "6"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
 toml = { version = "1.1", default-features = false, features = ["parse", "display", "serde"] }

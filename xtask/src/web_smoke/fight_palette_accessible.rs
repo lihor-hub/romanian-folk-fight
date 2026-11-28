@@ -56,18 +56,14 @@
 //! still captured and baselined (`--update-baselines`) for human review, but
 //! pixels never gate.
 //!
-//! ## Separate build, separate `dist/`
+//! ## Verified review bundle
 //!
-//! [`build_review_release`] runs `trunk build --release --features review`
-//! into its own `dist-fight-palette-accessible/` directory (mirroring every
-//! other review-seam scenario) so concurrent scenario runs never clobber
-//! each other's build output.
+//! The dispatcher supplies a validated [`super::build::Bundle`] from the
+//! shared release/review recipe, never the production bundle. Bundle reuse
+//! does not share browser profiles, storage, or checkpoint state.
 
-use std::path::PathBuf;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::process::run_step;
 use crate::web_smoke::browser::{self, Checkpoint, PageStatus};
 use crate::web_smoke::desktop_fight_freeze;
 use crate::web_smoke::error::SmokeError;
@@ -169,8 +165,12 @@ const FOCUS_SETTLE_MAX_FRAMES: usize = 120;
 /// the scenario confirming an intentional no-op.
 const ENTER_SETTLE_FRAMES: usize = 30;
 
-pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError> {
-    let dist_dir = build_review_release()?;
+pub fn run(
+    bundle: &super::build::Bundle,
+    update_baselines: bool,
+    strict_visual: bool,
+) -> Result<(), SmokeError> {
+    let dist_dir = bundle.dist_dir();
     let server = StaticServer::start(dist_dir).map_err(|e| {
         SmokeError::scenario(
             format!("web-smoke {SCENARIO}: serve dist-fight-palette-accessible/"),
@@ -212,26 +212,6 @@ pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError
         println!("\n{SCENARIO}: descriptor-driven keyboard focus passed at both viewports.");
     }
     Ok(())
-}
-
-fn build_review_release() -> Result<PathBuf, SmokeError> {
-    let mut cmd = Command::new("trunk");
-    cmd.arg("build")
-        .arg("--release")
-        .arg("--features")
-        .arg("review")
-        .arg("--dist")
-        .arg("dist-fight-palette-accessible");
-    cmd.current_dir(workspace_root());
-    run_step(
-        "web-smoke: trunk build --release --features review (fight-palette-accessible)",
-        cmd,
-    )?;
-    Ok(workspace_root().join("dist-fight-palette-accessible"))
-}
-
-fn workspace_root() -> PathBuf {
-    crate::process::workspace_root()
 }
 
 fn send_command(checkpoint: &Checkpoint, payload: serde_json::Value) -> Result<(), String> {

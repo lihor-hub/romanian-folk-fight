@@ -108,8 +108,12 @@ const READY_MAX_FRAMES: usize = 1800;
 const READY_MAX_WALL_CLOCK: Duration = Duration::from_secs(120);
 const STABLE_FRAMES_REQUIRED: usize = 3;
 
-pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError> {
-    let dist_dir = crate::web_smoke::build_release("web-smoke: trunk build --release")?;
+pub fn run(
+    bundle: &super::build::Bundle,
+    update_baselines: bool,
+    strict_visual: bool,
+) -> Result<(), SmokeError> {
+    let dist_dir = bundle.dist_dir();
 
     let server = StaticServer::start(dist_dir).map_err(|e| {
         SmokeError::scenario(

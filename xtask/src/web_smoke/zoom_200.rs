@@ -46,11 +46,11 @@
 //! "playable at 200% zoom" a keyboard-only player experiences. A control
 //! that stays off-screen even after scroll-into-view fails the run.
 //!
-//! ## Separate build, separate `dist/`
+//! ## Verified review bundle
 //!
-//! [`build_review_release`] runs `trunk build --release --features review`
-//! into its own `dist-zoom-200/` directory, mirroring every other
-//! review-seam scenario.
+//! The dispatcher supplies a validated [`super::build::Bundle`] from the
+//! shared release/review recipe, never the production bundle. Bundle reuse
+//! does not share browser profiles, storage, or checkpoint state.
 //!
 //! ## No screenshot baselines
 //!
@@ -58,11 +58,8 @@
 //! exact telemetry, not a pixel diff. Screenshots are still captured as
 //! artifacts for human review.
 
-use std::path::PathBuf;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::process::run_step;
 use crate::web_smoke::browser::{self, Checkpoint, PageStatus};
 use crate::web_smoke::error::SmokeError;
 use crate::web_smoke::{artifacts, server::StaticServer};
@@ -90,14 +87,14 @@ const SETTLE_MAX_FRAMES: usize = 120;
 /// comfortably above every current screen's actual control count.
 const MAX_LAP_PRESSES: usize = 40;
 
-pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
+pub fn run(bundle: &super::build::Bundle, update_baselines: bool) -> Result<(), SmokeError> {
     if update_baselines {
         println!(
             "{SCENARIO}: --update-baselines has no effect here -- this scenario has no screenshot baselines (see its module docs)."
         );
     }
 
-    let dist_dir = build_review_release()?;
+    let dist_dir = bundle.dist_dir();
     let server = StaticServer::start(dist_dir).map_err(|e| {
         SmokeError::scenario(
             format!("web-smoke {SCENARIO}: serve dist-zoom-200/"),
@@ -138,26 +135,6 @@ pub fn run(update_baselines: bool) -> Result<(), SmokeError> {
             dir,
         )),
     }
-}
-
-fn build_review_release() -> Result<PathBuf, SmokeError> {
-    let mut cmd = Command::new("trunk");
-    cmd.arg("build")
-        .arg("--release")
-        .arg("--features")
-        .arg("review")
-        .arg("--dist")
-        .arg("dist-zoom-200");
-    cmd.current_dir(workspace_root());
-    run_step(
-        "web-smoke: trunk build --release --features review (zoom-200)",
-        cmd,
-    )?;
-    Ok(workspace_root().join("dist-zoom-200"))
-}
-
-fn workspace_root() -> PathBuf {
-    crate::process::workspace_root()
 }
 
 fn send_command(checkpoint: &Checkpoint, payload: serde_json::Value) -> Result<(), String> {

@@ -10,9 +10,8 @@ name: Browser smoke
 # `gold-journey` *can* walk the full #198 matrix in one invocation: both
 # viewports (1280x800 desktop, 390x844 phone) at device pixel ratios 1, 2,
 # and 3, all five gold-journey screens at each -- 30 checkpoints -- from the
-# *same* single `trunk build --release --features review` this job already
-# ran (the DPR/viewport dimension only changes the headless-Chrome
-# emulation per checkpoint; the wasm bundle it drives is built once). As of
+# same validated review bundle from the producer (the DPR/viewport
+# dimension only changes headless-Chrome emulation per checkpoint). As of
 # #284, the default push/pull_request run narrows that to the single
 # `normal-desktop` 1440x900/DPR-1 viewport (5 checkpoints)
 # -- see that job's own comment and `xtask/src/web_smoke/gold_journey.rs`'s
@@ -36,9 +35,11 @@ name: Browser smoke
 # This workflow deliberately does not invoke `cargo xtask web-smoke --all`:
 # that command exists for a single local/CI process that wants every
 # scenario back to back, but this workflow keeps every scenario as its own
-# parallel job so the builds and browser sessions run concurrently instead
-# of serially, which is the dominant factor in this workflow's wall-clock
-# runtime.
+# parallel job. #413 builds two same-run bundles first (production/review),
+# then fans out fresh browser sessions without duplicate Trunk pipelines.
+# Consumers explicitly fail on producer failure; dependency skips cannot
+# masquerade as successful required checks. No privileged/native-binary
+# artifact consumer or cross-workflow artifact lookup is introduced.
 
 on:
   push:
@@ -73,7 +74,71 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  build-production:
+    name: build-production (shared browser bundle)
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+    - uses: actions/checkout@v7
+    - name: Add wasm target
+      run: rustup target add wasm32-unknown-unknown
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.11
+    - name: Set up Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "sccache"
+    - name: Install Trunk
+      uses: taiki-e/install-action@v2.86.2
+      with:
+        tool: trunk
+    - name: Build production bundle only
+      run: cargo run --locked --package xtask -- web-smoke --build production --artifact-root target/web-smoke-bundles
+    - name: Publish completed production bundle
+      uses: actions/upload-artifact@v7
+      with:
+        name: web-smoke-bundle-production-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/production/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 1
+
+  build-review:
+    name: build-review (shared browser bundle)
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+    - uses: actions/checkout@v7
+    - name: Add wasm target
+      run: rustup target add wasm32-unknown-unknown
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.11
+    - name: Set up Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "sccache"
+    - name: Install Trunk
+      uses: taiki-e/install-action@v2.86.2
+      with:
+        tool: trunk
+    - name: Build review bundle only
+      run: cargo run --locked --package xtask -- web-smoke --build review --artifact-root target/web-smoke-bundles
+    - name: Publish completed review bundle
+      uses: actions/upload-artifact@v7
+      with:
+        name: web-smoke-bundle-review-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/review/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 1
+
   cold-menu:
+    needs: build-production
+    if: ${{ !cancelled() }}
     name: cold-menu (desktop + phone)
     runs-on: ubuntu-latest
     env:
@@ -106,6 +171,14 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
+    - name: Reject failed producer
+      if: needs.build-production.result != 'success'
+      run: exit 1
+    - name: Download same-run production bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: web-smoke-bundle-production-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/production/
     - name: Run the cold-menu browser smoke
       # No worktree bootstrap runs in CI, so the `cargo xtask` alias (a
       # gitignored, bootstrap-generated `.cargo/config.toml` entry -- see
@@ -116,7 +189,7 @@ jobs:
       # non-fatal baseline-diff policy for ordinary CI (see
       # xtask/README.md's "Visual-diff review gating" section).
       run: >-
-        cargo run --locked --package xtask -- web-smoke --scenario cold-menu
+        cargo run --locked --package xtask -- web-smoke --scenario cold-menu --artifact-root target/web-smoke-bundles
         ${{ github.event_name == 'workflow_dispatch' && inputs.strict_visual && '--strict-visual' || '' }}
 
     # Two artifact uploads instead of one "always" upload: a passing run
@@ -144,6 +217,8 @@ jobs:
         retention-days: 14
 
   gold-journey:
+    needs: build-review
+    if: ${{ !cancelled() }}
     name: gold-journey (1440x900 DPR-1 normal desktop; full matrix opt-in)
     runs-on: ubuntu-latest
     env:
@@ -181,17 +256,24 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
+    - name: Reject failed producer
+      if: needs.build-review.result != 'success'
+      run: exit 1
+    - name: Download same-run review bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: web-smoke-bundle-review-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/review/
     - name: Run the gold-journey browser smoke (1440x900 DPR-1 by default; full matrix opt-in)
       # Same alias-independent invocation as the cold-menu job above (no
-      # worktree bootstrap runs in CI). Builds its own review-feature wasm
-      # bundle into dist-gold-journey/ once -- never dist/ (see
-      # xtask/src/web_smoke/gold_journey.rs) -- then reuses that single
-      # build across whichever viewport(s) are active: one (normal desktop
+      # worktree bootstrap runs in CI). Validates the producer's review
+      # bundle before launch, then reuses it across whichever viewport(s)
+      # are active: one (normal desktop
       # at 1440x900 DPR 1) or all 6 viewport x DPR entries (30 checkpoints)
       # when XTASK_WEB_SMOKE_GOLD_JOURNEY_FULL_MATRIX is set above; only the
       # headless-Chrome device-metrics emulation varies per checkpoint.
       run: >-
-        cargo run --locked --package xtask -- web-smoke --scenario gold-journey
+        cargo run --locked --package xtask -- web-smoke --scenario gold-journey --artifact-root target/web-smoke-bundles
         ${{ github.event_name == 'workflow_dispatch' && inputs.strict_visual && '--strict-visual' || '' }}
 
     - name: Upload screenshots (success)
@@ -213,6 +295,8 @@ jobs:
         retention-days: 14
 
   accessibility-settings-reload:
+    needs: build-production
+    if: ${{ !cancelled() }}
     name: accessibility-settings-reload (a11y toggles persist + zoom permitted)
     runs-on: ubuntu-latest
     env:
@@ -241,13 +325,21 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
+    - name: Reject failed producer
+      if: needs.build-production.result != 'success'
+      run: exit 1
+    - name: Download same-run production bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: web-smoke-bundle-production-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/production/
     - name: Run the accessibility-settings-reload browser smoke
       # Same alias-independent invocation as the jobs above (no worktree
       # bootstrap runs in CI). Clicks both Romanian accessibility toggles in
       # the real settings UI, reloads, and asserts localStorage persistence
       # plus zoom capability (see
       # xtask/src/web_smoke/accessibility_settings_reload.rs, #191).
-      run: cargo run --locked --package xtask -- web-smoke --scenario accessibility-settings-reload
+      run: cargo run --locked --package xtask -- web-smoke --scenario accessibility-settings-reload --artifact-root target/web-smoke-bundles
 
     - name: Upload smoke artifacts (always, for post-mortem on failure)
       if: always()
@@ -259,6 +351,8 @@ jobs:
         retention-days: 14
 
   reduced-motion-fight:
+    needs: build-review
+    if: ${{ !cancelled() }}
     name: reduced-motion-fight (loader CSS + parallax/shake/lunge suppression)
     runs-on: ubuntu-latest
     env:
@@ -287,6 +381,14 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
+    - name: Reject failed producer
+      if: needs.build-review.result != 'success'
+      run: exit 1
+    - name: Download same-run review bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: web-smoke-bundle-review-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/review/
     - name: Run the reduced-motion-fight browser smoke
       # Same alias-independent invocation as the jobs above (no worktree
       # bootstrap runs in CI). Seeds the persisted reduced-motion preference
@@ -296,7 +398,7 @@ jobs:
       # rest while idle and every sampled in-combat displacement stays under
       # the documented ceiling (see
       # xtask/src/web_smoke/reduced_motion_fight.rs, #200).
-      run: cargo run --locked --package xtask -- web-smoke --scenario reduced-motion-fight
+      run: cargo run --locked --package xtask -- web-smoke --scenario reduced-motion-fight --artifact-root target/web-smoke-bundles
 
     - name: Upload smoke artifacts (always, for post-mortem on failure)
       if: always()
@@ -308,6 +410,8 @@ jobs:
         retention-days: 14
 
   fight-palette-desktop:
+    needs: build-review
+    if: ${{ !cancelled() }}
     name: fight-palette-desktop (descriptor-driven action bar fits the stage)
     runs-on: ubuntu-latest
     env:
@@ -336,6 +440,14 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
+    - name: Reject failed producer
+      if: needs.build-review.result != 'success'
+      run: exit 1
+    - name: Download same-run review bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: web-smoke-bundle-review-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/review/
     - name: Run the fight-palette-desktop browser smoke
       # Same alias-independent invocation as the jobs above (no worktree
       # bootstrap runs in CI). Drives menu -> creation -> a fresh fight start
@@ -344,7 +456,7 @@ jobs:
       # from action descriptors (#189) -- spawns exactly seven buttons and
       # every one of them fits inside the letterboxed stage rect (see
       # xtask/src/web_smoke/fight_palette_desktop.rs).
-      run: cargo run --locked --package xtask -- web-smoke --scenario fight-palette-desktop
+      run: cargo run --locked --package xtask -- web-smoke --scenario fight-palette-desktop --artifact-root target/web-smoke-bundles
 
     - name: Upload smoke artifacts (always, for post-mortem on failure)
       if: always()
@@ -356,6 +468,8 @@ jobs:
         retention-days: 14
 
   high-contrast:
+    needs: build-review
+    if: ${{ !cancelled() }}
     name: high-contrast (persisted preference switches the palette, desktop + phone)
     runs-on: ubuntu-latest
     env:
@@ -384,6 +498,14 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
+    - name: Reject failed producer
+      if: needs.build-review.result != 'success'
+      run: exit 1
+    - name: Download same-run review bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: web-smoke-bundle-review-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/review/
     - name: Run the high-contrast browser smoke
       # Same alias-independent invocation as the jobs above (no worktree
       # bootstrap runs in CI). Seeds the persisted high-contrast preference
@@ -392,7 +514,7 @@ jobs:
       # palette telemetry, not a screenshot pixel probe) that the active
       # theme palette actually switched to the high-contrast token set
       # (see xtask/src/web_smoke/high_contrast.rs, #214).
-      run: cargo run --locked --package xtask -- web-smoke --scenario high-contrast
+      run: cargo run --locked --package xtask -- web-smoke --scenario high-contrast --artifact-root target/web-smoke-bundles
 
     - name: Upload smoke artifacts (always, for post-mortem on failure)
       if: always()
@@ -404,6 +526,7 @@ jobs:
         retention-days: 14
 
   fight-palette-phone:
+    needs: build-review
     name: fight-palette-phone (category disclosure fits a 390x844 stage) [manual/full_matrix only]
     runs-on: ubuntu-latest
     # #284: this scenario exists specifically to cover the phone viewport,
@@ -413,7 +536,7 @@ jobs:
     # reachable only via a manual `workflow_dispatch` run with
     # `full_matrix: true` -- see xtask/README.md's "Desktop-only default
     # scope" section for the reactivation path.
-    if: github.event_name == 'workflow_dispatch' && inputs.full_matrix
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.full_matrix }}
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
@@ -440,6 +563,14 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
+    - name: Reject failed producer
+      if: needs.build-review.result != 'success'
+      run: exit 1
+    - name: Download same-run review bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: web-smoke-bundle-review-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/review/
     - name: Run the fight-palette-phone browser smoke
       # Same alias-independent invocation as the jobs above. Drives menu ->
       # creation -> a fresh fight start through the review seam at a 390x844
@@ -450,7 +581,7 @@ jobs:
       # letterboxed stage rect, and no overlap with the fighter status
       # panels -- in the closed state and every open-category state (see
       # xtask/src/web_smoke/fight_palette_phone.rs).
-      run: cargo run --locked --package xtask -- web-smoke --scenario fight-palette-phone
+      run: cargo run --locked --package xtask -- web-smoke --scenario fight-palette-phone --artifact-root target/web-smoke-bundles
 
     - name: Upload smoke artifacts (always, for post-mortem on failure)
       if: always()
@@ -462,6 +593,8 @@ jobs:
         retention-days: 14
 
   fight-palette-accessible:
+    needs: build-review
+    if: ${{ !cancelled() }}
     name: fight-palette-accessible (real-keyboard focus, disabled reasons, category-close recovery)
     runs-on: ubuntu-latest
     env:
@@ -490,6 +623,14 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
+    - name: Reject failed producer
+      if: needs.build-review.result != 'success'
+      run: exit 1
+    - name: Download same-run review bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: web-smoke-bundle-review-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/review/
     - name: Run the fight-palette-accessible browser smoke
       # Same alias-independent invocation as the jobs above. Drives menu ->
       # creation -> a fresh fight start through the review seam at both a
@@ -501,7 +642,7 @@ jobs:
       # the gold focus marker visible, that Enter on it is inert, and that
       # closing a phone category recovers focus onto that category's own
       # button (see xtask/src/web_smoke/fight_palette_accessible.rs).
-      run: cargo run --locked --package xtask -- web-smoke --scenario fight-palette-accessible
+      run: cargo run --locked --package xtask -- web-smoke --scenario fight-palette-accessible --artifact-root target/web-smoke-bundles
 
     - name: Upload smoke artifacts (always, for post-mortem on failure)
       if: always()
@@ -513,6 +654,8 @@ jobs:
         retention-days: 14
 
   keyboard-accessibility:
+    needs: build-review
+    if: ${{ !cancelled() }}
     name: keyboard-accessibility (keyboard-only nav + audio controls, every screen)
     runs-on: ubuntu-latest
     # Blocking again as of #270. This scenario drives a long multi-screen
@@ -558,6 +701,14 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
+    - name: Reject failed producer
+      if: needs.build-review.result != 'success'
+      run: exit 1
+    - name: Download same-run review bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: web-smoke-bundle-review-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/review/
     - name: Run the keyboard-accessibility browser smoke
       # #216: drives every current screen (menu, creation, settings, pause,
       # fight HUD, result/game-over/victory, shop) with real CDP keypresses,
@@ -565,7 +716,7 @@ jobs:
       # control (keyed on `focused_entity`, skipping hidden/disabled), the
       # gold focus marker, and keyboard-operable audio controls. Same
       # alias-independent invocation as the jobs above.
-      run: cargo run --locked --package xtask -- web-smoke --scenario keyboard-accessibility
+      run: cargo run --locked --package xtask -- web-smoke --scenario keyboard-accessibility --artifact-root target/web-smoke-bundles
 
     - name: Upload smoke artifacts (always, for post-mortem on failure)
       if: always()
@@ -577,6 +728,7 @@ jobs:
         retention-days: 14
 
   zoom-200:
+    needs: build-review
     name: zoom-200 (required screens playable at 200% desktop zoom) [manual/full_matrix only]
     runs-on: ubuntu-latest
     # #284: this scenario exists specifically to cover 200%-zoom desktop
@@ -586,7 +738,7 @@ jobs:
     # unchanged) and reachable only via a manual `workflow_dispatch` run
     # with `full_matrix: true` -- see xtask/README.md's "Desktop-only
     # default scope" section for the reactivation path.
-    if: github.event_name == 'workflow_dispatch' && inputs.full_matrix
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.full_matrix }}
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
@@ -613,11 +765,19 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
+    - name: Reject failed producer
+      if: needs.build-review.result != 'success'
+      run: exit 1
+    - name: Download same-run review bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: web-smoke-bundle-review-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/review/
     - name: Run the zoom-200 browser smoke
       # #216: emulates 200% desktop browser zoom and asserts no required
       # control is clipped and the page does not scroll unexpectedly on any
       # current screen. Same alias-independent invocation as the jobs above.
-      run: cargo run --locked --package xtask -- web-smoke --scenario zoom-200
+      run: cargo run --locked --package xtask -- web-smoke --scenario zoom-200 --artifact-root target/web-smoke-bundles
 
     - name: Upload smoke artifacts (always, for post-mortem on failure)
       if: always()
@@ -629,6 +789,8 @@ jobs:
         retention-days: 14
 
   corrupt-save-recovery:
+    needs: build-review
+    if: ${{ !cancelled() }}
     name: corrupt-save-recovery (Romanian recovery UI, run-snapshot-only quarantine)
     runs-on: ubuntu-latest
     env:
@@ -657,6 +819,14 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
+    - name: Reject failed producer
+      if: needs.build-review.result != 'success'
+      run: exit 1
+    - name: Download same-run review bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: web-smoke-bundle-review-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/review/
     - name: Run the corrupt-save-recovery browser smoke
       # #201: seeds a corrupt and, separately, a future-version run snapshot
       # into localStorage before the wasm module boots, asserts the
@@ -666,7 +836,7 @@ jobs:
       # survives byte-for-byte -- the real-browser proof that recovery
       # clears/quarantines only the run snapshot (see
       # xtask/src/web_smoke/corrupt_save_recovery.rs).
-      run: cargo run --locked --package xtask -- web-smoke --scenario corrupt-save-recovery
+      run: cargo run --locked --package xtask -- web-smoke --scenario corrupt-save-recovery --artifact-root target/web-smoke-bundles
 
     - name: Upload smoke artifacts (always, for post-mortem on failure)
       if: always()
@@ -678,6 +848,7 @@ jobs:
         retention-days: 14
 
   touch-targets:
+    needs: build-review
     name: touch-targets (interactive targets meet 44x44 CSS px) [manual/full_matrix only]
     runs-on: ubuntu-latest
     # #284: this scenario exists specifically to cover touch-target sizing
@@ -688,7 +859,7 @@ jobs:
     # `workflow_dispatch` run with `full_matrix: true` -- see
     # xtask/README.md's "Desktop-only default scope" section for the
     # reactivation path.
-    if: github.event_name == 'workflow_dispatch' && inputs.full_matrix
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.full_matrix }}
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
@@ -715,11 +886,19 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
+    - name: Reject failed producer
+      if: needs.build-review.result != 'success'
+      run: exit 1
+    - name: Download same-run review bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: web-smoke-bundle-review-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/review/
     - name: Run the touch-targets browser smoke
       # #216: measures every current interactive target on the phone
       # viewport and asserts none is below the 44x44 CSS-pixel minimum. Same
       # alias-independent invocation as the jobs above.
-      run: cargo run --locked --package xtask -- web-smoke --scenario touch-targets
+      run: cargo run --locked --package xtask -- web-smoke --scenario touch-targets --artifact-root target/web-smoke-bundles
 
     - name: Upload smoke artifacts (always, for post-mortem on failure)
       if: always()
@@ -731,6 +910,8 @@ jobs:
         retention-days: 14
 
   save-reload:
+    needs: build-review
+    if: ${{ !cancelled() }}
     name: save-reload (result -> shop -> real reload resumes at Shop, run values intact)
     runs-on: ubuntu-latest
     env:
@@ -759,6 +940,14 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
+    - name: Reject failed producer
+      if: needs.build-review.result != 'success'
+      run: exit 1
+    - name: Download same-run review bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: web-smoke-bundle-review-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/review/
     - name: Run the save-reload browser smoke
       # #217: drives menu -> creation -> a won first fight -> result -> shop
       # (buying one affordable item through the review seam), reads the run
@@ -767,7 +956,7 @@ jobs:
       # Continuă, and asserts the game resumes on the shop screen with the
       # exact same stored snapshot as before the reload (see
       # xtask/src/web_smoke/save_reload.rs).
-      run: cargo run --locked --package xtask -- web-smoke --scenario save-reload
+      run: cargo run --locked --package xtask -- web-smoke --scenario save-reload --artifact-root target/web-smoke-bundles
 
     - name: Upload smoke artifacts (always, for post-mortem on failure)
       if: always()
@@ -779,6 +968,8 @@ jobs:
         retention-days: 14
 
   abandon-forfeit:
+    needs: build-review
+    if: ${{ !cancelled() }}
     name: abandon-forfeit (Abandonează clears the run snapshot, disables Continuă)
     runs-on: ubuntu-latest
     env:
@@ -807,6 +998,14 @@ jobs:
     - name: Verify Chrome is available
       run: google-chrome-stable --version || google-chrome --version
 
+    - name: Reject failed producer
+      if: needs.build-review.result != 'success'
+      run: exit 1
+    - name: Download same-run review bundle
+      uses: actions/download-artifact@v8
+      with:
+        name: web-smoke-bundle-review-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/web-smoke-bundles/review/
     - name: Run the abandon-forfeit browser smoke
       # #217: drives menu -> creation -> fight (the hero-confirmation
       # checkpoint autosaves), presses a real Escape key to open the pause
@@ -815,7 +1014,7 @@ jobs:
       # from localStorage (forfeited, not merely unchanged), the screen is
       # MainMenu, and a further Continue press does not navigate anywhere
       # (see xtask/src/web_smoke/abandon_forfeit.rs).
-      run: cargo run --locked --package xtask -- web-smoke --scenario abandon-forfeit
+      run: cargo run --locked --package xtask -- web-smoke --scenario abandon-forfeit --artifact-root target/web-smoke-bundles
 
     - name: Upload smoke artifacts (always, for post-mortem on failure)
       if: always()

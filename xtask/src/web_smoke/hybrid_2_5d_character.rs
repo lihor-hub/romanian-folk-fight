@@ -8,11 +8,9 @@
 //! capable part remains visibly represented by its deterministic albedo
 //! `Sprite` without changing identity or silhouette facts.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::process::run_step;
 use crate::web_smoke::browser::{self, Checkpoint, PageStatus};
 use crate::web_smoke::error::SmokeError;
 use crate::web_smoke::{artifacts, baseline, server::StaticServer};
@@ -103,8 +101,12 @@ impl ExpectedStage {
     }
 }
 
-pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError> {
-    let dist_dir = build_review_release()?;
+pub fn run(
+    bundle: &super::build::Bundle,
+    update_baselines: bool,
+    strict_visual: bool,
+) -> Result<(), SmokeError> {
+    let dist_dir = bundle.dist_dir();
     let mut missing_baseline = false;
 
     {
@@ -159,27 +161,6 @@ pub fn run(update_baselines: bool, strict_visual: bool) -> Result<(), SmokeError
         );
     }
     Ok(())
-}
-
-fn build_review_release() -> Result<PathBuf, SmokeError> {
-    let mut command = Command::new("trunk");
-    command
-        .arg("build")
-        .arg("--release")
-        .arg("--features")
-        .arg("review")
-        .arg("--dist")
-        .arg("dist-hybrid-2-5d-character");
-    command.current_dir(workspace_root());
-    run_step(
-        "web-smoke: trunk build --release --features review (hybrid-2-5d-character)",
-        command,
-    )?;
-    Ok(workspace_root().join("dist-hybrid-2-5d-character"))
-}
-
-fn workspace_root() -> PathBuf {
-    crate::process::workspace_root()
 }
 
 fn start_server(dist_dir: &Path, phase: &str) -> Result<StaticServer, SmokeError> {
