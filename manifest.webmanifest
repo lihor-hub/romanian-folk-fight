@@ -1,0 +1,13 @@
+{
+  "name": "Romanian Folk Fight",
+  "short_name": "Folk Fight",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#1a1214",
+  "theme_color": "#7a1f1f",
+  "icons": [
+    { "src": "assets/web/favicon-32.png", "sizes": "32x32", "type": "image/png" },
+    { "src": "assets/web/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "assets/web/og-image.png", "sizes": "1200x630", "type": "image/png" }
+  ]
+}
