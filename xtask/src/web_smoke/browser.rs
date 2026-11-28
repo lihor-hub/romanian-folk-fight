@@ -185,16 +185,69 @@ impl PageStatus {
     }
 }
 
-/// A launched checkpoint browser: one Chrome process (fresh profile) and
-/// its one tab. Dropping this ends the Chrome process (`headless_chrome`'s
-/// own `Browser` `Drop` impl closes it), so a checkpoint's browser is always
+const BROWSER_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+const BROWSER_EVENT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// A launched checkpoint browser: one Chrome process (fresh profile), a
+/// game tab, and an isolated blank browser-event keepalive tab. Dropping this
+/// ends the Chrome process (`headless_chrome`'s own `Browser` `Drop` impl
+/// closes it), so a checkpoint's browser is always
 /// torn down when the function that launched it returns -- including on an
 /// early `?` return from a failed assertion.
 pub struct Checkpoint {
+    // Drop the worker before Browser closes Chrome and its transport.
+    _keepalive: BrowserEventKeepalive,
     #[allow(dead_code)] // kept alive so its `Drop` tears the process down with the tab
     browser: Browser,
     tab: Arc<Tab>,
     diagnostics: Option<ChromeDiagnosticPaths>,
+}
+
+/// `headless_chrome` times out its browser-level event receiver even while
+/// tab-level Runtime/Page traffic is active. The next TargetInfoChanged (e.g.
+/// reload) then sends to a dropped receiver and closes the entire transport.
+/// A fragment-navigation pulse on an isolated blank target generates that event;
+/// it never touches the game document, profile storage, or scenario deadlines.
+struct BrowserEventKeepalive {
+    stop: std::sync::mpsc::Sender<()>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl BrowserEventKeepalive {
+    fn start(
+        mut pulse: impl FnMut() -> Result<(), String> + Send + 'static,
+        interval: Duration,
+    ) -> Result<Self, String> {
+        let (stop, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::Builder::new()
+            .name("browser-event-keepalive".into())
+            .spawn(move || {
+                loop {
+                    if let Err(error) = pulse() {
+                        eprintln!("browser-event keepalive failed (no retry): {error}");
+                        break;
+                    }
+                    match receiver.recv_timeout(interval) {
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+            })
+            .map_err(|error| format!("starting browser-event keepalive: {error}"))?;
+        Ok(Self {
+            stop,
+            worker: Some(worker),
+        })
+    }
+}
+
+impl Drop for BrowserEventKeepalive {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
 }
 
 /// File-backed Chrome diagnostics enabled only for scenarios that opt into
@@ -421,7 +474,7 @@ fn launch_inner(
         .path(Some(chrome_path))
         .user_data_dir(Some(profile_dir.to_path_buf()))
         .window_size(Some((width, height)))
-        .idle_browser_timeout(Duration::from_secs(120)) // a cold wasm compile+first-fetch can be slow
+        .idle_browser_timeout(BROWSER_IDLE_TIMEOUT) // also bounds individual CDP calls
         .args(args);
     if let Some(paths) = &diagnostics {
         launch_builder
@@ -440,6 +493,21 @@ fn launch_inner(
 
     let browser =
         Browser::new(launch_options).map_err(|e| format!("failed to launch Chrome: {e}"))?;
+    // Create this first so the game target remains the foreground tab.
+    let keepalive_tab = browser
+        .new_tab()
+        .map_err(|e| format!("failed to open browser-event keepalive tab: {e}"))?;
+    let mut sequence = 0_u64;
+    let keepalive = BrowserEventKeepalive::start(
+        move || {
+            sequence = sequence.wrapping_add(1);
+            keepalive_tab
+                .navigate_to(&format!("about:blank#rff-keepalive-{sequence}"))
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        },
+        BROWSER_EVENT_KEEPALIVE_INTERVAL,
+    )?;
     let tab = browser
         .new_tab()
         .map_err(|e| format!("failed to open a browser tab: {e}"))?;
@@ -480,6 +548,7 @@ fn launch_inner(
     apply_cpu_throttle(&tab)?;
 
     Ok(Checkpoint {
+        _keepalive: keepalive,
         browser,
         tab,
         diagnostics,
@@ -764,6 +833,52 @@ impl Checkpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_event_keepalive_runs_immediately_and_drop_cancels_the_wait() {
+        let (sent, received) = std::sync::mpsc::channel();
+        let keepalive = BrowserEventKeepalive::start(
+            move || sent.send(()).map_err(|error| error.to_string()),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        received.recv_timeout(Duration::from_secs(5)).unwrap();
+        // Drop must interrupt the 60-second wait and join before the caller
+        // tears down Chrome. No pulse may race the transport after this.
+        drop(keepalive);
+        assert_eq!(
+            received.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Disconnected)
+        );
+    }
+
+    #[test]
+    fn browser_event_keepalive_repeats_but_never_retries_a_failed_pulse() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_calls = calls.clone();
+        let (finished, received) = std::sync::mpsc::channel();
+        let keepalive = BrowserEventKeepalive::start(
+            move || {
+                let call = worker_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if call == 2 {
+                    finished.send(()).unwrap();
+                    Err("transport closed".into())
+                } else {
+                    Ok(())
+                }
+            },
+            Duration::ZERO,
+        )
+        .unwrap();
+        received.recv_timeout(Duration::from_secs(5)).unwrap();
+        drop(keepalive);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn browser_event_keepalive_precedes_the_driver_idle_deadline() {
+        assert!(BROWSER_EVENT_KEEPALIVE_INTERVAL * 2 < BROWSER_IDLE_TIMEOUT);
+    }
 
     /// #278 root cause, pinned: before this fix,
     /// `--force-device-scale-factor` stayed hardcoded at `1` regardless of
